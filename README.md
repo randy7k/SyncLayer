@@ -150,7 +150,7 @@ Guarda `PreToolUse` enlazada desde el frontmatter (`hooks:`) de cuatro agentes:
 
 | Agente | Matcher | Comando |
 |---|---|---|
-| `sentinel` | `Write\|Edit\|NotebookEdit` | `python "$HOME/.claude/hooks/agent_guard.py" tests-only` |
+| `sentinel` | `Write\|Edit\|NotebookEdit\|Bash` | `python "$HOME/.claude/hooks/agent_guard.py" tests-only` |
 | `auditor`, `shield`, `debugger` | `Bash` | `python "$HOME/.claude/hooks/agent_guard.py" readonly --allow-temp` |
 
 Contrato: lee un JSON por stdin (`tool_name`, `tool_input`, `cwd`). Sale con 0 para
@@ -160,7 +160,16 @@ de más de 100 000 caracteres terminan en bloqueo.
 
 - `tests-only`: `Write`, `Edit` y `NotebookEdit` sólo pasan sobre artefactos de pruebas
   (carpetas de pruebas, `test_*.py`, `*.test.*`, `*.spec.*`, `conftest.py`, etc.). Las
-  carpetas se evalúan sobre la ruta relativa al `cwd` del payload.
+  carpetas se evalúan sobre la ruta relativa al `cwd` del payload; una ruta absoluta
+  fuera de `cwd` (o sin `cwd`) sólo vale si es temporal. Quedan excluidas `.git`,
+  `.github`, `.claude`, `.vscode`, `.idea`, `.husky`, `.venv`, `venv`, `site-packages`
+  y `node_modules`.
+  Para `Bash`, `tests-only` es **estricto**: sólo acepta comandos simples. Rechaza
+  `$`, backticks, `\` (salvo `\;`), paréntesis, llaves (salvo `{}`), `[[`, heredocs,
+  comandos de varias líneas, globs con corchetes, comentarios y caracteres de control,
+  porque el parser no puede emularlos con certeza. Escribir sólo se permite hacia rutas
+  de pruebas bajo `cwd` o temporales. Un `cd` anula las rutas relativas. Escribe un
+  comando simple por llamada, con rutas literales y `/` como separador.
 - `readonly`: bloquea git que modifica, comandos que modifican archivos, editores
   in situ, instalación de paquetes y redirección de salida a archivos.
   `--allow-temp` permite escribir sólo bajo directorios temporales.
@@ -169,18 +178,25 @@ de más de 100 000 caracteres terminan en bloqueo.
 
 Es una heurística contra escrituras accidentales, **no un sandbox**.
 
-- **`sentinel` solo está guardado en `Write`/`Edit`/`NotebookEdit`.** Su `Bash` no tiene
-  guarda: con `sed -i`, `echo > archivo` o `python -c` puede modificar código de
-  producción. «Solo escribe tests» ahí es una instrucción de su prompt, no algo que el
-  hook imponga.
+- **`sentinel` tiene guarda en `Bash` desde el modo estricto de `tests-only`, pero sigue
+  siendo una lista negra.** Escribe en rutas de pruebas y bloquea los escritores
+  habituales, no todos. Sin sandbox, un runner de pruebas ejecuta código del repositorio
+  y puede escribir donde quiera. «Sólo escribe tests» es heurístico.
 - `auditor`, `shield` y `debugger` no son de solo lectura real: deben correr tests y
   builds, y eso ejecuta código arbitrario. Tampoco hay restricción de lectura (`.env`)
   ni de red (`curl -d @archivo URL`).
-- El modo `readonly` es una lista negra. Pasan, entre otros: `python script.py`,
-  `$(echo rm) x`, `c=rm; $c x`, `builtin rm`, `busybox rm`, `find -fprint`/`-fls`,
-  `sed 'w f'`, `awk` con redirección interna, `git -c core.pager=...`,
-  `git log --ext-diff`, `tar -x`, `unzip`, `7z x`, `shred`, `rsync`, `scp`, `mklink`,
-  `docker run`, `ssh`, `iex`, y `sqlite3`/`psql`/`mysql` con `DROP`.
+- El modo `readonly` es una lista negra con parser parcial de shell, no estricto. Pasan,
+  entre otros, comandos que ejecutan o escriben por vías no listadas: `python script.py`,
+  `$(echo rm) x`, `c=rm; $c x`, `busybox rm`, `awk '{print > "f"}'`,
+  `GIT_EXTERNAL_DIFF=... git diff`, `docker run`, `ssh`, `iex`, `sqlite3`/`psql`/`mysql`
+  con `DROP`.
+- Huecos confirmados en la revisión final y no corregidos (`tests-only` y `readonly`):
+  `tar` con `--checkpoint-action`/`--remove-files`/`--index-file`, `openssl rand -out` y
+  `openssl base64 -d -out`, `xxd --revert`, `vim -c`/`+cmd`, `sed -f script` (el comando
+  `e`), `cp` con `nullglob` y varios orígenes, variables que cambian la configuración de
+  git (`HOME`, `XDG_CONFIG_HOME`), `export` sin `=`, `PS4` y `let`/`printf -v` con
+  sustituciones en comillas simples, y los puntos y espacios finales de nombres de
+  carpeta en Windows (`.claude./`).
 - Brechas conocidas y aceptadas: `python -c`, `node -e`, `bash -c`, `eval`, `xargs rm`,
   `cmd /c`, `python -m venv`. Tampoco cubre `wget -o`/`-a` ni `curl -D`/`-c`/`--trace`.
 - Si `python` no está en el PATH del shell que lanza el hook, el shell sale con 127 y
@@ -201,7 +217,7 @@ Es una heurística contra escrituras accidentales, **no un sandbox**.
 python -B -m unittest discover -s tests
 ```
 
-93 pruebas, sólo biblioteca estándar, Python 3.12. Además se verificó en sesiones
+186 pruebas, sólo biblioteca estándar, Python 3.12. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 

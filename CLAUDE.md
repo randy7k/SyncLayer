@@ -62,8 +62,11 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Si `python` no está en el PATH del shell que lanza el hook, el shell sale con 127 y
   la llamada pasa (falla abierto); igual si resuelve al alias de la Microsoft Store.
   No se puede arreglar desde el script.
-- `sentinel` sólo tiene guarda en `Write|Edit|NotebookEdit`: su `Bash` queda libre. No
-  documentes «sólo escribe tests» como garantía.
+- `sentinel` tiene guarda en `Write|Edit|NotebookEdit|Bash`. En `tests-only` el Bash es
+  estricto (sólo comandos simples; rechaza `$`, backtick, `\`, subshells, `[[`, heredocs y
+  multilínea) porque 4 rondas de parches a un parser que imita a bash dejaron huecos
+  nuevos cada vez. Sigue siendo una lista negra: no documentes «sólo escribe tests» como
+  garantía. Los huecos confirmados y no corregidos están en `README.md` (Límites).
 - Es una heurística, no un sandbox: `python -c`, `node -e`, `bash -c`, `eval`,
   `xargs rm`, `cmd /c` y `python -m venv` son brechas aceptadas.
 - `atlas` está fijado a `model: claude-fable-5-2` porque el alias `fable` resolvía a
@@ -72,7 +75,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los frontmatter apuntan a `$HOME/.claude/hooks/agent_guard.py`, no a este repo: tras
   editar `hooks/agent_guard.py` hay que reinstalar la copia en `~/.claude/hooks/`.
 - En `tests-only`, los directorios de pruebas se evalúan sobre la ruta relativa al
-  `cwd` del payload. Fuera de `cwd`, o sin `cwd`, sólo cuenta el nombre del archivo.
+  `cwd` del payload. Fuera de `cwd`, o sin `cwd`, una ruta absoluta sólo vale si es temporal.
 - Las sesiones ya abiertas no ven agentes nuevos o modificados: reiniciarlas.
 
 - Copia `~/.claude` -> repo sólo por archivo (`git ls-files`), nunca con comodines:

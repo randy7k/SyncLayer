@@ -2,6 +2,20 @@
 
 ## [Sin publicar]
 
+### Cambiado (guarda, auditoría 2026-11-19)
+
+- `sentinel`: el matcher del hook pasa a `Write|Edit|NotebookEdit|Bash`. En `tests-only`,
+  el Bash es estricto: sólo comandos simples y escrituras a rutas de pruebas o temporales.
+  Tras 6 rondas de revisión (auditor y shield) y 186 pruebas; se documentan los huecos
+  confirmados que quedan.
+- `tests-only` Write/Edit: una ruta absoluta fuera de `cwd` (o sin `cwd`) sólo vale si es
+  temporal; se excluyen `.git`, `.github`, `.claude`, `.vscode`, `.idea`, `.husky`,
+  `.venv`, `venv`, `site-packages` y `node_modules`.
+- `readonly`: sólo endurecimientos (`builtin`, `cp -l`/`-s`, `find -fprint`, `env`/`sudo`
+  con `--chdir`, `git -c`, `hash -p`, `tar`/`unzip`/`7z`, `shred`/`rsync`/`scp`, llaves y
+  barras invertidas en rutas). `mktemp` y `tar -O` se permiten con `--allow-temp`.
+- El parser emula a bash para `\x` y `$"..."`.
+
 ### Añadido
 
 - `docs/brand/`: estrategia de marca, voz y tono, e identidad visual (dirección «Stepped S»,

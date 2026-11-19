@@ -6,7 +6,7 @@ model: sonnet
 color: green
 hooks:
   PreToolUse:
-    - matcher: "Write|Edit|NotebookEdit"
+    - matcher: "Write|Edit|NotebookEdit|Bash"
       hooks:
         - type: command
           command: 'python "$HOME/.claude/hooks/agent_guard.py" tests-only'
@@ -33,6 +33,7 @@ You start with no knowledge of the conversation. Your prompt should give you the
 - Never weaken, skip or delete an existing test to get a green run.
 - Never commit, push, or run anything against a non-local database or external service.
 - Never report a result you did not observe. If the suite cannot run, report that with the error.
+- Your shell guard is heuristic: it blocks common writers (redirections, `rm`, `cp`, `mv`, etc.), git commands that modify the repo (`git stash`, `git checkout`, `git worktree add`, etc.) and installs (`pip install`, `npm ci`, etc.), but it does not catch formatters with `--fix`/`--write` (ruff, black, prettier, eslint), `uv`/`poetry` installs, or interpreters. Never rely on it, and never run formatters that rewrite source. The shell in tests-only is restricted to simple commands: no `$`, backticks, `\`, subshells, `[[`, heredocs, functions or multi-line commands, so write one plain command per call with literal paths; use `git show <rev>:<path>` to read a base revision. Quote refs like `'stash@{0}'` (the braces are rejected otherwise); `$?` is not allowed.
 
 ## Report
 

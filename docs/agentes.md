@@ -97,9 +97,11 @@ Si un agente no usa el modelo esperado, revisá estas variables primero.
 
 ## Límites conocidos
 
-- **SENTINEL sólo está guardado en `Write`/`Edit`/`NotebookEdit`; su `Bash` no tiene
-  guarda** y puede modificar código de producción (`sed -i`, `echo >`, `python -c`).
-  «Sólo escribe tests» ahí es una instrucción del prompt, no una garantía.
+- **SENTINEL** tiene guarda en `Write`/`Edit`/`NotebookEdit` y en `Bash`. En `Bash` el modo
+  `tests-only` es estricto: acepta sólo comandos simples (sin `$`, backticks, `\`,
+  subshells, `[[`, heredocs ni varias líneas) y escribe sólo en rutas de pruebas o
+  temporales. Escribe un comando simple por llamada, con rutas literales y `/`. Sigue
+  siendo una lista negra: los huecos confirmados están en el `README.md`.
 - AUDITOR, SHIELD y DEBUGGER no son de solo lectura real: corren tests y builds, que
   ejecutan código arbitrario, y el hook no limita lecturas (`.env`) ni red.
 - «SENTINEL sólo escribe tests» (en sus herramientas de escritura) y «AUDITOR, SHIELD y
