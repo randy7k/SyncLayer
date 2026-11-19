@@ -16,10 +16,19 @@
   barras invertidas en rutas). `mktemp` y `tar -O` se permiten con `--allow-temp`.
 - El parser emula a bash para `\x` y `$"..."`.
 
+### Cambiado (marca)
+
+- Dirección visual: «Stepped S» se descarta y rige «Modular Grid System» (cuatro bloques en
+  rejilla de 8 × 8 u, uno de ellos en acento). Marca aprobada el 2026-11-19.
+- Wordmark: «SyncLayer», una palabra, IBM Plex Sans 600; recomendado, sin confirmar.
+- Paleta light: `surface-2` `#EAEFF3` y texto blanco sobre el acento, supuestos sin medir.
+- Sin cambios: lema, voz, tipografía y el resto de la paleta.
+- Pendientes: SVG finales, wordmark convertido a trazados y cuestionar el acento.
+
 ### Añadido
 
-- `docs/brand/`: estrategia de marca, voz y tono, e identidad visual (dirección «Stepped S»,
-  paleta dark/light con contrastes medidos, tipografía IBM Plex). Sin assets finales todavía.
+- `docs/brand/`: estrategia de marca, voz y tono, e identidad visual (paleta dark/light con
+  contrastes medidos, tipografía IBM Plex). Sin assets finales todavía.
 - Tagline: «One layer. Many specialists.» (reemplaza «One Layer. Multiple Intelligence.»).
 - `README.md`: introducción de marca en inglés y enlace a `docs/brand/`.
 

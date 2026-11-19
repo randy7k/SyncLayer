@@ -1,6 +1,6 @@
 # SyncLayer: brand strategy
 
-> Estado: aprobado el 2026-11-19 (tagline, dirección visual 3 «Stepped S», paleta y tipografía).
+> Estado: aprobado el 2026-11-19 (tagline, paleta y tipografía). Marca de cuatro bloques («Modular Grid System») aprobada el 2026-11-19; «Stepped S» se descartó. Wordmark recomendado, sin confirmar por el propietario (ver `visual-identity.md`).
 > El copy oficial va en inglés; las explicaciones, en español, para quien mantiene el repositorio.
 
 ## Positioning

@@ -1,25 +1,31 @@
 # SyncLayer: visual identity
 
-> Estado: dirección aprobada el 2026-11-19. Este documento especifica; **todavía no existen assets finales** (SVG, social preview). Se crean en una etapa posterior, a partir de estas especificaciones.
+> Estado: marca de cuatro bloques («Modular Grid System») aprobada el 2026-11-19; «Stepped S» se descartó. Wordmark: recomendado, sin confirmar por el propietario. Este documento especifica; **todavía no existen assets finales** (SVG, social preview). Se crean en una etapa posterior, a partir de estas especificaciones.
 
-## Direction: «Stepped S»
+## Direction: «Modular Grid System»
 
-Tres direcciones evaluadas: *Strata* (planos apilados; legible pero genérico), *Bus* (línea con nodos; refleja la orquestación pero se pierde a tamaño pequeño) y **Stepped S** (elegida).
+Minimalista y moderna: bloques, huecos y un nodo de acento. Surge de una exploración en Claude Design, no versionada en este repositorio.
 
-**Concept.** Un monograma «S» construido con dos planos desplazados una unidad sobre una rejilla. Los dos planos son la *layer*; el desplazamiento que termina alineado es el *sync*. Es el único de los tres que lleva el nombre dentro del símbolo y no recurre a imaginería de IA.
+**Direcciones consideradas.** Las tres consideradas antes quedaron descartadas. *Stepped S* (monograma «S» con dos planos desplazados) no gustó. *Strata* (planos apilados) y *Bus* (línea con nodos) se habían apartado antes; el motivo de Strata, «genérica», ya no se sostiene sin matiz: la dirección vigente se le parece en que también se compone de planos rectangulares. La diferencia es que aquí son cuatro bloques coplanares en una rejilla, separados por huecos, con un único bloque de acento. *Bus* se mantiene apartada: refleja la orquestación, pero se pierde a tamaño pequeño, y la estrella de orquestación ya cubre ese papel en diagramas.
 
-**Geometry (especificación, sin dibujo final).**
+**Concept.** Cuatro bloques en una rejilla. Los bloques son la *layer*; el bloque en acento es el *sync*. Los huecos sostienen la forma. No recurre a imaginería de IA.
 
-- Rejilla de 8 × 8 unidades; margen de seguridad de 1 unidad.
-- Dos formas en escalón (L) de 3 unidades de grosor, ángulos rectos, esquinas con radio de 0,5 unidad.
-- El plano superior se desplaza 1 unidad en horizontal respecto del inferior y se rellena con el color de acento; el inferior, con texto primario.
-- Las dos formas se superponen o se tocan en una arista central; no se cruzan.
+**Geometry (especificación, sin dibujo final).** Rejilla de 8 × 8 unidades (u); hueco entre bloques 0,4 u; radio de esquina 0,25 u.
 
-**Small sizes.** Debe leerse como «S» a 16 px y en un solo color. A 16 px se elimina el radio de esquina y el desplazamiento se mantiene en 1 píxel mínimo. Debe validarse en 16, 32 y 64 px antes de aprobar el asset.
+| Capa SVG | x | y | Ancho | Alto | Color (token) |
+|---|---|---|---|---|---|
+| `block-top-left` | 0 | 0 | 5,1 | 3 | `text` |
+| `block-sync` | 5,5 | 0 | 2,5 | 3 | `accent` |
+| `block-bottom-left` | 0 | 3,4 | 2,5 | 4,6 | `text-3` |
+| `block-bottom-right` | 2,9 | 3,4 | 5,1 | 4,6 | `text` |
 
-**Limits.** La legibilidad de la «S» depende del grosor y del desplazamiento; hay que probar variantes. No usar el símbolo como patrón repetido ni con efectos.
+**Monocromo.** Los cuatro bloques en una sola tinta; los huecos sostienen la forma.
 
-**Usage rules.** Margen mínimo de 1 unidad. Sin degradados, sombras ni contornos añadidos. Versión monocroma obligatoria. No combinar con cerebros, robots, circuitos ni destellos.
+**Wordmark.** «SyncLayer», una palabra, IBM Plex Sans 600 (recomendado). La variante de dos pesos (Sync 400 / Layer 600) se evaluó y no se recomienda. El propietario aún no confirmó el wordmark.
+
+**Small sizes.** Tamaño mínimo 16 px. Debe validarse en 16, 32 y 64 px antes de aprobar el asset. Propuesta, sin validar en render: a 16 px la rejilla da 2 px por u (0,4 u = 0,8 px), así que el hueco se redondea a 1 px como mínimo y el radio de esquina es 0.
+
+**Usage rules.** Espacio libre de 1 u alrededor. Sin degradados, sombras ni contornos. Nunca como patrón repetido. Versión monocroma obligatoria. No combinar con cerebros, robots, circuitos ni destellos.
 
 La estrella de orquestación (sesión al centro, agentes alrededor) se reserva para **diagramas**, no para el logo.
 
@@ -50,6 +56,7 @@ Los cuatro colores iniciales se conservan; se añaden los necesarios para texto,
 |---|---|---|---|
 | `--sl-bg` | `#F6F8FA` | Fondo | — |
 | `--sl-surface` | `#FFFFFF` | Tarjetas | — |
+| `--sl-surface-2` | `#EAEFF3` | Superficie elevada | supuesto, sin medir |
 | `--sl-text` | `#0B1118` | Texto primario | 17,81 sobre bg · 18,96 sobre surface |
 | `--sl-text-2` | `#44525F` | Texto secundario | 7,53 · 8,02 |
 | `--sl-text-3` | `#5B6874` | Texto atenuado | 5,36 · 5,71 |
@@ -59,8 +66,8 @@ Los cuatro colores iniciales se conservan; se añaden los necesarios para texto,
 
 ### Reglas de color
 
-- El acento ocupa menos del 5 % de una superficie. El `#63D6C4` es un teal muy usado en herramientas de desarrollo: la distinción la da el símbolo, no el color.
-- Texto sobre el acento (botones): `#0B1118`, contraste 10,79 en dark.
+- El acento ocupa menos del 5 % de una composición o superficie. El símbolo es la excepción: el bloque `block-sync` mide cerca del 13 % del área de los cuatro bloques (7,5 de 57,76 u²). El `#63D6C4` es un teal muy usado en herramientas de desarrollo: la distinción la da el símbolo, no el color. El acento no se cuestionó todavía (2026-11-19).
+- Texto sobre el acento (botones): `#0B1118`, contraste 10,79 en dark. En light, texto blanco sobre `#0B7A6B`: supuesto, sin medir.
 - **Los bordes no llegan a 3:1.** Sirven de decoración. Si un borde delimita un control interactivo, usar un tono con al menos 3:1 (WCAG 1.4.11).
 - Fondo y surface son casi indistintos: separar con borde, no sólo con tono.
 - El estado nunca depende sólo del color: acompañarlo de icono o texto.
@@ -82,7 +89,7 @@ Alternativa si se prefiere algo más neutro: Inter + JetBrains Mono.
 - **Rejilla** de 8 px; espaciados múltiplos de 8 (4 para ajustes finos).
 - **Formas:** rectángulos con radio pequeño (4 a 6 px) y ángulos rectos. Sin curvas decorativas.
 - **Líneas:** 1 a 1,5 px, color de borde; el acento sólo para un elemento por composición.
-- **Capas:** planos apilados con desplazamiento de una unidad.
+- **Capas:** bloques de rejilla separados por huecos.
 - **Nodos y conexiones:** estrella con la sesión principal al centro y los agentes alrededor; conexiones rectas, sin flechas decorativas. Es un patrón de diagrama.
 - **Iconografía:** trazo uniforme, geometría simple. Sin cerebros, robots ni destellos.
 - **Ilustración:** diagramas, no mascotas ni escenas.
@@ -104,4 +111,6 @@ Los colores `color:` del frontmatter de los agentes los define Claude Code y no 
 
 ## Pending assets (no creados)
 
-Símbolo en SVG (dark, light, monocromo), lockup horizontal, social preview, favicon. Se crean tras validar la geometría de la «S» a 16, 32 y 64 px.
+Símbolo en SVG (dark, light, monocromo), wordmark convertido a trazados, lockup horizontal, social preview, favicon. Se crean tras validar la geometría de los cuatro bloques a 16, 32 y 64 px.
+
+Otros pendientes: cuestionar el acento `#63D6C4` y que el propietario confirme el wordmark.
