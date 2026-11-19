@@ -3,9 +3,10 @@
 Instala en ~/.claude los doce archivos de SyncLayer, guiado por install-manifest.json.
 
 .DESCRIPTION
-Estado actual (T3): valida el manifiesto, verifica el origen (hash canonico), lee el estado
-previo, clasifica cada archivo y muestra el plan. Todavia no escribe nada: sin -DryRun termina
-con exit 1 ("instalacion no implementada").
+Valida el manifiesto, verifica el origen (hash canonico), lee el estado previo, clasifica cada
+archivo y muestra el plan. Sin -DryRun respalda lo que va a sobrescribir (verificado), copia con
+el hook primero (temporal en la misma carpeta + movimiento), verifica el destino y escribe el
+estado <Target>/synclayer-manifest.json. Nunca borra. No hace rollback: si falla, informa.
 
 Hash canonico: SHA-256 (hex minusculas) de los bytes del archivo con cada CRLF sustituido por
 LF. Un CR suelto no se toca; no se quita BOM ni se recodifica.
@@ -108,13 +109,10 @@ function Resolve-FsPath([string]$Path, [string]$What) {
     return $full
 }
 
-function Get-CanonicalHash([string]$FilePath) {
-    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
-    $bytes = [System.IO.File]::ReadAllBytes($FilePath)
-    $text = $latin1.GetString($bytes).Replace("`r`n", "`n")
+function Get-Sha256Hex([byte[]]$Bytes) {
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $hash = $sha.ComputeHash($latin1.GetBytes($text))
+        $hash = $sha.ComputeHash($Bytes)
     }
     finally {
         $sha.Dispose()
@@ -122,6 +120,51 @@ function Get-CanonicalHash([string]$FilePath) {
     $sb = New-Object System.Text.StringBuilder
     foreach ($b in $hash) { [void]$sb.Append($b.ToString('x2')) }
     return $sb.ToString()
+}
+
+# Bytes canonicos: cada CRLF pasa a LF (ISO-8859-1: un byte, un caracter). Son los que se escriben.
+function ConvertTo-CanonicalBytes([byte[]]$Bytes) {
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $text = $latin1.GetString($Bytes).Replace("`r`n", "`n")
+    return , $latin1.GetBytes($text)
+}
+
+function Get-CanonicalHash([string]$FilePath) {
+    $canon = ConvertTo-CanonicalBytes ([System.IO.File]::ReadAllBytes($FilePath))
+    return Get-Sha256Hex $canon
+}
+
+# Crea un archivo nuevo (CreateNew: nunca pisa uno existente) y lo vuelca a disco.
+function Write-NewFile([string]$Path, [byte[]]$Bytes) {
+    $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try {
+        $fs.Write($Bytes, 0, $Bytes.Length)
+        $fs.Flush($true)
+    }
+    finally {
+        $fs.Dispose()
+    }
+}
+
+# Escritura atomica: temporal en la misma carpeta y movimiento sobre el destino. Un archivo
+# existente se reemplaza con File.Replace; uno nuevo se mueve (Move falla si ya aparecio otro).
+# El temporal propio se borra si algo falla; nunca queda un destino a medias.
+function Write-Atomic([string]$Dest, [byte[]]$Bytes, [bool]$Existing) {
+    $dir = [System.IO.Path]::GetDirectoryName($Dest)
+    [void][System.IO.Directory]::CreateDirectory($dir)
+    $tmp = Join-Path $dir ('.synclayer-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        Write-NewFile $tmp $Bytes
+        if ($Existing) {
+            [System.IO.File]::Replace($tmp, $Dest, [NullString]::Value)
+        }
+        else {
+            [System.IO.File]::Move($tmp, $Dest)
+        }
+    }
+    finally {
+        if ([System.IO.File]::Exists($tmp)) { [System.IO.File]::Delete($tmp) }
+    }
 }
 
 function ConvertTo-LocalPath([string]$Root, [string]$Relative) {
@@ -170,7 +213,7 @@ function Read-Manifest([string]$FilePath) {
         $hashes[$path] = $hash
         $order.Add($path)
     }
-    return @{ Order = $order; Hashes = $hashes }
+    return @{ Order = $order; Hashes = $hashes; Bytes = $bytes }
 }
 
 try {
@@ -218,14 +261,23 @@ try {
     }
 
     # Paso 2: verificar el origen. No se escribe nada.
+    # Se lee cada archivo UNA vez: los bytes canonicos verificados aqui son los que se escriben (no se
+    # vuelve a leer el origen entre verificar y copiar).
     $bad = New-Object System.Collections.Generic.List[string]
+    $canonSrc = @{}
     foreach ($rel in $manifest.Order) {
         $src = ConvertTo-LocalPath $Source $rel
         if (-not [System.IO.File]::Exists($src)) {
             $bad.Add($rel + ' (falta en el origen)')
         }
-        elseif ((Get-CanonicalHash $src) -cne $manifest.Hashes[$rel]) {
-            $bad.Add($rel + ' (el hash no coincide con el manifiesto)')
+        else {
+            $canon = ConvertTo-CanonicalBytes ([System.IO.File]::ReadAllBytes($src))
+            if ((Get-Sha256Hex $canon) -cne $manifest.Hashes[$rel]) {
+                $bad.Add($rel + ' (el hash no coincide con el manifiesto)')
+            }
+            else {
+                $canonSrc[$rel] = $canon
+            }
         }
     }
     if ($bad.Count -gt 0) {
@@ -263,6 +315,7 @@ try {
         if ([System.IO.Directory]::Exists($dest)) {
             Stop-Install 1 ('error: el destino ' + (Format-Safe $dest) + ' es una carpeta, no un archivo.')
         }
+        $destHash = $null
         if (-not [System.IO.File]::Exists($dest)) {
             $state = 'NUEVO'
         }
@@ -279,7 +332,7 @@ try {
             }
         }
         $counts[$state]++
-        $rows.Add(@{ State = $state; Path = $rel })
+        $rows.Add(@{ State = $state; Path = $rel; DestHash = $destHash })
     }
     if ($null -ne $prev) {
         foreach ($rel in $prev.Order) {
@@ -311,10 +364,154 @@ try {
             " o repite con -Force (se respalda lo que se sobrescribe).")
     }
 
+    # Que hay que escribir y respaldar. Primero el hook: ningun agente con hooks: puede quedar
+    # instalado sin su guarda.
+    $hookPath = 'hooks/agent_guard.py'
+    $writeRows = New-Object System.Collections.Generic.List[object]
+    foreach ($row in $rows) {
+        if ($row.Path -ceq $hookPath -and ($row.State -ceq 'NUEVO' -or $row.State -ceq 'ACTUALIZAR' -or $row.State -ceq 'MODIFICADO')) {
+            $writeRows.Add($row)
+        }
+    }
+    foreach ($row in $rows) {
+        if ($row.Path -cne $hookPath -and ($row.State -ceq 'NUEVO' -or $row.State -ceq 'ACTUALIZAR' -or $row.State -ceq 'MODIFICADO')) {
+            $writeRows.Add($row)
+        }
+    }
+    $stateBytes = ConvertTo-CanonicalBytes $manifest.Bytes
+    $stateHash = Get-Sha256Hex $stateBytes
+    $stateExists = [System.IO.File]::Exists($statePath)
+    $stateDestHash = $null
+    if ($stateExists) { $stateDestHash = Get-CanonicalHash $statePath }
+    $stateNeedsWrite = (-not $stateExists) -or ($stateDestHash -cne $stateHash)
+
+    $backupItems = New-Object System.Collections.Generic.List[object]
+    foreach ($row in $writeRows) {
+        if ($row.State -ceq 'ACTUALIZAR' -or $row.State -ceq 'MODIFICADO') {
+            $backupItems.Add(@{ Rel = $row.Path; From = (ConvertTo-LocalPath $TargetFull $row.Path); Hash = $row.DestHash })
+        }
+    }
+    if ($stateExists -and $stateNeedsWrite) {
+        $backupItems.Add(@{ Rel = $StateName; From = $statePath; Hash = $stateDestHash })
+    }
+    # Un respaldo nunca se pisa: si algo ya existe en la ruta de respaldo, exit 1 (tambien en -DryRun).
+    if ($backupItems.Count -gt 0) {
+        $walkB = $BackupFull
+        while (-not [string]::IsNullOrEmpty($walkB)) {
+            if ([System.IO.File]::Exists($walkB)) {
+                Stop-Install 1 ('error: -BackupDir o una carpeta que lo contiene es un archivo: ' + (Format-Safe $walkB))
+            }
+            $walkB = [System.IO.Path]::GetDirectoryName($walkB)
+        }
+        foreach ($item in $backupItems) {
+            $bpath = ConvertTo-LocalPath $BackupFull $item.Rel
+            if ([System.IO.File]::Exists($bpath) -or [System.IO.Directory]::Exists($bpath)) {
+                Stop-Install 1 ('error: ya existe el respaldo ' + (Format-Safe $bpath) + '. No se pisa; usa otro -BackupDir.')
+            }
+        }
+    }
+
     if ($DryRun) {
         exit 0
     }
-    Stop-Install 1 'error: instalacion no implementada (por ahora solo funciona -DryRun).'
+
+    $written = New-Object System.Collections.Generic.List[string]
+    $backupMade = $false
+
+    # Falla la copia, la verificacion o el estado: exit 4, informa y no deshace nada.
+    function Stop-CopyFailed([string]$Message) {
+        $lines = 'error: ' + $Message
+        if ($written.Count -gt 0) {
+            $lines += "`nEscrito hasta ahora (no se deshace):`n  " + ($written -join "`n  ")
+        }
+        else {
+            $lines += "`nNo se escribio ningun archivo del destino."
+        }
+        if ($backupMade) {
+            $lines += "`nRespaldo de lo sobrescrito: " + (Format-Safe $BackupFull)
+        }
+        $lines += "`nNo se actualizo el estado " + $StateName + ". No hay rollback: corrige la causa y repite la instalacion (es segura)."
+        Stop-Install 4 $lines
+    }
+
+    # Paso 6: respaldar y verificar cada respaldo antes de tocar el destino.
+    foreach ($item in $backupItems) {
+        $orig = [System.IO.File]::ReadAllBytes($item.From)
+        if ((Get-Sha256Hex (ConvertTo-CanonicalBytes $orig)) -cne $item.Hash) {
+            Stop-Install 1 ('error: ' + (Format-Safe $item.Rel) + ' cambio en el destino durante la ejecucion. No se escribio nada en el destino; repite.')
+        }
+        $bpath = ConvertTo-LocalPath $BackupFull $item.Rel
+        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($bpath))
+        $backupMade = $true
+        Write-NewFile $bpath $orig
+        if ((Get-Sha256Hex ([System.IO.File]::ReadAllBytes($bpath))) -cne (Get-Sha256Hex $orig)) {
+            Stop-Install 1 ('error: el respaldo de ' + (Format-Safe $item.Rel) + ' no coincide con el original. No se escribio nada en el destino.')
+        }
+        Write-Out ('Respaldado: ' + $item.Rel)
+    }
+
+    # Paso 7: copiar los bytes canonicos ya verificados en memoria; cada uno se verifica al instante.
+    foreach ($row in $writeRows) {
+        $rel = $row.Path
+        $dest = ConvertTo-LocalPath $TargetFull $rel
+        $existing = ($row.State -cne 'NUEVO')
+        try {
+            if ($existing -and ((Get-CanonicalHash $dest) -cne $row.DestHash)) {
+                throw 'el archivo cambio en el destino despues de clasificarlo'
+            }
+            Write-Atomic $dest $canonSrc[$rel] $existing
+            $written.Add($rel)
+            Write-Out ('Copiado: ' + $rel)
+            if ((Get-CanonicalHash $dest) -cne $manifest.Hashes[$rel]) {
+                throw 'el hash del archivo escrito no coincide con el manifiesto'
+            }
+        }
+        catch {
+            Stop-CopyFailed ('fallo la copia de ' + $rel + ': ' + (Get-ErrorText $_))
+        }
+    }
+
+    # Paso 8: verificar el destino (las pruebas inyectan fallos justo despues de esta linea).
+    $badDest = New-Object System.Collections.Generic.List[string]
+    foreach ($rel in $written) {
+        $dest = ConvertTo-LocalPath $TargetFull $rel
+        try {
+            if ((Get-CanonicalHash $dest) -cne $manifest.Hashes[$rel]) { $badDest.Add($rel) }
+        }
+        catch {
+            $badDest.Add($rel + ' (no se pudo leer)')
+        }
+    }
+    if ($badDest.Count -gt 0) {
+        Stop-CopyFailed ("la verificacion posterior fallo:`n  " + ($badDest -join "`n  "))
+    }
+    Write-Out ('Verificado: ' + $written.Count + ' archivo(s) escritos coinciden con el manifiesto.')
+
+    # Paso 9: estado, solo si todo lo anterior paso.
+    if ($stateNeedsWrite) {
+        try {
+            Write-Atomic $statePath $stateBytes $stateExists
+            if ((Get-CanonicalHash $statePath) -cne $stateHash) { throw 'el estado escrito no coincide' }
+        }
+        catch {
+            Stop-CopyFailed ('no se pudo escribir ' + $StateName + ': ' + (Get-ErrorText $_))
+        }
+        Write-Out ('Estado: ' + $StateName + ' actualizado.')
+    }
+
+    # Paso 10: mensaje final.
+    Write-Out ('Instalacion terminada: escritos=' + $written.Count + ' IGUAL=' + $counts['IGUAL'] + '.')
+    if ($backupMade) {
+        Write-Out ('Respaldo de lo sobrescrito: ' + (Format-Safe $BackupFull))
+    }
+    Write-Out 'Recordatorio: reinicia las sesiones de Claude Code abiertas; no ven agentes nuevos o modificados.'
+    Write-Out 'Recordatorio: este instalador no toca settings.json ni CLAUDE.md; ~/.claude/CLAUDE.md debe apuntar a ~/.claude/rules/agentes.md.'
+    Write-Out 'Recordatorio: no hay sincronizacion automatica; repite la instalacion cuando cambien los archivos del repositorio.'
+    $defaultTarget = (Join-Path $HOME '.claude').TrimEnd('\', '/')
+    if ($TargetFull.TrimEnd('\', '/') -ine $defaultTarget) {
+        Write-Out 'aviso: -Target no es ~/.claude y los hooks: de los agentes apuntan a $HOME/.claude/hooks/agent_guard.py.'
+    }
+    exit 0
 }
 catch {
     Write-Err ('error: ' + (Get-ErrorText $_))

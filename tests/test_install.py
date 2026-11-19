@@ -1,4 +1,4 @@
-"""Pruebas de install.ps1 (T3: validacion, verificacion del origen, plan y -DryRun).
+"""Pruebas de install.ps1 (T3: validacion, plan y -DryRun; T4: respaldo, copia, verificacion y estado).
 
 Lanzan el script con subprocess (sin shell, con timeout) sobre powershell.exe y/o pwsh.
 Nunca usan el destino por defecto: todas pasan -Target a una carpeta temporal.
@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -422,15 +423,6 @@ class InstallCases:
         self.assertEqual(snapshot(self.target), before)
         self.assertTrue(os.path.exists(os.path.join(self.target, "agents", "viejo.md")))
 
-    def test_real_run_not_implemented_writes_nothing(self):
-        self.make_source()
-        backup = os.path.join(self.tmp, "respaldo")
-        code, out, err = self.run_install("-BackupDir", backup)
-        self.assertEqual(code, 1, out + err)
-        self.assertIn("instalacion no implementada", err)
-        self.assertFalse(os.path.exists(self.target))
-        self.assertFalse(os.path.exists(backup))
-
     def test_empty_target_rejected(self):
         self.make_source()
         code, out, err = self.run_install("-DryRun", "-Target", "", target=False)
@@ -615,6 +607,333 @@ class InstallCases:
         self.assertEqual(set(st.values()), {"NUEVO"})
         self.assertFalse(any(p.startswith(("docs/brand", "tests", "tools")) for p in st))
         self.assertFalse(os.path.exists(self.target))
+
+    # --- T4: copia real ---
+
+    def install_ok(self, *args):
+        code, out, err = self.run_install(*args)
+        self.assertEqual(code, 0, out + err)
+        return out, err
+
+    def leftover_temps(self):
+        found = []
+        for dirpath, _dirs, files in os.walk(self.target):
+            found += [os.path.join(dirpath, f) for f in files if f.endswith(".tmp")]
+        return found
+
+    def patch_script(self, after_line, code):
+        """Inserta codigo PowerShell en la COPIA del script de prueba, tras la linea que empieza igual."""
+        path = os.path.join(self.src, "install.ps1")
+        with open(path, "rb") as f:
+            lines = f.read().decode("ascii").split("\n")
+        idx = [i for i, l in enumerate(lines) if l.strip().startswith(after_line)]
+        self.assertEqual(len(idx), 1, after_line)
+        lines.insert(idx[0] + 1, code)
+        with open(path, "wb") as f:
+            f.write("\n".join(lines).encode("ascii"))
+
+    def update_source(self, rel, data):
+        files = dict(SAMPLE)
+        files[rel] = data
+        self.make_source(files)
+        return files
+
+    def test_case3_clean_install_in_empty_target(self):
+        self.make_source()
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        for rel, data in SAMPLE.items():
+            self.assertEqual(read(self.target, rel), data)
+        self.assertEqual(read(self.target, "synclayer-manifest.json"),
+                         read(self.src, "install-manifest.json"))
+        self.assertFalse(os.path.exists(backup))
+        self.assertEqual(self.leftover_temps(), [])
+        self.assertEqual(sorted(os.listdir(self.tmp)), ["destino", "home", "origen"])
+
+    def test_case3_missing_intermediate_folders_are_created(self):
+        self.make_source()
+        write(self.target, "settings.json", b"{}")
+        self.install_ok()
+        self.assertEqual(read(self.target, "docs/agentes.md"), SAMPLE["docs/agentes.md"])
+        self.assertEqual(read(self.target, "settings.json"), b"{}")
+
+    def test_hook_is_copied_first_and_final_message(self):
+        self.make_source()
+        out, err = self.install_ok()
+        copied = [l.split(": ", 1)[1].strip() for l in out.splitlines() if l.startswith("Copiado: ")]
+        self.assertEqual(copied[0], "hooks/agent_guard.py")
+        self.assertEqual(sorted(copied), sorted(SAMPLE))
+        self.assertIn("reinicia las sesiones de Claude Code", out)
+        self.assertIn("no hay sincronizacion automatica", out)
+        self.assertIn("settings.json", out)
+        self.assertNotIn("sincronizado", out.lower())
+
+    def test_hook_first_also_on_update(self):
+        self.make_source()
+        self.install_ok()
+        files = dict(SAMPLE)
+        files["agents/alfa.md"] = b"alfa 2\n"
+        files["hooks/agent_guard.py"] = b"print('guard 2')\n"
+        self.make_source(files)
+        out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        copied = [l.split(": ", 1)[1].strip() for l in out.splitlines() if l.startswith("Copiado: ")]
+        self.assertEqual(copied, ["hooks/agent_guard.py", "agents/alfa.md"])
+
+    def test_case4_update_creates_verifiable_backup(self):
+        self.make_source()
+        self.install_ok()
+        old_state = read(self.target, "synclayer-manifest.json")
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        backup = os.path.join(self.tmp, "mi respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(read(self.target, "agents/alfa.md"), b"alfa nueva\n")
+        self.assertEqual(read(backup, "agents/alfa.md"), SAMPLE["agents/alfa.md"])
+        self.assertEqual(read(backup, "synclayer-manifest.json"), old_state)
+        # solo lo que cambia: beta, reglas, hook y docs no se respaldan
+        saved = sorted(os.path.relpath(os.path.join(d, f), backup).replace("\\", "/")
+                       for d, _s, fs in os.walk(backup) for f in fs)
+        self.assertEqual(saved, ["agents/alfa.md", "synclayer-manifest.json"])
+        self.assertEqual(self.states(out)["agents/alfa.md"], "ACTUALIZAR")
+        self.assertEqual(read(self.target, "synclayer-manifest.json"),
+                         read(self.src, "install-manifest.json"))
+        self.assertIn(backup, out)
+        self.assertEqual(self.leftover_temps(), [])
+
+    def test_case4_default_backup_dir_is_created_next_to_target(self):
+        self.make_source()
+        self.install_ok()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        self.install_ok()
+        backups = [n for n in os.listdir(self.tmp) if n.startswith("destino-backup-")]
+        self.assertEqual(len(backups), 1, os.listdir(self.tmp))
+        self.assertEqual(read(os.path.join(self.tmp, backups[0]), "agents/alfa.md"),
+                         SAMPLE["agents/alfa.md"])
+
+    def test_case5_foreign_files_untouched(self):
+        self.make_source()
+        foreign = {"hooks/otro-statusline.ps1": b"ajeno", "agents/ajeno.md": b"ajeno md",
+                   "settings.json": b"{}", "CLAUDE.md": b"mio"}
+        for rel, data in foreign.items():
+            write(self.target, rel, data)
+        self.install_ok()
+        before = {rel: os.stat(os.path.join(self.target, *rel.split("/"))).st_mtime_ns for rel in foreign}
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        self.install_ok("-BackupDir", backup)
+        for rel, data in foreign.items():
+            p = os.path.join(self.target, *rel.split("/"))
+            self.assertEqual(read(self.target, rel), data)
+            self.assertEqual(os.stat(p).st_mtime_ns, before[rel])
+            self.assertFalse(os.path.exists(os.path.join(backup, *rel.split("/"))))
+
+    def test_case7_rerun_is_idempotent(self):
+        self.make_source()
+        self.install_ok()
+        snap = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        out, err = self.install_ok()
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertEqual(snapshot(self.target), snap)
+        self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+        self.assertIn("escritos=0", out)
+
+    def test_case8_paths_with_spaces_real_run(self):
+        self.make_source()
+        self.assertIn(" ", self.target)
+        self.install_ok("-BackupDir", os.path.join(self.tmp, "mi respaldo"))
+        self.assertEqual(read(self.target, "agents/alfa.md"), SAMPLE["agents/alfa.md"])
+
+    def test_case12_identical_without_state_writes_only_state(self):
+        self.make_source()
+        for rel, data in SAMPLE.items():
+            write(self.target, rel, data)
+        before = {rel: os.stat(os.path.join(self.target, *rel.split("/"))).st_mtime_ns for rel in SAMPLE}
+        out, err = self.install_ok()
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertEqual(read(self.target, "synclayer-manifest.json"),
+                         read(self.src, "install-manifest.json"))
+        for rel in SAMPLE:
+            self.assertEqual(os.stat(os.path.join(self.target, *rel.split("/"))).st_mtime_ns, before[rel])
+        self.assertEqual(sorted(os.listdir(self.tmp)), ["destino", "home", "origen"])
+
+    def test_case13_crlf_source_writes_lf_bytes(self):
+        self.make_source(crlf=True)
+        self.assertIn(b"\r\n", read(self.src, "agents/alfa.md"))
+        self.install_ok()
+        for rel, data in SAMPLE.items():
+            self.assertEqual(read(self.target, rel), data)
+            self.assertNotIn(b"\r", read(self.target, rel))
+
+    def test_case13_crlf_destination_is_igual_and_not_rewritten(self):
+        self.make_source()
+        for rel, data in SAMPLE.items():
+            write(self.target, rel, data.replace(b"\n", b"\r\n"))
+        self.install_ok()
+        self.assertIn(b"\r\n", read(self.target, "agents/alfa.md"))
+
+    def test_case17_existing_backup_is_not_overwritten_exit1(self):
+        self.make_source()
+        self.install_ok()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        write(backup, "agents/alfa.md", b"respaldo anterior")
+        before_t, before_b = snapshot(self.target), snapshot(backup)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*(mode + ["-BackupDir", backup]))
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("ya existe el respaldo", err)
+                self.assertEqual(snapshot(backup), before_b)
+                self.assertEqual(snapshot(self.target), before_t)
+
+    def test_backup_dir_that_is_a_file_exit1_in_both_modes(self):
+        self.make_source()
+        self.install_ok()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        write(self.tmp, "respaldo", b"soy un archivo")
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*(mode + ["-BackupDir", backup]))
+                self.assertEqual(code, 1, out + err)
+                self.assertEqual(snapshot(self.target), before)
+
+    def test_case18_real_repo_as_source_real_run(self):
+        raw = read(ROOT, "install-manifest.json")
+        write(self.src, "install-manifest.json", raw)
+        for entry in json.loads(raw)["files"]:
+            write(self.src, entry["path"], read(ROOT, entry["path"]))
+        self.install_ok()
+        got = sorted(os.path.relpath(os.path.join(d, f), self.target).replace("\\", "/")
+                     for d, _s, fs in os.walk(self.target) for f in fs)
+        want = sorted([e["path"] for e in json.loads(raw)["files"]] + ["synclayer-manifest.json"])
+        self.assertEqual(got, want)
+        self.assertEqual(len(want), 13)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "docs", "brand")))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "tests")))
+        for entry in json.loads(raw)["files"]:
+            self.assertEqual(bm.canonical_sha256(read(self.target, entry["path"])), entry["sha256"])
+
+    def test_real_run_altered_source_exit2_writes_nothing(self):
+        self.make_source()
+        write(self.src, "agents/beta.md", b"alterado\n")
+        code, out, err = self.run_install("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(code, 2, out + err)
+        self.assertIn("agents/beta.md", err)
+        self.assertEqual(sorted(os.listdir(self.tmp)), ["home", "origen"])
+
+    def test_real_run_modified_without_force_exit3_writes_nothing(self):
+        self.make_source()
+        self.install_ok()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        write(self.target, "agents/beta.md", b"editado a mano\n")
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-BackupDir", backup)
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertFalse(os.path.exists(backup))
+
+    def test_real_run_target_validation_same_exit_as_dryrun(self):
+        self.make_source()
+        write(self.tmp, "destino", b"soy un archivo")
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+
+    def test_written_bytes_are_the_verified_ones_not_a_reread(self):
+        # Tras verificar el origen se cambia el archivo en disco; el destino debe tener lo verificado.
+        self.make_source()
+        evil = os.path.join(self.src, "agents", "alfa.md").replace("'", "''")
+        self.patch_script("# Paso 3:", "[System.IO.File]::WriteAllBytes('%s', [byte[]]@(88,88))" % evil)
+        self.install_ok()
+        self.assertEqual(read(self.src, "agents/alfa.md"), b"XX")
+        self.assertEqual(read(self.target, "agents/alfa.md"), SAMPLE["agents/alfa.md"])
+
+    def test_verification_detects_corrupted_file_exit4(self):
+        self.make_source()
+        victim = os.path.join(self.target, "rules", "agentes.md").replace("'", "''")
+        self.patch_script("# Paso 8:", "[System.IO.File]::WriteAllBytes('%s', [byte[]]@(65))" % victim)
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("la verificacion posterior fallo", err)
+        self.assertIn("rules/agentes.md", err)
+        self.assertIn("Escrito hasta ahora", err)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "synclayer-manifest.json")))
+        self.assertEqual(self.leftover_temps(), [])
+
+    def make_readonly(self, rel):
+        path = os.path.join(self.target, *rel.split("/"))
+        os.chmod(path, stat.S_IREAD)
+        self.addCleanup(os.chmod, path, stat.S_IWRITE | stat.S_IREAD)
+
+    @unittest.skipUnless(os.name == "nt", "el atributo de solo lectura bloquea el reemplazo solo en Windows")
+    def test_copy_failure_mid_run_exit4_keeps_backup_and_hook_intact(self):
+        self.make_source()
+        self.install_ok()
+        files = dict(SAMPLE)
+        files["agents/alfa.md"] = b"alfa 2\n"
+        files["agents/beta.md"] = b"beta 2\n"
+        files["hooks/agent_guard.py"] = b"print('guard 2')\n"
+        self.make_source(files)
+        self.make_readonly("agents/beta.md")           # bloquea el reemplazo de beta
+        backup = os.path.join(self.tmp, "respaldo")
+        old_state = read(self.target, "synclayer-manifest.json")
+        code, out, err = self.run_install("-BackupDir", backup)
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("agents/beta.md", err)
+        self.assertIn(backup, err)
+        # el hook va primero y quedo completo y verificado
+        self.assertEqual(read(self.target, "hooks/agent_guard.py"), files["hooks/agent_guard.py"])
+        self.assertIn("hooks/agent_guard.py", err.split("Escrito hasta ahora")[1])
+        # lo que no se pudo escribir conserva su version anterior; el respaldo la tiene
+        self.assertEqual(read(self.target, "agents/beta.md"), SAMPLE["agents/beta.md"])
+        self.assertEqual(read(backup, "agents/beta.md"), SAMPLE["agents/beta.md"])
+        self.assertEqual(read(backup, "hooks/agent_guard.py"), SAMPLE["hooks/agent_guard.py"])
+        # el estado viejo sigue y no queda ningun temporal
+        self.assertEqual(read(self.target, "synclayer-manifest.json"), old_state)
+        self.assertEqual(self.leftover_temps(), [])
+        # cada archivo del destino es la version vieja o la nueva, nunca una intermedia
+        for rel, data in files.items():
+            self.assertIn(read(self.target, rel), (data, SAMPLE.get(rel)))
+
+    @unittest.skipUnless(os.name == "nt", "el atributo de solo lectura bloquea el reemplazo solo en Windows")
+    def test_hook_copy_failure_writes_no_agent(self):
+        self.make_source()
+        self.install_ok()
+        files = dict(SAMPLE)
+        files["agents/alfa.md"] = b"alfa 2\n"
+        files["hooks/agent_guard.py"] = b"print('guard 2')\n"
+        self.make_source(files)
+        self.make_readonly("hooks/agent_guard.py")
+        code, out, err = self.run_install("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("No se escribio ningun archivo del destino", err)
+        self.assertEqual(read(self.target, "hooks/agent_guard.py"), SAMPLE["hooks/agent_guard.py"])
+        self.assertEqual(read(self.target, "agents/alfa.md"), SAMPLE["agents/alfa.md"])
+        self.assertEqual(self.leftover_temps(), [])
+
+    def test_force_overwrites_modified_with_backup(self):
+        # Minimo de -Force en T4: la copia real respalda y sobrescribe (el resto de la semantica es T5).
+        self.make_source()
+        write(self.target, "agents/beta.md", b"editado a mano\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(read(backup, "agents/beta.md"), b"editado a mano\n")
+        self.assertEqual(read(self.target, "agents/beta.md"), SAMPLE["agents/beta.md"])
+
+    def test_orphan_is_kept_after_real_install(self):
+        self.make_source()
+        old = dict(SAMPLE)
+        old["agents/viejo.md"] = b"de una version anterior\n"
+        self.write_state(old)
+        for rel, data in old.items():
+            write(self.target, rel, data)
+        out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(self.states(out)["agents/viejo.md"], "HUERFANO")
+        self.assertEqual(read(self.target, "agents/viejo.md"), b"de una version anterior\n")
 
 
 def _make_class(label, exe, reason):
