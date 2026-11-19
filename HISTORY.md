@@ -2,6 +2,13 @@
 
 ## [Sin publicar]
 
+### Añadido
+
+- `docs/brand/`: estrategia de marca, voz y tono, e identidad visual (dirección «Stepped S»,
+  paleta dark/light con contrastes medidos, tipografía IBM Plex). Sin assets finales todavía.
+- Tagline: «One layer. Many specialists.» (reemplaza «One Layer. Multiple Intelligence.»).
+- `README.md`: introducción de marca en inglés y enlace a `docs/brand/`.
+
 ### Corregido (documentación, auditoría 2026-11-19)
 
 - Se documenta que `sentinel` no tiene guarda sobre `Bash` y que `auditor`, `shield` y

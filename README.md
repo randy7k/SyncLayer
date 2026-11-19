@@ -1,6 +1,10 @@
 # SyncLayer
 
-Infraestructura global de agentes especializados para Claude Code.
+**One layer. Many specialists.**
+
+SyncLayer is a versioned layer of nine specialist agents, orchestration rules and a guard hook for Claude Code. One session orchestrates; agents never delegate to each other. The guard is a heuristic, not a sandbox, and this repository documents exactly where it stops.
+
+Infraestructura global de agentes especializados para Claude Code. Identidad y voz del proyecto: [`docs/brand/`](docs/brand/brand-strategy.md).
 
 Este repositorio es la copia versionada de un ecosistema de nueve subagentes de
 Claude Code, sus reglas de orquestación y un hook de seguridad. Claude Code lee los
@@ -29,7 +33,8 @@ SyncLayer/
 ├── hooks/
 │   └── agent_guard.py Hook PreToolUse que limita lo que escriben los agentes
 ├── docs/
-│   └── agentes.md     Guía de uso y mantenimiento
+│   ├── agentes.md     Guía de uso y mantenimiento
+│   └── brand/         Estrategia, voz e identidad visual del proyecto
 └── tests/
     └── test_agent_guard.py
 ```

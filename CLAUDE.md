@@ -33,7 +33,8 @@ Tres piezas, de la más abstracta a la más concreta:
    (`hooks:`) de `sentinel` (modo `tests-only`) y de `auditor`, `shield` y `debugger`
    (modo `readonly --allow-temp`).
 
-`docs/agentes.md` es la guía humana.
+`docs/agentes.md` es la guía humana. `docs/brand/` define la marca (estrategia, voz, identidad
+visual); el copy oficial va en inglés y no declara capacidades que el repositorio no tenga.
 
 Claude Code lee los archivos vivos de `~/.claude/` (`agents/`, `rules/agentes.md`,
 `hooks/agent_guard.py`, `docs/agentes.md`). Este repositorio es la copia versionada:
