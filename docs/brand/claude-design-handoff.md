@@ -110,6 +110,8 @@ Stop here and wait for direction.
 
 A one-page brand sheet with the symbol, palette, type specimen and usage rules (clear space, minimum size, don'ts).
 
+Note: Round 3 was produced locally, not in Claude Design. It adds the stacked lockup, the favicon set and `brand-sheet-{dark,light}.svg`; see "Assets" in `visual-identity.md`.
+
 ## Copy you may use
 
 - **Tagline:** One layer. Many specialists.

@@ -51,14 +51,16 @@ def fmt(n):
     return s if s else "0"
 
 
-def block_rects(blocks, radius, ox=0.0, oy=0.0, scale=1.0, ink=None, palette=None):
-    """SVG <rect> lines. ink: one colour for all (monochrome), else palette tokens."""
+def block_rects(blocks, radius, ox=0.0, oy=0.0, scale=1.0, ink=None, palette=None, prefix=""):
+    """SVG <rect> lines. ink: one colour for all (monochrome), else palette tokens.
+
+    prefix goes before each id, to keep ids unique when a file holds several marks."""
     out = []
     for bid, x, y, w, h, token in blocks:
         fill = ink if ink else palette[token]
         r = f' rx="{fmt(radius * scale)}"' if radius else ""
         out.append(
-            f'<rect id="{bid}" x="{fmt(ox + x * scale)}" y="{fmt(oy + y * scale)}" '
+            f'<rect id="{prefix}{bid}" x="{fmt(ox + x * scale)}" y="{fmt(oy + y * scale)}" '
             f'width="{fmt(w * scale)}" height="{fmt(h * scale)}"{r} fill="{fill}"/>'
         )
     return out

@@ -27,6 +27,16 @@ Regenerar los assets de marca (necesita `fontTools` y `uharfbuzz`):
 ```
 python -B assets/brand/src/build_brand.py --fonts <carpeta-de-fuentes>
 python -B assets/brand/src/build_round2.py --fonts <carpeta-de-fuentes>
+python -B assets/brand/src/build_round3.py --fonts <carpeta-de-fuentes>
+```
+
+`build_brand.py` produce también los lockups apilados y `favicon.svg`; `build_round3.py`, la
+hoja de marca. Los PNG y el `.ico` se exportan aparte (sólo biblioteca estándar, necesitan
+msedge; `--edge <ruta>` si no lo encuentra):
+
+```
+python -B assets/brand/src/export_social_png.py
+python -B assets/brand/src/export_favicons.py
 ```
 
 La carpeta debe tener `IBMPlexSans-SemiBold.ttf`, `IBMPlexSans-Medium.ttf`,
@@ -48,8 +58,9 @@ Tres piezas, de la más abstracta a la más concreta:
 visual); el copy oficial va en inglés y no declara capacidades que el repositorio no tenga.
 
 `assets/brand/` contiene los SVG de marca y `social-preview.png`; `assets/brand/src/` los
-generadores (`build_brand.py`: símbolo, wordmark, lockup; `build_round2.py`: banner,
-social preview, catálogo, estrella, slides). No forma parte de la instalación en `~/.claude/`.
+generadores (`build_brand.py`: símbolo, wordmark, lockups horizontal y apilado, `favicon.svg`;
+`build_round2.py`: banner, social preview, catálogo, estrella, slides; `build_round3.py`: hoja
+de marca) y los exportadores (`export_social_png.py`, `export_favicons.py`, `ico.py`). No forma parte de la instalación en `~/.claude/`.
 
 Claude Code lee los archivos vivos de `~/.claude/` (`agents/`, `rules/agentes.md`,
 `hooks/agent_guard.py`, `docs/agentes.md`). Este repositorio es la copia versionada:
@@ -81,6 +92,16 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   `<body style="margin:0"><img src="<ruta al SVG>" style="width:1280px;height:640px;display:block">`
   y la captura con `msedge --headless --disable-gpu --force-device-scale-factor=1 --hide-scrollbars --window-size=1280,640 --screenshot=<salida>.png <html>`.
   Regenéralo cada vez que cambie el SVG.
+- `export_favicons.py` genera `favicon-16/32/48.png`, `apple-touch-icon.png` y `favicon.ico`
+  (el contenedor lo escribe `ico.py`, que cubre `tests/test_ico.py`). Usa el símbolo dark sobre
+  un fondo `bg` opaco: un símbolo transparente se pierde en una de las dos pestañas (tinta oscura
+  sobre pestaña oscura o al revés); el tile mantiene visibles los huecos en ambas. Los tres
+  dibujan `symbol-16-dark.svg`: 16 px a 1x sin margen (el símbolo llena el lienzo), 32 px a 1x y
+  48 px a 2x, ambos con 8 px de margen `bg` por lado (huecos de 1, 1 y 2 px exactos). Limitación:
+  sobre una pestaña clara el icono de 16 px no tiene margen y los bloques claros pierden contraste
+  contra el blanco. Edge headless se ha colgado alguna vez con ventanas pequeñas: cada captura
+  usa su propio `--user-data-dir`, con timeout de 30 s y un reintento, y los archivos se copian a
+  `assets/brand/` sólo si todas las capturas salen bien. Regenéralos cuando cambien `symbol-16-dark.svg` o `symbol-dark.svg`.
 - El catálogo visual clasifica a los agentes por herramientas (sin `Edit`/`Write`; escribe), nunca
   como «read-only»: la guarda es heurística, no un sandbox.
 - Los SVG de marca llevan ids fijos (`wordmark`, `background`, etc.) y sólo se usan como

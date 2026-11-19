@@ -22,18 +22,20 @@ TAGLINE = "One layer. Many specialists."
 SUBLINE = "Nine agents · orchestration rules · guard hook · Claude Code"
 
 
-def mark(pal, x, y, scale):
-    return block_rects(BLOCKS, RADIUS, ox=x, oy=y, scale=scale, palette=pal)
+def mark(pal, x, y, scale, prefix=""):
+    return block_rects(BLOCKS, RADIUS, ox=x, oy=y, scale=scale, palette=pal, prefix=prefix)
 
 
-def lockup(F, pal, x, y, scale):
-    """Horizontal lockup, top-left at (x, y); scale = px per u. Returns (elements, width)."""
+def lockup(F, pal, x, y, scale, prefix=""):
+    """Horizontal lockup, top-left at (x, y); scale = px per u. Returns (elements, width).
+
+    prefix goes before the ids of the blocks and the wordmark."""
     sans = F["sans600"]
     size = 3.6 * sans.upem / sans.cap
     baseline = 4 + 3.6 / 2
-    els = mark(pal, x, y, scale)
+    els = mark(pal, x, y, scale, prefix)
     el, w = text(sans, "SyncLayer", size * scale, x + (8 + 2.4) * scale,
-                 y + baseline * scale, pal["text"], ident="wordmark")
+                 y + baseline * scale, pal["text"], ident=prefix + "wordmark")
     return els + [el], (8 + 2.4) * scale + w
 
 

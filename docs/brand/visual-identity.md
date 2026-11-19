@@ -1,6 +1,6 @@
 # SyncLayer: visual identity
 
-> Estado: marca de cuatro bloques («Modular Grid System») aprobada el 2026-11-19; «Stepped S» se descartó. Wordmark confirmado por el propietario el 2026-11-19. Este documento especifica; los assets de las Rondas 1 y 2 existen en `assets/brand/` (ver «Assets»).
+> Estado: marca de cuatro bloques («Modular Grid System») aprobada el 2026-11-19; «Stepped S» se descartó. Wordmark confirmado por el propietario el 2026-11-19. Este documento especifica; los assets de las Rondas 1, 2 y 3 existen en `assets/brand/` (ver «Assets»).
 
 ## Direction: «Modular Grid System»
 
@@ -113,12 +113,12 @@ Los colores `color:` del frontmatter de los agentes los define Claude Code y no 
 
 ## Assets
 
-Viven en `assets/brand/`. Los SVG los producen los generadores de `assets/brand/src/` (`build_brand.py`, `build_round2.py`); no se editan a mano. Los generadores requieren `fontTools` y `uharfbuzz` y una carpeta de fuentes IBM Plex (no versionadas); el comando está en `CLAUDE.md`.
+Viven en `assets/brand/`. Los SVG los producen los generadores de `assets/brand/src/` (`build_brand.py`, `build_round2.py`, `build_round3.py`); no se editan a mano. Los PNG y el `.ico` los exporta `export_social_png.py` y `export_favicons.py` (biblioteca estándar, msedge headless). Los generadores requieren `fontTools` y `uharfbuzz` y una carpeta de fuentes IBM Plex (no versionadas); el comando está en `CLAUDE.md`.
 
 **Existen**
 
 - Símbolo `symbol-{dark,light,mono,mono-reverse}.svg`, con las capas `block-top-left`, `block-sync`, `block-bottom-left` y `block-bottom-right`. Variante de 16 px `symbol-16-*`.
-- Wordmark `wordmark-*.svg` y lockup horizontal `lockup-horizontal-*.svg`: IBM Plex Sans 600, texto a trazados, un solo peso.
+- Wordmark `wordmark-*.svg`, lockup horizontal `lockup-horizontal-*.svg` y lockup apilado `lockup-stacked-*.svg` (símbolo arriba, wordmark centrado debajo, 2,4 u de separación hasta las mayúsculas, altura de mayúsculas del wordmark de 3 u): IBM Plex Sans 600, texto a trazados, un solo peso. El viewBox ajusta a la tinta: arriba y abajo es exacto; a los lados quedan los márgenes laterales de la fuente (~0,17 u a la izquierda y ~0,09 u a la derecha) y el wordmark se centra por avance. El espacio libre de 1 u queda fuera.
 - Ronda 2:
   - `banner-{dark,light}.svg` (1280×320).
   - `social-preview.svg` y `social-preview.png` (1280×640, margen de 40 px).
@@ -128,11 +128,15 @@ Viven en `assets/brand/`. Los SVG los producen los generadores de `assets/brand/
   - Línea «The guard is a heuristic, not a sandbox.» en catálogo, estrella y slide 3 (la guarda es heurística, no un sandbox).
   - `slide-1-title.svg`, `slide-2-message.svg`, `slide-3-roster.svg` (1920×1080, oscuro).
 
+- Ronda 3 (producida en local, sin Claude Design):
+  - `favicon.svg`: geometría de `symbol-16-*`, un solo archivo con `@media (prefers-color-scheme: dark)`; colores light por defecto, dark bajo la media query; sin degradados. Verificado en Edge: `--blink-settings=preferredColorScheme=0` fuerza dark y `=1` light; sin la bandera sigue al sistema.
+  - `favicon-16.png`, `favicon-32.png`, `favicon-48.png` y `favicon.ico` (PNG de 16, 32 y 48 px embebidos): símbolo dark sobre fondo `bg` opaco. Sin fondo, el símbolo dark (tinta clara) se pierde en pestañas claras y el light (tinta oscura) en pestañas oscuras; el tile mantiene visibles los huecos en ambas. Los tres dibujan `symbol-16-dark.svg`: 16 px a 1x, sin margen (el símbolo llena el lienzo); 32 px a 1x y 48 px a 2x, ambos centrados con 8 px de margen `bg` por lado. Medido en los PNG con zlib: huecos de 1, 1 y 2 px, 100 % del color de fondo, sin píxeles intermedios (sólo cuatro colores: `#0B1118`, `#E6EDF3`, `#7D8B99`, `#63D6C4`); el margen de 32 y 48 px es 100 % `bg`. El `bg` `#0B1118` contra blanco `#FFFFFF` da un contraste de 18,96:1, así que el tile se distingue sobre una pestaña clara. Limitación: el icono de 16 px no tiene margen (no cabe) y el símbolo dark llena el lienzo; sobre una pestaña blanca los bloques claros pierden contraste (`#E6EDF3` contra blanco, 1,18:1; `#63D6C4`, 1,76:1; `#7D8B99`, 3,49:1) y sólo los separa el hueco de 1 px.
+  - `apple-touch-icon.png` (180×180): símbolo original dark de 128 px (u = 16 px) centrado sobre `bg`; 26 px de espacio libre por lado (1,6 u).
+  - `brand-sheet-{dark,light}.svg` (1600×1131): símbolo con espacio libre, lockup horizontal, 16/24/32 px en una tinta, paleta con tokens y HEX, especimen tipográfico y reglas de uso, con `<title>` y `<desc>`.
+
 **Faltan**
 
-- Lockup apilado.
-- Favicon exportado (.ico y PNG), a partir de `symbol-16-*`.
-- Hoja de marca (Ronda 3).
 - Cuestionar el acento `#63D6C4`.
+- Un sitio web que use el favicon: no existe, así que `favicon.svg`, los PNG y el `.ico` no se enlazan desde ningún sitio.
 
 Los datos de los agentes del catálogo y de las slides están duplicados en `AGENTS` de `assets/brand/src/agents_data.py`: se actualizan junto con `agents/*.md` (`tests/test_brand_agents.py` los compara).

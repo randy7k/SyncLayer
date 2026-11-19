@@ -23,6 +23,14 @@
 - `README.md`: banner con `<picture>`, `assets/` en la estructura y nota para subir la social
   preview a mano.
 
+- Ronda 3: lockups apilados `lockup-stacked-{dark,light,mono,mono-reverse}.svg`; `favicon.svg`
+  (geometría de 16 px, colores dark/light con `prefers-color-scheme`, sin degradados);
+  `favicon-16/32/48.png`, `apple-touch-icon.png` (180×180) y `favicon.ico` (PNG embebidos de 16,
+  32 y 48 px) exportados con `export_favicons.py` (msedge headless); hoja de marca
+  `brand-sheet-{dark,light}.svg` (1600×1131) con `build_round3.py`.
+- `ico.py` (escritor ICO, biblioteca estándar; los bits por píxel salen del tipo de color del IHDR y un PNG truncado da `ValueError`) y `tests/test_ico.py`.
+- Favicon: 16 px sin margen; 32 y 48 px con 8 px de margen `bg` por lado (símbolo de 16 px a 1x y 2x). La hoja de marca usa ids únicos (`sym-`, `lk-`, `s16-`, `s24-`, `s32-`).
+
 ### Cambiado (assets de marca)
 
 - Comentario de `build_brand.py` corregido (dark, light, mono y mono-reverse) y docs de marca al día
@@ -31,8 +39,7 @@
 - Wordmark confirmado por el propietario (2026-11-19): una palabra, IBM Plex Sans 600.
 - Regla de 16 px con medición real: `symbol-16-*` entre 16 y 24 px y para favicon; desde 32 px
   el símbolo original.
-- Pendientes: lockup apilado, favicon exportado (.ico/PNG), hoja de marca (Ronda 3) y
-  cuestionar el acento `#63D6C4`.
+- Pendiente: cuestionar el acento `#63D6C4`.
 
 ### Cambiado (guarda, auditoría 2026-11-19)
 
