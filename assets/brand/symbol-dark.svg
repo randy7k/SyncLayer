@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8" width="64" height="64" role="img" aria-labelledby="t"><title id="t">SyncLayer symbol</title>
+<rect id="block-top-left" x="0" y="0" width="5.1" height="3" rx="0.25" fill="#E6EDF3"/>
+<rect id="block-sync" x="5.5" y="0" width="2.5" height="3" rx="0.25" fill="#63D6C4"/>
+<rect id="block-bottom-left" x="0" y="3.4" width="2.5" height="4.6" rx="0.25" fill="#7D8B99"/>
+<rect id="block-bottom-right" x="2.9" y="3.4" width="5.1" height="4.6" rx="0.25" fill="#E6EDF3"/>
+</svg>
