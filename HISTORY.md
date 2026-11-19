@@ -2,6 +2,35 @@
 
 ## [Sin publicar]
 
+### Añadido (assets de marca)
+
+- `assets/brand/`: símbolo (`symbol-*`, capas `block-top-left`, `block-sync`,
+  `block-bottom-left`, `block-bottom-right`), wordmark y lockup horizontal en dark, light,
+  mono y mono-reverse; texto a trazados, IBM Plex Sans 600. Variante `symbol-16-*` (rejilla de
+  16 px, hueco de 1 px, radio 0).
+- Ronda 2: `banner-{dark,light}.svg`, `social-preview.svg` y `.png` (1280×640),
+  `agent-catalog-{dark,light}.svg`, `architecture-star-{dark,light}.svg` y tres slides
+  (1920×1080, oscuro).
+- Generadores en `assets/brand/src/` (`build_brand.py`, `build_round2.py`, `brandlib.py`,
+  `fonts_util.py`). Requieren `fontTools` y `uharfbuzz`; las fuentes no se versionan.
+- `README.md`: banner con `<picture>`, `assets/` en la estructura y nota para subir la social
+  preview a mano.
+
+### Cambiado (assets de marca)
+
+- Catálogo, estrella y slide 3: la clasificación pasa de «read-only» a por herramientas
+  («no Edit/Write», «no Edit/Write · guarded Bash», «writes tests · guarded Bash», «writes: …»), con
+  círculo para quien no tiene `Edit`/`Write` y cuadrado para quien escribe, y la línea
+  «The guard is a heuristic, not a sandbox.». Los SVG llevan `<desc>`; slide 3 queda centrada.
+- Comentario de `build_brand.py` corregido (dark, light, mono y mono-reverse) y docs de marca al día
+  (SVG finales existentes, wordmark confirmado, 16 px medido). Se documenta cómo exportar
+  `social-preview.png`.
+- Wordmark confirmado por el propietario (2026-11-19): una palabra, IBM Plex Sans 600.
+- Regla de 16 px con medición real: `symbol-16-*` entre 16 y 24 px y para favicon; desde 32 px
+  el símbolo original.
+- Pendientes: lockup apilado, favicon exportado (.ico/PNG), hoja de marca (Ronda 3) y
+  cuestionar el acento `#63D6C4`.
+
 ### Cambiado (guarda, auditoría 2026-11-19)
 
 - `sentinel`: el matcher del hook pasa a `Write|Edit|NotebookEdit|Bash`. En `tests-only`,
@@ -20,10 +49,10 @@
 
 - Dirección visual: «Stepped S» se descarta y rige «Modular Grid System» (cuatro bloques en
   rejilla de 8 × 8 u, uno de ellos en acento). Marca aprobada el 2026-11-19.
-- Wordmark: «SyncLayer», una palabra, IBM Plex Sans 600; recomendado, sin confirmar.
+- Wordmark: «SyncLayer», una palabra, IBM Plex Sans 600; recomendado (confirmado después, ver «assets de marca»).
 - Paleta light: `surface-2` `#EAEFF3` y texto blanco sobre el acento, supuestos sin medir.
 - Sin cambios: lema, voz, tipografía y el resto de la paleta.
-- Pendientes: SVG finales, wordmark convertido a trazados y cuestionar el acento.
+- Pendientes en ese momento: SVG finales, wordmark convertido a trazados y cuestionar el acento.
 
 ### Añadido
 

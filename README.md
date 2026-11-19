@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/banner-dark.svg">
+  <img src="assets/brand/banner-light.svg" alt="SyncLayer">
+</picture>
+
 # SyncLayer
 
 **One layer. Many specialists.**
@@ -32,12 +37,27 @@ SyncLayer/
 │   └── agentes.md     Reglas de orquestación (se cargan en todos los proyectos)
 ├── hooks/
 │   └── agent_guard.py Hook PreToolUse que limita lo que escriben los agentes
+├── assets/
+│   └── brand/         SVG de marca (símbolo, wordmark, lockup, banner, catálogo,
+│       │              estrella, slides), social-preview.png y generadores
+│       └── src/       build_brand.py, build_round2.py, brandlib.py, fonts_util.py
 ├── docs/
 │   ├── agentes.md     Guía de uso y mantenimiento
 │   └── brand/         Estrategia, voz e identidad visual del proyecto
 └── tests/
     └── test_agent_guard.py
 ```
+
+## Assets de marca
+
+`assets/brand/` guarda los SVG finales (con variantes dark, light y monocromas) y los
+scripts que los generan. Los SVG se regeneran, no se editan a mano; cómo, en
+[`CLAUDE.md`](CLAUDE.md). Reglas de uso y de tamaño mínimo:
+[`docs/brand/visual-identity.md`](docs/brand/visual-identity.md).
+
+**Social preview.** GitHub no permite subirla desde un commit: carga
+`assets/brand/social-preview.png` (1280×640) a mano en el repositorio, en
+Settings > Social preview.
 
 ## Instalación
 

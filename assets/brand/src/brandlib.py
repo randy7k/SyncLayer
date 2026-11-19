@@ -108,3 +108,14 @@ def svg_doc(width, height, body, title, vb=None, desc=None):
         + "\n".join(body)
         + "\n</svg>\n"
     )
+
+
+def text(face, s, size, x, y, fill, anchor="start", ident=None, max_width=None):
+    """Text as a <path>. Returns (svg element, width). anchor: start | middle | end."""
+    _, w = face.path_d(s, size)
+    if max_width is not None and w > max_width:
+        raise ValueError(f"text too wide ({w:.1f} > {max_width}): {s!r}")
+    x0 = x - (w / 2 if anchor == "middle" else w if anchor == "end" else 0)
+    d, _ = face.path_d(s, size, x=x0, baseline=y)
+    i = f' id="{ident}"' if ident else ""
+    return f'<path{i} d="{d}" fill="{fill}"/>', w

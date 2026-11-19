@@ -57,7 +57,7 @@ def build(fonts_dir):
                 mark + [f'<path id="wordmark" d="{d}" fill="{word_fill}"/>'],
                 "SyncLayer", vb=f"0 0 {fmt(8 + GAP_TO_TEXT + adv)} 8"),
         }
-        # 16 px variant: pixel grid, 1 px gap, radius 0. Dark/light/mono only.
+        # 16 px variant: pixel grid, 1 px gap, radius 0. Dark, light, mono and mono-reverse.
         files[f"symbol-16-{variant}.svg"] = svg_doc(
             16, 16, block_rects(BLOCKS_16, 0, ink=ink, palette=pal),
             "SyncLayer symbol", vb="0 0 16 16")

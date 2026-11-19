@@ -1,6 +1,6 @@
 # SyncLayer: visual identity
 
-> Estado: marca de cuatro bloques («Modular Grid System») aprobada el 2026-11-19; «Stepped S» se descartó. Wordmark: recomendado, sin confirmar por el propietario. Este documento especifica; **todavía no existen assets finales** (SVG, social preview). Se crean en una etapa posterior, a partir de estas especificaciones.
+> Estado: marca de cuatro bloques («Modular Grid System») aprobada el 2026-11-19; «Stepped S» se descartó. Wordmark confirmado por el propietario el 2026-11-19. Este documento especifica; los assets de las Rondas 1 y 2 existen en `assets/brand/` (ver «Assets»).
 
 ## Direction: «Modular Grid System»
 
@@ -10,7 +10,7 @@ Minimalista y moderna: bloques, huecos y un nodo de acento. Surge de una explora
 
 **Concept.** Cuatro bloques en una rejilla. Los bloques son la *layer*; el bloque en acento es el *sync*. Los huecos sostienen la forma. No recurre a imaginería de IA.
 
-**Geometry (especificación, sin dibujo final).** Rejilla de 8 × 8 unidades (u); hueco entre bloques 0,4 u; radio de esquina 0,25 u.
+**Geometry (especificación; los SVG finales ya existen en `assets/brand/`).** Rejilla de 8 × 8 unidades (u); hueco entre bloques 0,4 u; radio de esquina 0,25 u.
 
 | Capa SVG | x | y | Ancho | Alto | Color (token) |
 |---|---|---|---|---|---|
@@ -21,9 +21,11 @@ Minimalista y moderna: bloques, huecos y un nodo de acento. Surge de una explora
 
 **Monocromo.** Los cuatro bloques en una sola tinta; los huecos sostienen la forma.
 
-**Wordmark.** «SyncLayer», una palabra, IBM Plex Sans 600 (recomendado). La variante de dos pesos (Sync 400 / Layer 600) se evaluó y no se recomienda. El propietario aún no confirmó el wordmark.
+**Wordmark.** «SyncLayer», una palabra, IBM Plex Sans 600 (confirmado el 2026-11-19). La variante de dos pesos (Sync 400 / Layer 600) se evaluó y no se recomienda.
 
-**Small sizes.** Tamaño mínimo 16 px. Debe validarse en 16, 32 y 64 px antes de aprobar el asset. Propuesta, sin validar en render: a 16 px la rejilla da 2 px por u (0,4 u = 0,8 px), así que el hueco se redondea a 1 px como mínimo y el radio de esquina es 0.
+**Small sizes.** Tamaño mínimo 16 px. A 16 px la rejilla da 2 px por u. Medido en Edge headless a escala 1, con píxeles leídos: con la geometría original (hueco 0,4 u = 0,8 px) el hueco ocupa 1 px, pero con cerca del 80 % de fondo (luminancia 61 frente a 17 de fondo y 237 de bloque, en dark): se ve, pero no es nítido. La variante `symbol-16-*` (rejilla de 16 px, hueco de 1 px, radio 0) deja el hueco al 100 % de fondo.
+
+Regla: `symbol-16-*` entre 16 y 24 px y para favicon; desde 32 px basta el símbolo original (hueco de 1,6 px a 32 px y 3,2 px a 64 px). A 32 y 64 px sólo se verificó la geometría, no los píxeles.
 
 **Usage rules.** Espacio libre de 1 u alrededor. Sin degradados, sombras ni contornos. Nunca como patrón repetido. Versión monocroma obligatoria. No combinar con cerebros, robots, circuitos ni destellos.
 
@@ -103,14 +105,27 @@ Alternativa si se prefiere algo más neutro: Inter + JetBrains Mono.
 | **Social preview** (1280×640) | Fondo `--sl-bg`, símbolo, nombre y tagline. Zona segura de 40 px. |
 | **Documentación** | Mismas fuentes y paleta; bloques de código sobre `--sl-surface`. |
 | **Diagramas de arquitectura** | Estrella de orquestación; un color de estado por rol, no uno por agente; etiquetas en Plex Mono. |
-| **Catálogo de agentes** | Tabla monoespaciada con nombre, rol, modelo y herramientas. |
+| **Catálogo de agentes** | Nueve tarjetas: nombre en IBM Plex Mono, rol en IBM Plex Sans, y modelo, herramientas y etiqueta de clase en Plex Mono. |
 | **Sitio web (futuro)** | Sólo si se decide; sin framework. Reutiliza los tokens de este documento. |
 | **Slides** | Fondo oscuro, un acento, un mensaje por diapositiva. |
 
 Los colores `color:` del frontmatter de los agentes los define Claude Code y no forman parte de esta paleta.
 
-## Pending assets (no creados)
+## Assets
 
-Símbolo en SVG (dark, light, monocromo), wordmark convertido a trazados, lockup horizontal, social preview, favicon. Se crean tras validar la geometría de los cuatro bloques a 16, 32 y 64 px.
+Viven en `assets/brand/`. Los SVG los producen los generadores de `assets/brand/src/` (`build_brand.py`, `build_round2.py`); no se editan a mano. Los generadores requieren `fontTools` y `uharfbuzz` y una carpeta de fuentes IBM Plex (no versionadas); el comando está en `CLAUDE.md`.
 
-Otros pendientes: cuestionar el acento `#63D6C4` y que el propietario confirme el wordmark.
+**Existen**
+
+- Símbolo `symbol-{dark,light,mono,mono-reverse}.svg`, con las capas `block-top-left`, `block-sync`, `block-bottom-left` y `block-bottom-right`. Variante de 16 px `symbol-16-*`.
+- Wordmark `wordmark-*.svg` y lockup horizontal `lockup-horizontal-*.svg`: IBM Plex Sans 600, texto a trazados, un solo peso.
+- Ronda 2: `banner-{dark,light}.svg` (1280×320), `social-preview.svg` y `social-preview.png` (1280×640, margen de 40 px), `agent-catalog-{dark,light}.svg` (nueve tarjetas), `architecture-star-{dark,light}.svg` (sin conexiones entre agentes; clasificación por herramientas, no por garantía: sin `Edit`/`Write` en `info` y círculo, escribe en `warn` y cuadrado, de modo que el estado no dependa sólo del color; acento sólo en la sesión principal) y la línea «The guard is a heuristic, not a sandbox.» en catálogo, estrella y slide 3 (la guarda es heurística, no un sandbox) y `slide-1-title.svg`, `slide-2-message.svg`, `slide-3-roster.svg` (1920×1080, oscuro).
+
+**Faltan**
+
+- Lockup apilado.
+- Favicon exportado (.ico y PNG), a partir de `symbol-16-*`.
+- Hoja de marca (Ronda 3).
+- Cuestionar el acento `#63D6C4`.
+
+Los datos de los agentes del catálogo y de las slides están duplicados en `AGENTS` de `build_round2.py`: se actualizan junto con `agents/*.md`.

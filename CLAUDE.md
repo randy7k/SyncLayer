@@ -22,6 +22,17 @@ python -B -c "import json; print(json.dumps({'tool_name': 'Bash', 'tool_input': 
 En Windows con Git Bash, las barras invertidas dentro de un JSON escrito a mano se
 rompen con facilidad al citar; por eso conviene generarlo con `json.dumps`.
 
+Regenerar los assets de marca (necesita `fontTools` y `uharfbuzz`):
+
+```
+python -B assets/brand/src/build_brand.py --fonts <carpeta-de-fuentes>
+python -B assets/brand/src/build_round2.py --fonts <carpeta-de-fuentes>
+```
+
+La carpeta debe tener `IBMPlexSans-SemiBold.ttf`, `IBMPlexSans-Medium.ttf`,
+`IBMPlexSans-Regular.ttf`, `IBMPlexMono-Medium.ttf` e `IBMPlexMono-Regular.ttf` (OFL,
+github.com/IBM/plex). Las fuentes no se versionan.
+
 ## Arquitectura
 
 Tres piezas, de la más abstracta a la más concreta:
@@ -36,6 +47,10 @@ Tres piezas, de la más abstracta a la más concreta:
 `docs/agentes.md` es la guía humana. `docs/brand/` define la marca (estrategia, voz, identidad
 visual); el copy oficial va en inglés y no declara capacidades que el repositorio no tenga.
 
+`assets/brand/` contiene los SVG de marca y `social-preview.png`; `assets/brand/src/` los
+generadores (`build_brand.py`: símbolo, wordmark, lockup; `build_round2.py`: banner,
+social preview, catálogo, estrella, slides). No forma parte de la instalación en `~/.claude/`.
+
 Claude Code lee los archivos vivos de `~/.claude/` (`agents/`, `rules/agentes.md`,
 `hooks/agent_guard.py`, `docs/agentes.md`). Este repositorio es la copia versionada:
 editar uno no actualiza el otro. `tests/` sólo existe aquí.
@@ -49,6 +64,21 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Todo cambio en `hooks/agent_guard.py` empieza con una prueba que falla en
   `tests/test_agent_guard.py`.
 - Ejecuta Python con `-B`. No se versiona `__pycache__`.
+- Los SVG de `assets/brand/` se regeneran con los scripts de `assets/brand/src/`; no se
+  editan a mano.
+- Excepción de dependencias: los generadores de `assets/brand/src/` requieren `fontTools` y
+  `uharfbuzz` (no son biblioteca estándar). Son herramienta de build; el repositorio, la
+  guarda y las pruebas siguen siendo sólo biblioteca estándar.
+- Los datos de los agentes (rol, modelo, herramientas) están duplicados en `AGENTS` de
+  `assets/brand/src/build_round2.py`: al cambiar `agents/*.md`, actualízalos y regenera.
+- `social-preview.png` no lo genera ningún script del repositorio: se exporta aparte a
+  partir de `social-preview.svg`, con una HTML que lo muestre a 1280×640:
+  `msedge --headless --disable-gpu --force-device-scale-factor=1 --hide-scrollbars --window-size=1280,640 --screenshot=<salida>.png <html>`.
+  Regenéralo cada vez que cambie el SVG.
+- El catálogo visual clasifica a los agentes por herramientas (sin `Edit`/`Write`; escribe), nunca
+  como «read-only»: la guarda es heurística, no un sandbox.
+- Los SVG de marca llevan ids fijos (`wordmark`, `background`, etc.) y sólo se usan como
+  `<img>`. Insertar varios inline en una misma página exige prefijar los ids.
 - Nada personal en el repositorio (nombres, correos, rutas internas): es público. Usa
   `~` para la carpeta personal.
 

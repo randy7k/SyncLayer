@@ -1,10 +1,10 @@
 # HANDOFF: SyncLayer visual identity (for Claude Design)
 
-> **Update (2026-11-19).** This brief was revised: the «Stepped S» direction was dropped and the approved direction is now **Modular Grid System**, described below. If anything here disagrees with `docs/brand/visual-identity.md`, that file wins and you tell the owner.
+> **Update (2026-11-19).** This brief was revised: the «Stepped S» direction was dropped and the approved direction is now **Modular Grid System**, described below. If anything here disagrees with `docs/brand/visual-identity.md`, that file wins and you tell the owner. Rounds 1 and 2 were produced locally with the generator in `assets/brand/src/`; Claude Design is no longer needed for those assets. The stacked lockup and Round 3 are still open.
 
 ## Your role
 
-Develop the visual identity of **SyncLayer** from an approved brand strategy and visual direction. Strategy, voice, colors and typography are already decided. Your job is the visual exploration: the final symbol artwork, the logo lockups and the first applications, presented so the project owner can steer them. What is pending is the final SVG files.
+Develop the visual identity of **SyncLayer** from an approved brand strategy and visual direction. Strategy, voice, colors and typography are already decided. Your job is the visual exploration: the final symbol artwork, the logo lockups and the first applications, presented so the project owner can steer them. The final SVG files for the symbol, wordmark and horizontal lockup already exist in `assets/brand/`; what is pending is listed in the update above.
 
 Work in rounds. After each round, show the lockups and applications as options side by side (the symbol is decided) and wait for direction. Do not finalize anything the owner has not approved.
 
@@ -45,9 +45,9 @@ Constraints:
 - Monochrome: all four blocks in one ink; the gaps hold the shape.
 - Clear space 1 u. Minimum size 16 px.
 - No gradients, shadows, or added strokes or outlines. Never used as a repeated pattern.
-- Proposal, not validated in render: at 16 px the grid is 2 px per u (0.4 u = 0.8 px), so the gap rounds to at least 1 px and the corner radius is 0.
+- Measured in render: at 16 px the grid is 2 px per u (0.4 u = 0.8 px), so the gap fills about 80 % of a pixel and is not crisp. The `symbol-16-*` variant (16 px grid, 1 px gap, radius 0) fixes it. See `docs/brand/visual-identity.md`.
 
-Wordmark: «SyncLayer», one word, IBM Plex Sans 600. This is a recommendation; the owner has not confirmed it. The two-weight version (Sync 400 / Layer 600) was evaluated and is not recommended.
+Wordmark: «SyncLayer», one word, IBM Plex Sans 600. The owner confirmed it on 2026-11-19. The two-weight version (Sync 400 / Layer 600) was evaluated and is not recommended.
 
 Directions considered earlier were all dropped: *Stepped S* (an «S» monogram from two offset planes) did not land with the owner. *Strata* (stacked offset planes) and *Bus* (a line with nodes) were set aside before. The reason given for Strata, «generic», no longer holds without qualification: the current direction resembles it, since it is also built from rectangular planes. The difference is four coplanar blocks on a grid, separated by gaps, with a single accent block. *Bus* reflects the orchestration but disappears at small sizes. The orchestration **star** (main session at the center, agents around it) is reserved for diagrams, not for the logo.
 
