@@ -21,7 +21,7 @@
 **Diferenciadores verificables en el repositorio:**
 
 1. Una sola sesión orquesta; los agentes no se delegan trabajo entre sí.
-2. Cada rol tiene herramientas y permisos distintos (por ejemplo, ningún agente de revisión escribe).
+2. Cada rol tiene una lista de herramientas distinta; los agentes de revisión no tienen `Edit` ni `Write`, y su `Bash` está limitado por una guarda heurística (no es de solo lectura real).
 3. «Terminado» exige pruebas ejecutadas y evidencia, no una afirmación.
 4. Documenta sus límites en lugar de ocultarlos.
 
