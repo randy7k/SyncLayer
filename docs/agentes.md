@@ -97,14 +97,21 @@ Si un agente no usa el modelo esperado, revisá estas variables primero.
 
 ## Límites conocidos
 
-- «SENTINEL sólo escribe tests» y «AUDITOR, SHIELD y DEBUGGER no modifican nada» los
-  hace cumplir `~/.claude/hooks/agent_guard.py`, enlazado desde el frontmatter
+- **SENTINEL sólo está guardado en `Write`/`Edit`/`NotebookEdit`; su `Bash` no tiene
+  guarda** y puede modificar código de producción (`sed -i`, `echo >`, `python -c`).
+  «Sólo escribe tests» ahí es una instrucción del prompt, no una garantía.
+- AUDITOR, SHIELD y DEBUGGER no son de solo lectura real: corren tests y builds, que
+  ejecutan código arbitrario, y el hook no limita lecturas (`.env`) ni red.
+- «SENTINEL sólo escribe tests» (en sus herramientas de escritura) y «AUDITOR, SHIELD y
+  DEBUGGER no modifican nada» (en comandos conocidos) los hace cumplir `~/.claude/hooks/agent_guard.py`, enlazado desde el frontmatter
   (`hooks:`) de esos cuatro agentes. Es una heurística contra escrituras accidentales,
   no un sandbox: un intérprete en una línea (`python -c`, `node -e`, `bash -c`, `eval`,
   `xargs rm`, `cmd /c`, `python -m venv`) todavía puede escribir archivos. Tampoco cubre
   `wget -o`/`-a` ni `curl -D`/`-c`/`--trace`.
 - Si `python` no está en el PATH del shell que lanza el hook, el shell sale con 127 y
-  Claude Code deja pasar la llamada (falla abierto). Comprobá que `python` resuelva.
+  Claude Code deja pasar la llamada (falla abierto). Lo mismo si `python` resuelve al
+  alias de la Microsoft Store. Comprobá con `Get-Command python -All` que el primero sea
+  un Python real y con `python -B -c "import sys; print(sys.version)"` que funcione.
 - Los hooks del frontmatter de agentes de usuario corren sin el diálogo de confianza
   del espacio de trabajo.
 - Si la sesión principal está en un modo de permisos amplio (aceptar ediciones, auto),

@@ -2,7 +2,15 @@
 
 ## [Sin publicar]
 
-Sin cambios pendientes.
+### Corregido (documentación, auditoría 2026-11-19)
+
+- Se documenta que `sentinel` no tiene guarda sobre `Bash` y que `auditor`, `shield` y
+  `debugger` no son de solo lectura real.
+- Se documentan los bypasses medidos de `readonly`.
+- Se avisa del fallo abierto cuando `python` resuelve al alias de la Microsoft Store y se
+  añade cómo comprobarlo.
+- La copia `~/.claude` -> repo pasa a ser por archivo (`git ls-files`) para no traer
+  archivos ajenos a un repo público.
 
 ## 2026-11-19 — Versión inicial
 

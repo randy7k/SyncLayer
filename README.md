@@ -76,12 +76,16 @@ Editar los archivos vivos de `~/.claude/` no actualiza este repositorio, y edita
 repositorio no actualiza `~/.claude/`. Hay que copiar a mano en el sentido que
 corresponda. Haz respaldo del destino antes de sobrescribir.
 
-`~/.claude` -> repositorio (desde la raíz del repositorio):
+`~/.claude` -> repositorio: copia sólo los archivos de SyncLayer, nunca con comodines.
+`~/.claude/agents/`, `hooks/` y `docs/` contienen archivos que no son de SyncLayer
+(por ejemplo `hooks/caveman-statusline.ps1`); este repositorio es público y no deben
+entrar. Desde la raíz del repositorio:
 
 ```powershell
-foreach ($d in 'agents','rules','hooks','docs') {
-    Copy-Item "$HOME\.claude\$d\*" ".\$d" -Recurse -Force
+foreach ($f in (git ls-files agents rules hooks docs)) {
+    Copy-Item "$HOME\.claude\$f" ".\$f" -Force
 }
+git status   # revisa el diff antes de commitear
 ```
 
 Repositorio -> `~/.claude`: el segundo bloque de la sección anterior. Ojo con
@@ -160,10 +164,29 @@ de más de 100 000 caracteres terminan en bloqueo.
 
 Es una heurística contra escrituras accidentales, **no un sandbox**.
 
+- **`sentinel` solo está guardado en `Write`/`Edit`/`NotebookEdit`.** Su `Bash` no tiene
+  guarda: con `sed -i`, `echo > archivo` o `python -c` puede modificar código de
+  producción. «Solo escribe tests» ahí es una instrucción de su prompt, no algo que el
+  hook imponga.
+- `auditor`, `shield` y `debugger` no son de solo lectura real: deben correr tests y
+  builds, y eso ejecuta código arbitrario. Tampoco hay restricción de lectura (`.env`)
+  ni de red (`curl -d @archivo URL`).
+- El modo `readonly` es una lista negra. Pasan, entre otros: `python script.py`,
+  `$(echo rm) x`, `c=rm; $c x`, `builtin rm`, `busybox rm`, `find -fprint`/`-fls`,
+  `sed 'w f'`, `awk` con redirección interna, `git -c core.pager=...`,
+  `git log --ext-diff`, `tar -x`, `unzip`, `7z x`, `shred`, `rsync`, `scp`, `mklink`,
+  `docker run`, `ssh`, `iex`, y `sqlite3`/`psql`/`mysql` con `DROP`.
 - Brechas conocidas y aceptadas: `python -c`, `node -e`, `bash -c`, `eval`, `xargs rm`,
   `cmd /c`, `python -m venv`. Tampoco cubre `wget -o`/`-a` ni `curl -D`/`-c`/`--trace`.
 - Si `python` no está en el PATH del shell que lanza el hook, el shell sale con 127 y
-  Claude Code deja pasar la llamada (falla abierto).
+  Claude Code deja pasar la llamada (falla abierto). Lo mismo si `python` resuelve al
+  alias de la Microsoft Store (`...\WindowsApps\python.exe`). Comprueba antes de
+  confiar en la guarda:
+
+  ```powershell
+  Get-Command python -All | Select-Object Source   # el primero debe ser un Python real
+  python -B -c "import sys; print(sys.version)"     # debe imprimir la versión, no un aviso
+  ```
 - Los hooks del frontmatter de agentes de usuario corren sin el diálogo de confianza
   del espacio de trabajo.
 

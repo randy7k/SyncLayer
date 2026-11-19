@@ -59,7 +59,10 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Falla cerrado: entrada inválida, modo desconocido, error interno (incluidos
   `RecursionError` y `MemoryError`) y comandos de más de 100 000 caracteres dan exit 2.
 - Si `python` no está en el PATH del shell que lanza el hook, el shell sale con 127 y
-  la llamada pasa (falla abierto). No se puede arreglar desde el script.
+  la llamada pasa (falla abierto); igual si resuelve al alias de la Microsoft Store.
+  No se puede arreglar desde el script.
+- `sentinel` sólo tiene guarda en `Write|Edit|NotebookEdit`: su `Bash` queda libre. No
+  documentes «sólo escribe tests» como garantía.
 - Es una heurística, no un sandbox: `python -c`, `node -e`, `bash -c`, `eval`,
   `xargs rm`, `cmd /c` y `python -m venv` son brechas aceptadas.
 - `atlas` está fijado a `model: claude-fable-5-2` porque el alias `fable` resolvía a
@@ -70,6 +73,9 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - En `tests-only`, los directorios de pruebas se evalúan sobre la ruta relativa al
   `cwd` del payload. Fuera de `cwd`, o sin `cwd`, sólo cuenta el nombre del archivo.
 - Las sesiones ya abiertas no ven agentes nuevos o modificados: reiniciarlas.
+
+- Copia `~/.claude` -> repo sólo por archivo (`git ls-files`), nunca con comodines:
+  `~/.claude/hooks/` y otras carpetas tienen archivos ajenos y el repo es público.
 
 ## Cierre de un cambio
 
