@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" role="img" aria-labelledby="t"><title id="t">SyncLayer</title>
+<style>@media (prefers-color-scheme: dark){.c-accent{fill:#63D6C4}.c-text{fill:#E6EDF3}.c-text-3{fill:#7D8B99}}</style>
+<rect id="block-top-left" class="c-text" x="0" y="0" width="10" height="6" fill="#0B1118"/>
+<rect id="block-sync" class="c-accent" x="11" y="0" width="5" height="6" fill="#0B7A6B"/>
+<rect id="block-bottom-left" class="c-text-3" x="0" y="7" width="5" height="9" fill="#5B6874"/>
+<rect id="block-bottom-right" class="c-text" x="6" y="7" width="10" height="9" fill="#0B1118"/>
+</svg>

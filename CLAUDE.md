@@ -22,6 +22,27 @@ python -B -c "import json; print(json.dumps({'tool_name': 'Bash', 'tool_input': 
 En Windows con Git Bash, las barras invertidas dentro de un JSON escrito a mano se
 rompen con facilidad al citar; por eso conviene generarlo con `json.dumps`.
 
+Regenerar los assets de marca (necesita `fontTools` y `uharfbuzz`):
+
+```
+python -B assets/brand/src/build_brand.py --fonts <carpeta-de-fuentes>
+python -B assets/brand/src/build_round2.py --fonts <carpeta-de-fuentes>
+python -B assets/brand/src/build_round3.py --fonts <carpeta-de-fuentes>
+```
+
+`build_brand.py` produce también los lockups apilados y `favicon.svg`; `build_round3.py`, la
+hoja de marca. Los PNG y el `.ico` se exportan aparte (sólo biblioteca estándar, necesitan
+msedge; `--edge <ruta>` si no lo encuentra):
+
+```
+python -B assets/brand/src/export_social_png.py
+python -B assets/brand/src/export_favicons.py
+```
+
+La carpeta debe tener `IBMPlexSans-SemiBold.ttf`, `IBMPlexSans-Medium.ttf`,
+`IBMPlexSans-Regular.ttf`, `IBMPlexMono-Medium.ttf` e `IBMPlexMono-Regular.ttf` (OFL,
+github.com/IBM/plex). Las fuentes no se versionan.
+
 ## Arquitectura
 
 Tres piezas, de la más abstracta a la más concreta:
@@ -36,6 +57,11 @@ Tres piezas, de la más abstracta a la más concreta:
 `docs/agentes.md` es la guía humana. `docs/brand/` define la marca (estrategia, voz, identidad
 visual); el copy oficial va en inglés y no declara capacidades que el repositorio no tenga.
 
+`assets/brand/` contiene los SVG de marca y `social-preview.png`; `assets/brand/src/` los
+generadores (`build_brand.py`: símbolo, wordmark, lockups horizontal y apilado, `favicon.svg`;
+`build_round2.py`: banner, social preview, catálogo, estrella, slides; `build_round3.py`: hoja
+de marca) y los exportadores (`export_social_png.py`, `export_favicons.py`, `ico.py`). No forma parte de la instalación en `~/.claude/`.
+
 Claude Code lee los archivos vivos de `~/.claude/` (`agents/`, `rules/agentes.md`,
 `hooks/agent_guard.py`, `docs/agentes.md`). Este repositorio es la copia versionada:
 editar uno no actualiza el otro. `tests/` sólo existe aquí.
@@ -49,6 +75,37 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Todo cambio en `hooks/agent_guard.py` empieza con una prueba que falla en
   `tests/test_agent_guard.py`.
 - Ejecuta Python con `-B`. No se versiona `__pycache__`.
+- Los SVG de `assets/brand/` se regeneran con los scripts de `assets/brand/src/`; no se
+  editan a mano.
+- Excepción de dependencias: los generadores de `assets/brand/src/` requieren `fontTools` y
+  `uharfbuzz` (no son biblioteca estándar). Son herramienta de build; el repositorio, la
+  guarda y las pruebas siguen siendo sólo biblioteca estándar.
+- Los datos de los agentes (rol, modelo, herramientas, guarda) están duplicados en
+  `assets/brand/src/agents_data.py` (`AGENTS`, sin dependencias; lo importa
+  `build_round2.py`). `tests/test_brand_agents.py` los compara con el frontmatter de
+  `agents/*.md` (nombre, `model`, `tools`, `hooks:` y Edit/Write) y falla si se desincronizan:
+  al cambiar `agents/*.md`, actualiza `agents_data.py` y regenera.
+- `social-preview.png` se exporta de `social-preview.svg` con
+  `python -B assets/brand/src/export_social_png.py` (sólo biblioteca estándar; usa msedge
+  headless, `--edge <ruta>` si no lo encuentra). Genera esta HTML en un temporal, sin margen
+  del navegador (si no, la imagen sale desplazada):
+  `<body style="margin:0"><img src="<ruta al SVG>" style="width:1280px;height:640px;display:block">`
+  y la captura con `msedge --headless --disable-gpu --force-device-scale-factor=1 --hide-scrollbars --window-size=1280,640 --screenshot=<salida>.png <html>`.
+  Regenéralo cada vez que cambie el SVG.
+- `export_favicons.py` genera `favicon-16/32/48.png`, `apple-touch-icon.png` y `favicon.ico`
+  (el contenedor lo escribe `ico.py`, que cubre `tests/test_ico.py`). Usa el símbolo dark sobre
+  un fondo `bg` opaco: un símbolo transparente se pierde en una de las dos pestañas (tinta oscura
+  sobre pestaña oscura o al revés); el tile mantiene visibles los huecos en ambas. Los tres
+  dibujan `symbol-16-dark.svg`: 16 px a 1x sin margen (el símbolo llena el lienzo), 32 px a 1x y
+  48 px a 2x, ambos con 8 px de margen `bg` por lado (huecos de 1, 1 y 2 px exactos). Limitación:
+  sobre una pestaña clara el icono de 16 px no tiene margen y los bloques claros pierden contraste
+  contra el blanco. Edge headless se ha colgado alguna vez con ventanas pequeñas: cada captura
+  usa su propio `--user-data-dir`, con timeout de 30 s y un reintento, y los archivos se copian a
+  `assets/brand/` sólo si todas las capturas salen bien. Regenéralos cuando cambien `symbol-16-dark.svg` o `symbol-dark.svg`.
+- El catálogo visual clasifica a los agentes por herramientas (sin `Edit`/`Write`; escribe), nunca
+  como «read-only»: la guarda es heurística, no un sandbox.
+- Los SVG de marca llevan ids fijos (`wordmark`, `background`, etc.) y sólo se usan como
+  `<img>`. Insertar varios inline en una misma página exige prefijar los ids.
 - Nada personal en el repositorio (nombres, correos, rutas internas): es público. Usa
   `~` para la carpeta personal.
 

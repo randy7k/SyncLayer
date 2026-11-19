@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/banner-dark.svg">
+  <img src="assets/brand/banner-light.svg" alt="SyncLayer">
+</picture>
+
 # SyncLayer
 
 **One layer. Many specialists.**
@@ -32,12 +37,46 @@ SyncLayer/
 │   └── agentes.md     Reglas de orquestación (se cargan en todos los proyectos)
 ├── hooks/
 │   └── agent_guard.py Hook PreToolUse que limita lo que escriben los agentes
+├── assets/
+│   └── brand/         SVG de marca (símbolo, wordmark, lockups, favicon, banner,
+│       │              catálogo, estrella, slides, hoja de marca), PNG/ICO exportados
+│       │              y generadores
+│       └── src/       build_brand.py, build_round2.py, build_round3.py, brandlib.py,
+│                          fonts_util.py, agents_data.py, ico.py, export_social_png.py,
+│                          export_favicons.py
 ├── docs/
 │   ├── agentes.md     Guía de uso y mantenimiento
 │   └── brand/         Estrategia, voz e identidad visual del proyecto
 └── tests/
-    └── test_agent_guard.py
+    ├── test_agent_guard.py
+    ├── test_brand_agents.py
+    └── test_ico.py
 ```
+
+## Assets de marca
+
+`assets/brand/` guarda los SVG finales (con variantes dark, light y monocromas) y los
+scripts que los generan. Los SVG se regeneran, no se editan a mano; cómo, en
+[`CLAUDE.md`](CLAUDE.md). Reglas de uso y de tamaño mínimo:
+[`docs/brand/visual-identity.md`](docs/brand/visual-identity.md).
+
+Contenido de `assets/brand/`:
+
+- Símbolo `symbol-*` y variante de 16 px `symbol-16-*`; wordmark `wordmark-*`; lockups
+  `lockup-horizontal-*` y `lockup-stacked-*` (cada uno en dark, light, mono y mono-reverse).
+- Favicon: `favicon.svg` (un solo archivo; cambia de colores con `prefers-color-scheme`),
+  `favicon-16.png`, `favicon-32.png`, `favicon-48.png`, `favicon.ico` (PNG de 16, 32 y 48 px
+  embebidos) y `apple-touch-icon.png` (180×180). Los PNG llevan el símbolo dark sobre un
+  fondo `bg` opaco (con 8 px de margen a 32 y 48 px; el de 16 px no tiene margen). El repositorio no tiene sitio web: estos archivos están listos para usarse
+  si algún día lo hay, pero hoy no se enlazan desde ningún sitio.
+- `banner-*`, `social-preview` (SVG y PNG), `agent-catalog-*`, `architecture-star-*` y tres
+  slides.
+- `brand-sheet-{dark,light}.svg` (1600×1131): hoja de marca de una página con símbolo, lockup,
+  paleta, tipografía y reglas de uso.
+
+**Social preview.** GitHub no permite subirla desde un commit: carga
+`assets/brand/social-preview.png` (1280×640) a mano en el repositorio, en
+Settings > Social preview.
 
 ## Instalación
 
@@ -217,7 +256,7 @@ Es una heurística contra escrituras accidentales, **no un sandbox**.
 python -B -m unittest discover -s tests
 ```
 
-186 pruebas, sólo biblioteca estándar, Python 3.12. Además se verificó en sesiones
+197 pruebas (186 de la guarda, 2 de sincronía de los datos de marca y 9 del escritor ICO), sólo biblioteca estándar, Python 3.12. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 

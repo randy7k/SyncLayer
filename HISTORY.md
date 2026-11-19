@@ -2,6 +2,45 @@
 
 ## [Sin publicar]
 
+### Añadido (assets de marca)
+
+- `assets/brand/`: símbolo (`symbol-*`, capas `block-top-left`, `block-sync`,
+  `block-bottom-left`, `block-bottom-right`), wordmark y lockup horizontal en dark, light,
+  mono y mono-reverse; texto a trazados, IBM Plex Sans 600. Variante `symbol-16-*` (rejilla de
+  16 px, hueco de 1 px, radio 0).
+- Ronda 2: `banner-{dark,light}.svg`, `social-preview.svg` y `.png` (1280×640),
+  `agent-catalog-{dark,light}.svg`, `architecture-star-{dark,light}.svg` y tres slides
+  (1920×1080, oscuro).
+- Generadores en `assets/brand/src/` (`build_brand.py`, `build_round2.py`, `brandlib.py`,
+  `fonts_util.py`, `agents_data.py`). Requieren `fontTools` y `uharfbuzz`; las fuentes no se versionan.
+  `export_social_png.py` (biblioteca estándar, msedge headless) exporta `social-preview.png`.
+- Catálogo, estrella y slide 3 clasifican por herramientas («no Edit/Write», «no Edit/Write ·
+  guarded Bash», «writes tests · guarded Bash», «writes: …»), con círculo para quien no tiene
+  `Edit`/`Write` y cuadrado para quien escribe (la forma además del color), y la línea «The guard
+  is a heuristic, not a sandbox.». Los SVG llevan `<desc>`; slide 3 queda centrada.
+- `tests/test_brand_agents.py`: compara los datos de `agents_data.py` con el frontmatter de
+  `agents/*.md`.
+- `README.md`: banner con `<picture>`, `assets/` en la estructura y nota para subir la social
+  preview a mano.
+
+- Ronda 3: lockups apilados `lockup-stacked-{dark,light,mono,mono-reverse}.svg`; `favicon.svg`
+  (geometría de 16 px, colores dark/light con `prefers-color-scheme`, sin degradados);
+  `favicon-16/32/48.png`, `apple-touch-icon.png` (180×180) y `favicon.ico` (PNG embebidos de 16,
+  32 y 48 px) exportados con `export_favicons.py` (msedge headless); hoja de marca
+  `brand-sheet-{dark,light}.svg` (1600×1131) con `build_round3.py`.
+- `ico.py` (escritor ICO, biblioteca estándar; los bits por píxel salen del tipo de color del IHDR y un PNG truncado da `ValueError`) y `tests/test_ico.py`.
+- Favicon: 16 px sin margen; 32 y 48 px con 8 px de margen `bg` por lado (símbolo de 16 px a 1x y 2x). La hoja de marca usa ids únicos (`sym-`, `lk-`, `s16-`, `s24-`, `s32-`).
+
+### Cambiado (assets de marca)
+
+- Comentario de `build_brand.py` corregido (dark, light, mono y mono-reverse) y docs de marca al día
+  (SVG finales existentes, wordmark confirmado, 16 px medido). Se documenta cómo exportar
+  `social-preview.png`.
+- Wordmark confirmado por el propietario (2026-11-19): una palabra, IBM Plex Sans 600.
+- Regla de 16 px con medición real: `symbol-16-*` entre 16 y 24 px y para favicon; desde 32 px
+  el símbolo original.
+- Pendiente: cuestionar el acento `#63D6C4`.
+
 ### Cambiado (guarda, auditoría 2026-11-19)
 
 - `sentinel`: el matcher del hook pasa a `Write|Edit|NotebookEdit|Bash`. En `tests-only`,
@@ -16,10 +55,19 @@
   barras invertidas en rutas). `mktemp` y `tar -O` se permiten con `--allow-temp`.
 - El parser emula a bash para `\x` y `$"..."`.
 
+### Cambiado (marca)
+
+- Dirección visual: «Stepped S» se descarta y rige «Modular Grid System» (cuatro bloques en
+  rejilla de 8 × 8 u, uno de ellos en acento). Marca aprobada el 2026-11-19.
+- Wordmark: «SyncLayer», una palabra, IBM Plex Sans 600; recomendado (confirmado después, ver «assets de marca»).
+- Paleta light: `surface-2` `#EAEFF3` y texto blanco sobre el acento, supuestos sin medir.
+- Sin cambios: lema, voz, tipografía y el resto de la paleta.
+- Pendientes en ese momento: SVG finales, wordmark convertido a trazados y cuestionar el acento.
+
 ### Añadido
 
-- `docs/brand/`: estrategia de marca, voz y tono, e identidad visual (dirección «Stepped S»,
-  paleta dark/light con contrastes medidos, tipografía IBM Plex). Sin assets finales todavía.
+- `docs/brand/`: estrategia de marca, voz y tono, e identidad visual (paleta dark/light con
+  contrastes medidos, tipografía IBM Plex). Sin assets finales todavía.
 - Tagline: «One layer. Many specialists.» (reemplaza «One Layer. Multiple Intelligence.»).
 - `README.md`: introducción de marca en inglés y enlace a `docs/brand/`.
 
