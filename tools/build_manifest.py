@@ -22,9 +22,10 @@ import sys
 MANIFEST_NAME = "install-manifest.json"
 
 # Lista permitida: los doce archivos que SyncLayer instala. install.ps1 lleva la misma
-# regex, pero con \z: en .NET \Z (y $) aceptan un \n final, \z no.
+# regex, pero con \z: en .NET \Z (y $) aceptan un \n final, \z no. El lookahead excluye los
+# nombres reservados de Windows (con, prn, aux, nul, com1-9, lpt1-9).
 ALLOWED = re.compile(
-    r"^(agents/[a-z0-9_-]+\.md|rules/agentes\.md|hooks/agent_guard\.py|docs/agentes\.md)\Z"
+    r"^(agents/(?!(con|prn|aux|nul|com[1-9]|lpt[1-9])\.)[a-z0-9_-]+\.md|rules/agentes\.md|hooks/agent_guard\.py|docs/agentes\.md)\Z"
 )
 
 # Carpetas donde un archivo fuera de la lista permitida obliga a decidir si se instala.

@@ -39,6 +39,10 @@ TWELVE = [
 ]
 
 
+RESERVED = ["agents/" + n + ".md" for n in
+            ("con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9")]
+
+
 class CanonicalHash(unittest.TestCase):
     def test_crlf_equals_lf(self):
         self.assertEqual(bm.canonical_sha256(b"a\r\nb"), bm.canonical_sha256(b"a\nb"))
@@ -86,8 +90,13 @@ class Allowed(unittest.TestCase):
             "agents/a.md\n",
             "rules/otro.md",
             "docs/agentes.md/x",
-        ]:
+        ] + RESERVED:
             self.assertIsNone(bm.ALLOWED.match(p), repr(p))
+
+    def test_reserved_lookalikes_accepted(self):
+        for p in ["agents/console.md", "agents/com10.md", "agents/com0.md", "agents/lpt.md",
+                  "agents/nul-x.md", "agents/auxiliar.md"]:
+            self.assertTrue(bm.ALLOWED.match(p), p)
 
 
 class Render(unittest.TestCase):
@@ -129,7 +138,7 @@ class Render(unittest.TestCase):
 
 class BuildManifest(unittest.TestCase):
     def test_build_from_temp_dir(self):
-        with tempfile.TemporaryDirectory(prefix="sync layer ") as d:
+        with tempfile.TemporaryDirectory(prefix="sync layer ", ignore_cleanup_errors=True) as d:
             os.makedirs(os.path.join(d, "agents"))
             with open(os.path.join(d, "agents", "b.md"), "wb") as f:
                 f.write(b"one\r\ntwo\r\n")
@@ -144,12 +153,12 @@ class BuildManifest(unittest.TestCase):
         self.assertEqual(m["files"][0]["sha256"], hashlib.sha256(b"x").hexdigest())
 
     def test_rejects_path_outside_allowed(self):
-        with tempfile.TemporaryDirectory(prefix="sync layer ") as d:
+        with tempfile.TemporaryDirectory(prefix="sync layer ", ignore_cleanup_errors=True) as d:
             with self.assertRaises(bm.ManifestError):
                 bm.build_manifest(d, ["settings.json"])
 
     def test_rejects_duplicates(self):
-        with tempfile.TemporaryDirectory(prefix="sync layer ") as d:
+        with tempfile.TemporaryDirectory(prefix="sync layer ", ignore_cleanup_errors=True) as d:
             os.makedirs(os.path.join(d, "agents"))
             with open(os.path.join(d, "agents", "a.md"), "wb") as f:
                 f.write(b"x")
@@ -160,7 +169,7 @@ class BuildManifest(unittest.TestCase):
 @unittest.skipIf(GIT is None, "git no esta en el PATH: pruebas de managed_files omitidas")
 class GitRepo(unittest.TestCase):
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory(prefix="sync layer ")
+        self._tmp = tempfile.TemporaryDirectory(prefix="sync layer ", ignore_cleanup_errors=True)
         self.addCleanup(self._tmp.cleanup)
         self.root = self._tmp.name
         self.git("init", "-q")
@@ -226,6 +235,22 @@ class GitRepo(unittest.TestCase):
         self.put("agents/a.md", b"cambio\n", add=False)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(bm.main(["--check", "--root", self.root]), 1)
+
+    def test_check_failure_message_has_regen_command(self):
+        self.put("agents/a.md")
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            self.assertEqual(bm.main(["--check", "--root", self.root]), 1)
+        self.assertIn("Regeneralo con: python -B tools/build_manifest.py", err.getvalue())
+
+    def test_not_a_git_repo_becomes_manifest_error(self):
+        with tempfile.TemporaryDirectory(prefix="sync layer ", ignore_cleanup_errors=True) as d:
+            # El temporal podria estar dentro de un repo git: el techo corta la busqueda al padre.
+            ceiling = {"GIT_CEILING_DIRECTORIES": os.path.dirname(os.path.realpath(d))}
+            with mock.patch.dict(os.environ, ceiling):
+                with self.assertRaises(bm.ManifestError) as cm:
+                    bm.managed_files(d)
+        self.assertIn("git ls-files fallo", str(cm.exception))
 
     def test_check_tolerates_crlf_manifest(self):
         self.put("agents/a.md")
@@ -308,7 +333,7 @@ class GitRepo(unittest.TestCase):
         # Se inyecta la entrada con update-index: no hace falta poder crear un symlink en disco.
         self.put("README.md")
         sha = subprocess.run([GIT, "hash-object", "-w", "--stdin"], cwd=self.root, env=clean_env(),
-                             input=b"target", check=True, stdout=subprocess.PIPE
+                             input=b"target", check=True, timeout=60, stdout=subprocess.PIPE
                              ).stdout.decode().strip()
         self.git("update-index", "--add", "--cacheinfo", "120000," + sha + ",agents/a.md")
         with self.assertRaises(bm.ManifestError) as cm:
@@ -374,7 +399,11 @@ class RealRepo(unittest.TestCase):
         _, manifest = self.load_manifest()
         stale = []
         for entry in manifest["files"]:
-            with open(os.path.join(ROOT, *entry["path"].split("/")), "rb") as f:
+            full = os.path.join(ROOT, *entry["path"].split("/"))
+            if not os.path.exists(full):
+                stale.append(entry["path"])
+                continue
+            with open(full, "rb") as f:
                 if bm.canonical_sha256(f.read()) != entry["sha256"]:
                     stale.append(entry["path"])
         self.assertEqual(stale, [],
@@ -387,6 +416,12 @@ class RealRepo(unittest.TestCase):
         self.assertEqual(raw.replace(b"\r\n", b"\n"), expected.encode("ascii"),
                          "install-manifest.json difiere de lo que genera build_manifest. "
                          + self.REGEN)
+
+    def test_main_check_default_root_is_up_to_date(self):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = bm.main(["--check"])
+        self.assertEqual(code, 0, err.getvalue() or "main(['--check']) no dio 0")
 
     def test_manifest_has_no_absolute_paths_or_backslashes(self):
         raw, manifest = self.load_manifest()
