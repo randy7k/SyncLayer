@@ -3,32 +3,20 @@ agent catalog, orchestration star and slide template.
 
     python -B assets/brand/src/build_round2.py --fonts <dir with IBM Plex .ttf>
 
-All text is converted to paths. Agent data (role, model, tools, writes) mirrors
-agents/*.md and the catalog in rules/agentes.md; update both together.
+All text is converted to paths. Agent data (role, model, tools, writes) lives in
+agents_data.py and mirrors agents/*.md and the catalog in rules/agentes.md; update both
+together.
 """
 
 import argparse
 import math
 from pathlib import Path
 
+from agents_data import AGENTS
 from brandlib import (BLOCKS, PALETTES, RADIUS, block_rects, fmt, svg_doc, text)
 from fonts_util import load
 
 OUT = Path(__file__).resolve().parent.parent
-
-# name, role (English copy), model, tools, writes (None = no Edit/Write), guarded Bash
-# Classified by tools, not by guarantee: the guard is a heuristic, not a sandbox.
-AGENTS = [
-    ("oracle", "Maps an unfamiliar repo or area", "haiku", "Read, Grep, Glob", None, False),
-    ("scout", "Checks official docs and libraries", "sonnet", "WebSearch, WebFetch, Read, Grep, Glob", None, False),
-    ("atlas", "Plans and designs the change", "claude-fable-5-2", "Read, Grep, Glob, Write", "the plan file", False),
-    ("forge", "Implements one unit of work", "sonnet", "Read, Edit, Write, Grep, Glob, Bash", "code and its tests", False),
-    ("sentinel", "Runs and extends the tests", "sonnet", "Read, Grep, Glob, Bash, Edit, Write", "tests only", True),
-    ("auditor", "Reviews the diff, independently", "opus", "Read, Grep, Glob, Bash", None, True),
-    ("shield", "Reviews the diff for security", "opus", "Read, Grep, Glob, Bash", None, True),
-    ("debugger", "Finds the root cause of a failure", "opus", "Read, Grep, Glob, Bash", None, True),
-    ("scribe", "Keeps the project docs current", "sonnet", "Read, Grep, Glob, Edit, Write", "documentation only", False),
-]
 
 TAGLINE = "One layer. Many specialists."
 SUBLINE = "Nine agents · orchestration rules · guard hook · Claude Code"

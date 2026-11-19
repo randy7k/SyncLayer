@@ -12,16 +12,19 @@
   `agent-catalog-{dark,light}.svg`, `architecture-star-{dark,light}.svg` y tres slides
   (1920×1080, oscuro).
 - Generadores en `assets/brand/src/` (`build_brand.py`, `build_round2.py`, `brandlib.py`,
-  `fonts_util.py`). Requieren `fontTools` y `uharfbuzz`; las fuentes no se versionan.
+  `fonts_util.py`, `agents_data.py`). Requieren `fontTools` y `uharfbuzz`; las fuentes no se versionan.
+  `export_social_png.py` (biblioteca estándar, msedge headless) exporta `social-preview.png`.
+- Catálogo, estrella y slide 3 clasifican por herramientas («no Edit/Write», «no Edit/Write ·
+  guarded Bash», «writes tests · guarded Bash», «writes: …»), con círculo para quien no tiene
+  `Edit`/`Write` y cuadrado para quien escribe (la forma además del color), y la línea «The guard
+  is a heuristic, not a sandbox.». Los SVG llevan `<desc>`; slide 3 queda centrada.
+- `tests/test_brand_agents.py`: compara los datos de `agents_data.py` con el frontmatter de
+  `agents/*.md`.
 - `README.md`: banner con `<picture>`, `assets/` en la estructura y nota para subir la social
   preview a mano.
 
 ### Cambiado (assets de marca)
 
-- Catálogo, estrella y slide 3: la clasificación pasa de «read-only» a por herramientas
-  («no Edit/Write», «no Edit/Write · guarded Bash», «writes tests · guarded Bash», «writes: …»), con
-  círculo para quien no tiene `Edit`/`Write` y cuadrado para quien escribe, y la línea
-  «The guard is a heuristic, not a sandbox.». Los SVG llevan `<desc>`; slide 3 queda centrada.
 - Comentario de `build_brand.py` corregido (dark, light, mono y mono-reverse) y docs de marca al día
   (SVG finales existentes, wordmark confirmado, 16 px medido). Se documenta cómo exportar
   `social-preview.png`.

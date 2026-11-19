@@ -69,11 +69,17 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Excepción de dependencias: los generadores de `assets/brand/src/` requieren `fontTools` y
   `uharfbuzz` (no son biblioteca estándar). Son herramienta de build; el repositorio, la
   guarda y las pruebas siguen siendo sólo biblioteca estándar.
-- Los datos de los agentes (rol, modelo, herramientas) están duplicados en `AGENTS` de
-  `assets/brand/src/build_round2.py`: al cambiar `agents/*.md`, actualízalos y regenera.
-- `social-preview.png` no lo genera ningún script del repositorio: se exporta aparte a
-  partir de `social-preview.svg`, con una HTML que lo muestre a 1280×640:
-  `msedge --headless --disable-gpu --force-device-scale-factor=1 --hide-scrollbars --window-size=1280,640 --screenshot=<salida>.png <html>`.
+- Los datos de los agentes (rol, modelo, herramientas, guarda) están duplicados en
+  `assets/brand/src/agents_data.py` (`AGENTS`, sin dependencias; lo importa
+  `build_round2.py`). `tests/test_brand_agents.py` los compara con el frontmatter de
+  `agents/*.md` (nombre, `model`, `tools`, `hooks:` y Edit/Write) y falla si se desincronizan:
+  al cambiar `agents/*.md`, actualiza `agents_data.py` y regenera.
+- `social-preview.png` se exporta de `social-preview.svg` con
+  `python -B assets/brand/src/export_social_png.py` (sólo biblioteca estándar; usa msedge
+  headless, `--edge <ruta>` si no lo encuentra). Genera esta HTML en un temporal, sin margen
+  del navegador (si no, la imagen sale desplazada):
+  `<body style="margin:0"><img src="<ruta al SVG>" style="width:1280px;height:640px;display:block">`
+  y la captura con `msedge --headless --disable-gpu --force-device-scale-factor=1 --hide-scrollbars --window-size=1280,640 --screenshot=<salida>.png <html>`.
   Regenéralo cada vez que cambie el SVG.
 - El catálogo visual clasifica a los agentes por herramientas (sin `Edit`/`Write`; escribe), nunca
   como «read-only»: la guarda es heurística, no un sandbox.

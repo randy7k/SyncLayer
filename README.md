@@ -40,12 +40,14 @@ SyncLayer/
 ├── assets/
 │   └── brand/         SVG de marca (símbolo, wordmark, lockup, banner, catálogo,
 │       │              estrella, slides), social-preview.png y generadores
-│       └── src/       build_brand.py, build_round2.py, brandlib.py, fonts_util.py
+│       └── src/       build_brand.py, build_round2.py, brandlib.py, fonts_util.py,
+│                          agents_data.py, export_social_png.py
 ├── docs/
 │   ├── agentes.md     Guía de uso y mantenimiento
 │   └── brand/         Estrategia, voz e identidad visual del proyecto
 └── tests/
-    └── test_agent_guard.py
+    ├── test_agent_guard.py
+    └── test_brand_agents.py
 ```
 
 ## Assets de marca
@@ -237,7 +239,7 @@ Es una heurística contra escrituras accidentales, **no un sandbox**.
 python -B -m unittest discover -s tests
 ```
 
-186 pruebas, sólo biblioteca estándar, Python 3.12. Además se verificó en sesiones
+188 pruebas (186 de la guarda y 2 de sincronía de los datos de marca), sólo biblioteca estándar, Python 3.12. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 

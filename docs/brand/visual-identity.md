@@ -119,7 +119,14 @@ Viven en `assets/brand/`. Los SVG los producen los generadores de `assets/brand/
 
 - Símbolo `symbol-{dark,light,mono,mono-reverse}.svg`, con las capas `block-top-left`, `block-sync`, `block-bottom-left` y `block-bottom-right`. Variante de 16 px `symbol-16-*`.
 - Wordmark `wordmark-*.svg` y lockup horizontal `lockup-horizontal-*.svg`: IBM Plex Sans 600, texto a trazados, un solo peso.
-- Ronda 2: `banner-{dark,light}.svg` (1280×320), `social-preview.svg` y `social-preview.png` (1280×640, margen de 40 px), `agent-catalog-{dark,light}.svg` (nueve tarjetas), `architecture-star-{dark,light}.svg` (sin conexiones entre agentes; clasificación por herramientas, no por garantía: sin `Edit`/`Write` en `info` y círculo, escribe en `warn` y cuadrado, de modo que el estado no dependa sólo del color; acento sólo en la sesión principal) y la línea «The guard is a heuristic, not a sandbox.» en catálogo, estrella y slide 3 (la guarda es heurística, no un sandbox) y `slide-1-title.svg`, `slide-2-message.svg`, `slide-3-roster.svg` (1920×1080, oscuro).
+- Ronda 2:
+  - `banner-{dark,light}.svg` (1280×320).
+  - `social-preview.svg` y `social-preview.png` (1280×640, margen de 40 px).
+  - `agent-catalog-{dark,light}.svg` (nueve tarjetas).
+  - `architecture-star-{dark,light}.svg`: sin conexiones entre agentes; acento sólo en la sesión principal.
+  - Clasificación por herramientas, no por garantía: sin `Edit`/`Write` en `info` y círculo, escribe en `warn` y cuadrado, de modo que el estado no dependa sólo del color. Aplica al catálogo, la estrella y la slide 3.
+  - Línea «The guard is a heuristic, not a sandbox.» en catálogo, estrella y slide 3 (la guarda es heurística, no un sandbox).
+  - `slide-1-title.svg`, `slide-2-message.svg`, `slide-3-roster.svg` (1920×1080, oscuro).
 
 **Faltan**
 
@@ -128,4 +135,4 @@ Viven en `assets/brand/`. Los SVG los producen los generadores de `assets/brand/
 - Hoja de marca (Ronda 3).
 - Cuestionar el acento `#63D6C4`.
 
-Los datos de los agentes del catálogo y de las slides están duplicados en `AGENTS` de `build_round2.py`: se actualizan junto con `agents/*.md`.
+Los datos de los agentes del catálogo y de las slides están duplicados en `AGENTS` de `assets/brand/src/agents_data.py`: se actualizan junto con `agents/*.md` (`tests/test_brand_agents.py` los compara).
