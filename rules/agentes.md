@@ -54,6 +54,9 @@ Un agente arranca sin ver la conversación y devuelve sólo su reporte final.
   en los prompts siguientes.
 - A `auditor` y `shield` se les da el diff y el requisito, no la conclusión del
   implementador.
+- La `description` de cada delegación empieza con el nombre del agente y su modelo
+  entre paréntesis (`Forge (Sonnet): corregir hallazgos`, `Auditor (Opus): revisar
+  diff`): el mapa de agentes de la interfaz sólo muestra esa descripción.
 
 ## Paralelo y secuencial
 
