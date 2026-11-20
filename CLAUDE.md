@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1064 pruebas, 112 saltadas (109 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1092 pruebas, 112 saltadas (109 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -197,6 +197,13 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
+- Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`): la tabla
+  nivel por agente vive en `install.ps1` (`$LevelRows`, niveles 1 a 4; el 5 es el repositorio) y debe ser
+  igual a la del README entre `<!-- niveles:inicio -->` y `<!-- niveles:fin -->`
+  (`tests/levels_ref.py` los lee, `tests/test_levels.py` lo comprueba junto con las reglas R1 a R5).
+  Cambiar una celda exige cambiarla en los dos sitios. `auditor`, `shield` y `debugger` no entran en la
+  tabla. Todavía no se usa para escribir: eso llega con T4. Los textos que hablen de niveles no pueden
+  prometer ahorro: `promise_hits` de `tests/test_levels.py` es la guarda.
 - Las pruebas del instalador pasan SIEMPRE `-Target` a una carpeta temporal, nunca
   `~/.claude`, y no escriben el nombre de usuario como literal.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`

@@ -2,6 +2,21 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 3, T1: tabla de niveles de esfuerzo)
+
+- `install.ps1` lleva la tabla nivel por agente (niveles 1 a 4, 24 filas de `$LevelRows`; el nivel 5
+  es el repositorio) con listas cerradas de agentes, modelos y esfuerzos, y la valida al arrancar: una
+  tabla rota sale con exit 1 sin escribir nada. Todavía no se usa para escribir: la instalación se
+  comporta igual que antes. `auditor`, `shield` y `debugger` no están en la tabla.
+- `README.md`: sección «Niveles» con la misma tabla entre marcadores; dice que es un orden razonado, no
+  una medición, y no promete ahorro.
+- `tests/levels_ref.py` y `tests/test_levels.py` (28 pruebas): igualdad celda por celda entre
+  `install.ps1` y el README, reglas R1 a R5, asignación única de las variables de la tabla, validación al
+  arrancar con PowerShell y una guarda contra promesas de ahorro reutilizable en la documentación.
+- Plan y exploración: `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md` y
+  `2026-11-20-fase3-esfuerzo-exploracion.md`. Claude Code ya ofrece `effort:` por subagente con cinco
+  niveles; modelo y esfuerzo son palancas distintas.
+
 ### Cambiado (reporte de uso, rendimiento C4)
 
 - Lector de transcripciones más rápido sin cambiar la salida (bytes idénticos): buffer de lectura

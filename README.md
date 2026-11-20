@@ -406,6 +406,26 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
   simbólico de archivo real creado con privilegio, la durabilidad ante un corte de energía y
   Windows 10 (nombres reservados).
 
+## Niveles
+
+Esta sección es mínima; el resto del texto llega con la documentación completa de la Fase 3.
+`install.ps1` lleva una tabla con los niveles 1 a 4 (el 5 es el repositorio), con el `model:` y el `effort:` de seis agentes
+(`atlas`, `forge`, `sentinel`, `scribe`, `scout`, `oracle`). Todavía no se usa: la instalación
+escribe los archivos del repositorio, que son el nivel 5. `auditor`, `shield` y `debugger` quedan
+fijos en todos los niveles (`opus`, sin `effort:`). La tabla es un orden razonado, no una
+medición: no promete ahorro de tokens ni de costo. «—» significa sin `effort:`.
+
+<!-- niveles:inicio -->
+| Agente | Nivel 5 (repo) | Nivel 4 | Nivel 3 | Nivel 2 | Nivel 1 |
+|---|---|---|---|---|---|
+| `atlas` | `claude-fable-5-2`, — | `opus`, — | `opus`, `medium` | `sonnet`, `medium` | `sonnet`, `medium` |
+| `forge` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
+| `sentinel` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` |
+| `scribe` | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` | `haiku`, `medium` |
+| `scout` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
+| `oracle` | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — |
+<!-- niveles:fin -->
+
 ## Reporte de uso
 
 `tools/usage_report.py` cuenta cuánto se usa cada subagente a partir de las transcripciones
@@ -557,7 +577,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1064 pruebas, 112 saltadas: 109 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1092 pruebas, 112 saltadas: 109 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 
@@ -586,18 +606,18 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-20** (Fase 3 desglosada en 8 unidades y aprobada; ninguna cerrada todavía).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-20** (T1 de la Fase 3 cerrada: tabla de niveles en `install.ps1` y en el README).
 
 ### Avance global
 
-**El proyecto completo va en 40%.** Cuenta las cinco fases con el mismo peso; las fases 4 y 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 3 está desglosada pero sin ninguna unidad cerrada, así que el número sube cuando se desglosen en sub-fases.
+**El proyecto completo va en 43%.** Cuenta las cinco fases con el mismo peso; las fases 4 y 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 3 está desglosada pero sin ninguna unidad cerrada, así que el número sube cuando se desglosen en sub-fases.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | **40%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | **43%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
-| **3. Esfuerzo configurable (5 niveles)** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 8 | Plan aprobado, sin empezar; antes de T4 el propietario corre la compuerta G1 ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
+| **3. Esfuerzo configurable (5 niveles)** | 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **13%** | 1 de 8 | Plan aprobado, en curso (T1 cerrada); antes de T4 el propietario corre la compuerta G1 ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
 | **4. Nombres de agentes configurables** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 
@@ -620,6 +640,28 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 - **Documentación y cierre**
   - ✅ Hecho: T6 (README, CLAUDE.md, HISTORY.md, `docs/agentes.md`, manifiesto regenerado); cierre: `sentinel` (464 pruebas en dos corridas, los 20 casos del plan cubiertos), `shield` sobre T3 a T5 sin Critical ni High, `auditor` sobre el cambio completo sin Critical ni Important.
   - ⬜ Falta: Nada del plan. Fuera del conteo y del propietario: `-DryRun` e instalación real sobre `~/.claude` (hoy `docs/agentes.md` de la copia viva difiere: saldrá `MODIFICADO`, exit 3, y hará falta `-Force`), compatibilidad con pwsh 7 (no verificada) y los Minor de UX que quedaron anotados en «Límites del instalador».
+
+### La Fase 3 por frentes
+
+| Frente | Avance | % | Unidades |
+|:--|:--|--:|:--|
+| Tabla y estado | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **50%** | 1 de 2 (T1, T2) |
+| Configuración y renderizado | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 3 (T3, T4, T5) |
+| Avisos | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 1 (T6) |
+| Documentación y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 2 (T7, cierre) |
+
+- **Tabla y estado**
+  - ✅ Hecho: T1 tabla nivel por agente como datos en `install.ps1` (validada al arrancar) y en el README, con las pruebas que las mantienen iguales y las reglas R1 a R5.
+  - ⬜ Falta: T2 estado con esquema 2 y migración.
+- **Configuración y renderizado**
+  - ✅ Hecho: nada.
+  - ⬜ Falta: T3 archivo `synclayer-config.json`; T4 renderizado de `model:` y `effort:` (bloqueada hasta la compuerta G1 del propietario); T5 clasificación y escritura.
+- **Avisos**
+  - ✅ Hecho: nada.
+  - ⬜ Falta: T6 aviso de variables de entorno que anulan el nivel.
+- **Documentación y cierre**
+  - ✅ Hecho: nada.
+  - ⬜ Falta: T7 documentación; cierre con `sentinel`, `shield` y `auditor`.
 
 ### Línea de tiempo
 
@@ -645,8 +687,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-20 | `scout` verifica los hooks de subagentes: `SubagentStop` no documenta tokens ni duración; T9 (hook registrador) se retira de la fase | ✅ |
 | 2026-11-20 | Fase 2 integrada en `main` (merge `--no-ff`, 1064 pruebas OK) | ✅ |
 | 2026-11-20 | Exploración de la Fase 3: `effort:` existe en el frontmatter con cinco niveles oficiales; plan de 8 unidades y tabla nivel por agente aprobados | ✅ |
-| **Ahora** | **T1 de la Fase 3** (tabla de niveles y sus reglas) y, del propietario, comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
-| Luego | T2 a T7 y cierre de la Fase 3 (compuerta G1 antes de T4) y desglosar las fases 4 y 5 (backlog) | ⬜ |
+| 2026-11-20 | T1 de la Fase 3: tabla nivel por agente como datos en `install.ps1` y en el README, con pruebas de igualdad y de las reglas R1 a R5; revisada por `auditor` | ✅ |
+| **Ahora** | **T2 de la Fase 3** (estado con esquema 2 y migración) y, del propietario, comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
+| Luego | T3 a T7 y cierre de la Fase 3 (compuerta G1 antes de T4) y desglosar las fases 4 y 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
 

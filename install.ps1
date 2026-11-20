@@ -54,6 +54,75 @@ $AllowedPattern = '^(agents/(?!(con|prn|aux|nul|com[1-9]|lpt[1-9])\.)[a-z0-9_-]+
 $StateName = 'synclayer-manifest.json'
 $ManifestName = 'install-manifest.json'
 
+# Tabla de niveles (Fase 3). Aun no se usa para escribir nada: la instalacion no cambia. Una fila
+# por linea, nivel|agente|modelo|esfuerzo, con - para "sin effort:". El nivel 5 es el repositorio y
+# no tiene filas. auditor, shield y debugger no estan: quedan fijos en todos los niveles. Contrato
+# con tests/test_levels.py: la tabla documentada en el README (entre los marcadores de niveles) debe
+# tener las mismas celdas. Es un orden razonado, no una medicion.
+$LevelAgents = @('atlas', 'forge', 'sentinel', 'scribe', 'scout', 'oracle')
+$AllowedModels = @('opus', 'sonnet', 'haiku')
+$AllowedEfforts = @('-', 'low', 'medium', 'high', 'xhigh', 'max')
+$LevelRows = @(
+    '4|atlas|opus|-',
+    '4|forge|sonnet|-',
+    '4|sentinel|sonnet|-',
+    '4|scribe|sonnet|-',
+    '4|scout|sonnet|-',
+    '4|oracle|haiku|-',
+    '3|atlas|opus|medium',
+    '3|forge|sonnet|-',
+    '3|sentinel|sonnet|-',
+    '3|scribe|sonnet|medium',
+    '3|scout|sonnet|-',
+    '3|oracle|haiku|-',
+    '2|atlas|sonnet|medium',
+    '2|forge|sonnet|medium',
+    '2|sentinel|sonnet|-',
+    '2|scribe|sonnet|low',
+    '2|scout|sonnet|medium',
+    '2|oracle|haiku|-',
+    '1|atlas|sonnet|medium',
+    '1|forge|sonnet|low',
+    '1|sentinel|sonnet|medium',
+    '1|scribe|haiku|medium',
+    '1|scout|sonnet|low',
+    '1|oracle|haiku|-'
+)
+
+# Devuelve el primer problema de la tabla de niveles (texto) o $null si es coherente: 24 filas
+# unicas (niveles 1 a 4 por los seis agentes), agente en $LevelAgents, modelo y esfuerzo en las
+# listas cerradas.
+function Get-LevelTableProblem {
+    if ($LevelRows.Count -ne 24) {
+        return ('se esperaban 24 filas y hay ' + $LevelRows.Count)
+    }
+    $seen = @{}
+    foreach ($row in $LevelRows) {
+        $parts = ([string]$row).Split('|')
+        if ($parts.Count -ne 4) {
+            return ('fila mal formada: ' + (Format-Safe ([string]$row)))
+        }
+        if ($parts[0] -cnotmatch '^[1-4]$') {
+            return ('nivel fuera de 1 a 4 en la fila ' + (Format-Safe ([string]$row)))
+        }
+        if ($LevelAgents -cnotcontains $parts[1]) {
+            return ('agente fuera de la lista en la fila ' + (Format-Safe ([string]$row)))
+        }
+        if ($AllowedModels -cnotcontains $parts[2]) {
+            return ('modelo fuera de la lista en la fila ' + (Format-Safe ([string]$row)))
+        }
+        if ($AllowedEfforts -cnotcontains $parts[3]) {
+            return ('esfuerzo fuera de la lista en la fila ' + (Format-Safe ([string]$row)))
+        }
+        $key = $parts[0] + '|' + $parts[1]
+        if ($seen.ContainsKey($key)) {
+            return ('fila repetida: nivel ' + $parts[0] + ' agente ' + $parts[1])
+        }
+        $seen[$key] = $true
+    }
+    return $null
+}
+
 # Canales de salida: stdout lleva el plan y las notas informativas (p. ej. HUERFANO); stderr lleva
 # los avisos (algo anomalo que no detiene) y los errores. Los mensajes con rutas o textos externos
 # pasan por Format-Safe: solo ASCII imprimible, el resto como \uXXXX.
@@ -355,6 +424,12 @@ try {
     $backupPrefix = $BackupFull.TrimEnd('\', '/') + '\'
     if ($backupPrefix.StartsWith($targetPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         Stop-Install 1 ('error: -BackupDir no puede estar dentro de -Target (ni ser -Target): ' + (Format-Safe $BackupFull))
+    }
+
+    # Validacion de la tabla de niveles: antes de leer el origen y sin escribir nada.
+    $levelProblem = Get-LevelTableProblem
+    if ($null -ne $levelProblem) {
+        Stop-Install 1 ('error: la tabla de niveles de install.ps1 no es valida: ' + $levelProblem + '. No se escribio nada.')
     }
 
     # Paso 1: cargar y validar el manifiesto.
