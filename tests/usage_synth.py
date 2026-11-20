@@ -33,9 +33,12 @@ M_SESSION = "ZZMARKsesion"
 M_MODEL = "ZZMARK modelo invalido"
 M_VERSION = "ZZMARK version invalida"
 M_TYPE = "ZZMARK tipo invalido"
+M_SKILL = "ZZMARK nombre de skill privado"      # nombre de skill que no pasa la lista permitida
+M_SKILL_TAIL = "ZZMARKcolaDeSkillDePlugin"        # lo que va tras el ":" de una skill de plugin
 ALL_MARKERS = (
     M_CONTENT, M_PROMPT, M_DESCRIPTION, M_RESULT, M_CWD, M_BRANCH, M_INPUT, M_ARGS,
     M_UNKNOWN_KEY, M_UNKNOWN_INPUT_KEY, M_FOLDER, M_SESSION, M_MODEL, M_VERSION, M_TYPE,
+    M_SKILL, M_SKILL_TAIL,
 )
 
 DEFAULT_VERSION = "2.1.330"
@@ -108,6 +111,24 @@ def text_block(text=M_CONTENT):
 def tool_use_block(block_id, name, tool_input=None):
     return {"type": "tool_use", "id": block_id, "name": name,
             "input": tool_input if tool_input is not None else {"note": M_INPUT}}
+
+
+def skill_block(block_id, skill, args=M_ARGS, **extra_input):
+    """Bloque tool_use de la herramienta Skill: input.skill (nombre) e input.args (puede llevar
+    contenido: la herramienta nunca lo lee). `skill` puede ser cualquier valor (para casos
+    malformados); pasa `args=None` para omitir la clave."""
+    tool_input = {"skill": skill}
+    if args is not None:
+        tool_input["args"] = args
+    tool_input.update(extra_input)
+    return tool_use_block(block_id, "Skill", tool_input)
+
+
+def skill_line(msg_id, ts, skills, sidechain=False, **kw):
+    """Linea assistant de la sesion principal (o de un subagente con sidechain=True) con una
+    llamada Skill por cada nombre de `skills`. Los ids de bloque son <msg_id>-s<n>."""
+    blocks = [text_block()] + [skill_block("%s-s%d" % (msg_id, i), name) for i, name in enumerate(skills)]
+    return assistant(msg_id, ts, blocks=blocks, sidechain=sidechain, **kw)
 
 
 def assistant(msg_id, ts, usage_value="default", model=DEFAULT_MODEL, version=DEFAULT_VERSION,

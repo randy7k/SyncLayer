@@ -700,3 +700,9 @@ Minor aprobados por `auditor` que se cierran junto con T4 (en el lector o su pru
 7. `make_window` valida tipos antes de restar o comparar (`ValueError` claro con `datetime`, `None` o cadena).
 8. Comentarios desajustados: el de «Contadores de la LECTURA completa…» va sobre `READ_QUALITY_LABELS`; la cabecera de la sección habla de `agent_key`, no de «(agente, conjunto)».
 9. Rendimiento (no bloqueante): `version_range` se calcula ~16 veces por llamada; un caché por llamada lo reduce.
+
+## Notas de la revisión de T4 (2026-11-20)
+
+1. **`CHK_TS` verificado con datos reales** (nota 11 de T3 resuelta): en las transcripciones reales del propietario (20 carpetas de proyecto, 34 sesiones principales, 2 746 subagentes) el 100 % de las líneas `user`, `assistant`, `attachment` y `system` traen `timestamp` (0 sin hora) y hay 0 líneas corruptas. Sólo `file-history-snapshot`, `last-prompt` y tipos similares carecen de él, y la firma no los exige. El riesgo de un falso exit 3 por esta comprobación no se materializa con estos datos; en C4 se vuelve a medir con el lector real.
+2. **Determinismo.** Ningún orden ni desempate puede depender de identificadores con clave aleatoria (`call_id`, `session`, `agent_key`): se usa el ordinal de recorrido `seq`. Regresión cubierta por pruebas con lecturas repetidas.
+3. **Para T5 a T7:** volcar `SKILL_LIMITATIONS` y `REPEAT_LIMITATIONS` en «Cómo leer estos números»; no pintar la fila de skills `SyncLayer` si está vacía (hoy `SYNCLAYER_SKILLS` y `BUILTIN_SKILLS` van vacías); T6 valora `(otra skill)` salvo lista cerrada para las skills de usuario en el global compartible; T7 invoca `ReadResult.release_key()` al terminar; no serializar nunca `ReadResult`, `CallRecord` ni `SkillUse`.

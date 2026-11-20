@@ -1677,8 +1677,12 @@ class ReaderDefensive(ReaderBase):
 
     def test_ids_are_safe_and_stable(self):
         tree = rich_tree(self.base)
-        a = ur.read_calls(tree.claude_dir, check_damage=False)
-        b = ur.read_calls(tree.claude_dir, check_damage=False)
+        # los resumenes llevan una clave aleatoria por ejecucion: con la misma clave inyectada la
+        # lectura es determinista; sin ella, dos lecturas dan identificadores distintos (ver
+        # ReaderRandomKey)
+        key = b"k" * 16
+        a = ur.read_calls(tree.claude_dir, check_damage=False, digest_key=key)
+        b = ur.read_calls(tree.claude_dir, check_damage=False, digest_key=key)
         self.assertEqual(a.calls, b.calls)  # determinista
         ids = [c.call_id for c in a.calls]
         self.assertEqual(len(set(ids)), len(ids))
@@ -1710,12 +1714,17 @@ class ReaderDefensive(ReaderBase):
         end = src.index("# Orden fijo de las lineas del resumen")
         used = keys_used_by(src[start:end])
         self.assertGreater(len(used), 5)   # el recorrido no esta vacio
-        keys = {"type", "timestamp", "version", "message", "model", "id", "usage", "content", "agentType"}
+        # T4 (skills): de un bloque tool_use solo `name` e `input`; de `input` solo `skill`
+        keys = {"type", "timestamp", "version", "message", "model", "id", "usage", "content", "agentType",
+                "name", "input", "skill"}
         # valores de comparaciones `in` (no son claves) y etiquetas de los contadores de calidad que
         # el lector LEE en las propiedades de ReadResult
         values = {"user", "assistant", ":", "(otro modelo)"}
         labels = {"usage sin message.id", "message.id repetido entre archivos",
-                  "message.id sin deduplicar entre archivos (tope)"}
+                  "message.id sin deduplicar entre archivos (tope)",
+                  "skills: id repetido entre archivos", "skills: ids sin deduplicar (tope)",
+                  "sesiones principales omitidas por enlace duro",
+                  "sesiones principales omitidas por tope de tamano", "sesiones principales ilegibles"}
         self.assertLessEqual(used, keys | values | labels | set(ur.TOKEN_FIELDS))
         self.assertEqual(ur.TOKEN_FIELDS, ("input_tokens", "output_tokens", "cache_creation_input_tokens",
                                            "cache_read_input_tokens"))
@@ -1723,6 +1732,11 @@ class ReaderDefensive(ReaderBase):
         # variable, salvo los diccionarios propios del lector y `usage.get(name)` (name de TOKEN_FIELDS)
         self.assertEqual(unsafe_key_access(src[start:end]), [])
         self.assertIn("for name in TOKEN_FIELDS", src[start:end])
+        # `args` puede llevar contenido; `isSidechain` y `agentId` no se leen (el origen de una skill
+        # sale del archivo en que se encuentra); `description`, `prompt`, `cwd`... tampoco
+        for never in ("args", "isSidechain", "agentId", "description", "prompt", "cwd", "gitBranch",
+                      "toolUseResult", "toolUseId", "sessionId"):
+            self.assertNotIn(never, used)
 
     def test_unsafe_access_detector_catches_evasions(self):
         for snippet in (
@@ -1773,7 +1787,9 @@ class ReaderDefensive(ReaderBase):
             with self.subTest(snippet=snippet):
                 self.assertTrue(unsafe_key_access(snippet), snippet)
         for snippet in (
-            "for name in TOKEN_FIELDS:\n    x = usage.get(name)",   # el unico uso permitido de `name`\n            "for name in TOKEN_FIELDS:\n    y = usage[name]",
+            # los unicos usos permitidos de `name`: dentro de `for name in TOKEN_FIELDS`
+            "for name in TOKEN_FIELDS:\n    x = usage.get(name)",
+            "for name in TOKEN_FIELDS:\n    y = usage[name]",
             "x = kinds.get(meta_name)",            # ruta propia completa
             "x = acc.usage_by_id.items()",
             "x = list(acc.usage_by_id.values())",
@@ -1790,6 +1806,145 @@ class ReaderDefensive(ReaderBase):
             'q["a" if c else "b"] += 1',           # un IfExp de constantes sigue siendo constante
             "x = obj.get('type')",
             "x = json.dumps(acc.usage_by_id)",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertEqual(unsafe_key_access(snippet), [], snippet)
+
+    def test_unsafe_access_detector_catches_formatting_and_content_evasions(self):
+        # T4 (Minor 5): `content` ya no es una ruta propia (solo `for block in content`), y pasar un
+        # diccionario o texto de la transcripcion a str/repr/format/f-string/% o desempaquetarlo
+        # (Starred) tambien se rechaza
+        for snippet in (
+            # `content` solo vale como iterable de `for block in content`
+            "x = content[k]",
+            "x = content.items()",
+            "x = content.get(k)",
+            "for k in content: pass",
+            "for blk in content: pass",
+            "for block in other: pass",
+            "x = [b for b in content]",
+            "x = [block for block in content]",
+            "x = list(content)",
+            "x = sorted(content)",
+            "x = dict(content)",
+            # convertir a texto una ruta ajena
+            "x = str(obj)",
+            "x = repr(obj)",
+            "x = ascii(obj)",
+            "x = format(obj)",
+            "x = str(obj.get('type'))",
+            "x = str(content)",
+            'x = "{}".format(obj)',
+            'x = "{a}".format(a=obj)',
+            'x = "{}".format(a.b)',
+            'x = f"{obj}"',
+            'x = f"{obj!r}"',
+            'x = f"{a.b}"',
+            'x = f"{content}"',
+            'x = f"{obj[0]}"',
+            'x = "%s" % obj',
+            'x = "%s %s" % (a, obj)',
+            'x = "%s" % (obj,)',
+            'x = "%s" % obj[0]',
+            'x = "%s" % f(obj)',
+            'x = "%s" % content',
+            'x = fmt % obj',
+            # desempaquetar (Starred)
+            "f(*obj)",
+            "print(*obj)",
+            "x = [*obj]",
+            "x = (*obj,)",
+            "x = {*obj}",
+            "f(**obj)",
+            # T4 (Minor 3): concatenar, unir, formatear o acumular un valor ajeno
+            'x = a + obj.get("name")',
+            'x = "k:" + obj["name"]',
+            'x = prefix + block.get("name")',
+            'x = obj.get("a") + "k"',
+            'x += obj.get("name")',
+            'name = block.get("name")\nx = "k:" + name',
+            'name = block.get("name")\nx = name + "k"',
+            'raw = a.get("x")\ny = raw\nx = "k:" + y',
+            'x = "".join([obj.get("a"), "b"])',
+            'x = ",".join(obj.get("a"))',
+            'x = ", ".join(str(v) for v in [obj["a"]])',
+            'name = block.get("name")\nx = "".join([name, "b"])',
+            'name = block.get("name")\nx = ",".join((name,))',
+            'x = "{a}".format_map(obj)',
+            'x = "{a}".format_map(a.b)',
+            "x = obj.__str__()",
+            "x = obj.__repr__()",
+            'x = obj.__format__("")',
+            "x = type(obj).__repr__(obj)",
+            "x = a.b.__str__",
+            'x = bytes(raw, "utf-8")',
+            'x = bytes(obj.get("a"), "utf-8")',
+            "x = bytearray(raw)",
+            'lst.append(obj.get("name"))',
+            'name = block.get("name")\nlst.append(name)',
+            'name = block.get("name")\nother.items.append(name)',
+            'out.append(block.get("name"))',
+            'out.append((1, block.get("name")))',
+            'name = block.get("name")\nx = "%s" % name',
+            'name = block.get("name")\nx = "%s: %d" % (name, 1)',
+            'name = block.get("name")\nx = f"{name}"',
+            'name = block.get("name")\nx = "{}".format(name)',
+            'name = block.get("name")\nx = str(name)',
+            'name = block.get("name")\nx = repr(name)',
+            # `name` suelto ya no es un escalar del lector: solo dentro de un bucle cerrado
+            'x = "%s" % name',
+            'x = "%s: %d" % (name, 1)',
+            'x = f"{name}"',
+            'x = "{}".format(name)',
+            "x = str(name)",
+            'for name in OTHER:\n    x = "%s" % name',
+            'for name in TOKEN_FIELDS:\n    pass\nx = "%s" % name',
+            'for key in TOKEN_FIELDS:\n    x = "%s" % name',
+            'x = ["%s" % name for name in obj]',
+            'x = ["%s" % name for name in sorted(obj)]',
+            'for name in TOKEN_FIELDS:\n    name = block.get("x")\n    y = "%s" % name',
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertTrue(unsafe_key_access(snippet), snippet)
+        # lo que sigue es seguro: rutas propias, escalares del lector, constantes y len(...)
+        for snippet in (
+            "for block in content:\n    pass",
+            "for block in content:\n    x = block",
+            "x = 'a %s' % acc.versions",
+            "x = str(acc.versions)",
+            "x = repr(res.quality)",
+            "x = f'{res.quality}'",
+            'x = "%d of %d" % (damaged, total)',
+            'for name in TOKEN_FIELDS:\n    x = "%s" % name',
+            'x = ["%s: %d archivos" % (name, res.schema[name]) for name in sorted(res.schema)]',
+            'x = ["%s: %d" % (name, res.schema[name]) for name in res.schema]',
+            'x = " (+%d mas)" % (len(ordered) - MAX_SHOWN_VERSIONS)',
+            'x = "%s" % numeric[0]',
+            'x = "{}".format(acc.versions)',
+            # T4 (Minor 3): los usos reales del lector son seguros
+            'x = "plugin:" + prefix',
+            'x = folder_name + "\\0" + sid + "\\0" + stem',
+            'x = stem + ".meta.json"',
+            'x = name[:-len(".jsonl")] + ".meta.json"',
+            'text = "a" + _recent_first(later)',
+            'text += ". Posteriores: " + _recent_first(later)',
+            'x = ", ".join(ordered[:MAX_SHOWN_VERSIONS])',
+            'x = "".join(out)',
+            'x = b"".join(out)',
+            'x = "; ".join(parts)',
+            "out.append(value)",
+            "acc.skills.append((key, label, group, ts, isinstance(raw, str)))",
+            "acc.usage_no_id.append(tokens)",
+            "lst.append(n)",
+            "x = bytes(3)",
+            'x = "{a}".format_map(acc.versions)',
+            'kind = obj.get("type")\nif kind == "assistant":\n    n = 1',
+            'raw = tool_input.get("skill")\nlabel, group = classify_skill(raw)\nx = "a" + label',
+            'message = obj.get("message")\nok = isinstance(message, dict)',
+            'x = f"{len(ordered)} {MAX_SHOWN_VERSIONS}"',
+            "x = 7 % 3",
+            "x = [*acc.versions]",
+            "f(*calls)",
         ):
             with self.subTest(snippet=snippet):
                 self.assertEqual(unsafe_key_access(snippet), [], snippet)
@@ -1822,12 +1977,23 @@ OWN_PATHS = frozenset((
     "res.schema", "res.versions", "res.schema_versions", "res.quality", "self.quality", "self.versions",
     "kinds", "listing", "TOKEN_FIELDS", "numeric", "seen", "failing", "calls", "c.versions",
     "line_models", "entries", "labels", "out", "ordered",
-    # lista de bloques de `message.content`: el lector la comprueba como `list` antes de recorrerla
-    "content",
+    # los lectores de skills acumulan en estos contenedores propios (nunca en una linea leida)
+    "acc.skills", "acc.skill_ids", "res.skill_uses", "res._seen_skill_ids", "self.skill_uses",
+    "res.calls",    # T4: la lista de llamadas del resultado (solo recibe CallRecord(...))
 ))
 # Una variable solo vale como clave dentro de estos bucles (variable, iterable): `name` recorre
 # TOKEN_FIELDS en `_token_tuple`. Fuera del bucle (o con otro iterable) se rechaza.
 ALLOWED_KEY_LOOPS = frozenset((("name", "TOKEN_FIELDS"),))
+# `content` (lista de bloques de `message.content`) NO es una ruta propia: solo se puede recorrer, y
+# solo como `for block in content` (el lector comprueba antes que sea una `list`). Cualquier otro uso
+# (subindice, .items(), copia, otro nombre de variable, comprension) se rechaza.
+ALLOWED_ITER_LOOPS = frozenset((("block", "content"),))
+# Escalares del lector que se pueden dar a str/%/format/f-string: `damaged` y `total` son enteros
+# calculados con len/sum. El nombre generico `name` NO esta aqui: solo vale dentro de un bucle o una
+# comprension de FORMAT_LOOPS (variable, iterable), donde recorre TOKEN_FIELDS o las etiquetas fijas de
+# comprobaciones de `res.schema` (`sorted(res.schema)` o `res.schema`).
+FORMAT_SCALARS = frozenset(("damaged", "total"))
+FORMAT_LOOPS = frozenset((("name", "TOKEN_FIELDS"), ("name", "res.schema")))
 # Constantes del modulo que valen como limite de un corte (`ordered[:MAX_SHOWN_VERSIONS]`).
 SLICE_CONSTANTS = frozenset(("MAX_SHOWN_VERSIONS",))
 _COPYING_CALLS = frozenset(("dict", "list", "tuple", "set", "frozenset", "sorted", "iter", "enumerate"))
@@ -1882,15 +2048,175 @@ def _iterated_paths(node):
     return []
 
 
-def unsafe_key_access(source: str, own_paths=OWN_PATHS, allowed_loops=ALLOWED_KEY_LOOPS) -> list:
+def _format_ok(node, own_paths, scalars, scalar_ids=frozenset()) -> bool:
+    """Operando que puede darse a str/repr/format/f-string/%: constante, ruta propia, escalar del
+    lector (FORMAT_SCALARS), constante del modulo (MAYUSCULAS), subindice de una ruta propia o
+    expresiones aritmeticas y len(...) de eso. Cualquier otra cosa (una ruta ajena, una llamada) no."""
+    if isinstance(node, ast.Constant):
+        return True
+    path = _path(node)
+    if path is not None:
+        return (path in own_paths or path in scalars or id(node) in scalar_ids
+                or (isinstance(node, ast.Name) and node.id.isupper()))
+    if isinstance(node, ast.Subscript):
+        return _path(node.value) in own_paths
+    if isinstance(node, ast.Call):
+        return isinstance(node.func, ast.Name) and node.func.id == "len" and len(node.args) == 1
+    if isinstance(node, ast.BinOp):
+        return (_format_ok(node.left, own_paths, scalars, scalar_ids)
+                and _format_ok(node.right, own_paths, scalars, scalar_ids))
+    if isinstance(node, ast.UnaryOp):
+        return _format_ok(node.operand, own_paths, scalars, scalar_ids)
+    if isinstance(node, ast.Tuple):
+        return all(_format_ok(e, own_paths, scalars, scalar_ids) for e in node.elts)
+    return False
+
+
+def _iter_source(node):
+    """Ruta del iterable de un bucle; `sorted(x)`, `list(x)` y `tuple(x)` dejan pasar la de `x`."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id in ("sorted", "list", "tuple") and len(node.args) == 1 and not node.keywords):
+        return _path(node.args[0])
+    return _path(node)
+
+
+def _scope_nodes(scope):
+    """Nodos de un ambito (modulo o funcion) sin entrar en las funciones o clases anidadas."""
+    todo, out = list(ast.iter_child_nodes(scope)), []
+    while todo:
+        node = todo.pop()
+        out.append(node)
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            todo.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _foreign(node, own_paths, tainted) -> bool:
+    """Valor que sale SIN filtrar de una linea de la transcripcion: un subindice (no un corte) o un
+    `.get/.pop/.setdefault` sobre algo que no es una ruta propia, o una variable `tainted` (asignada de uno
+    de ellos o iteradora de algo ajeno), o una expresion que lo combina."""
+    if isinstance(node, ast.Name):
+        return node.id in tainted
+    if isinstance(node, ast.Subscript):
+        # un corte, o un elemento de `texto.split(...)`, es texto y no un diccionario de la transcripcion
+        if isinstance(node.slice, ast.Slice) or (
+                isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+                and node.value.func.attr in ("split", "rsplit", "partition", "rpartition", "splitlines")):
+            return False
+        return _path(node.value) not in own_paths
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("get", "pop", "setdefault")):
+        return _path(node.func.value) not in own_paths
+    if isinstance(node, ast.IfExp):
+        return _foreign(node.body, own_paths, tainted) or _foreign(node.orelse, own_paths, tainted)
+    if isinstance(node, ast.BoolOp):
+        return any(_foreign(v, own_paths, tainted) for v in node.values)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return any(_foreign(e, own_paths, tainted) for e in node.elts)
+    if isinstance(node, ast.BinOp):
+        return _foreign(node.left, own_paths, tainted) or _foreign(node.right, own_paths, tainted)
+    return False
+
+
+def _any_foreign(node, own_paths, tainted) -> bool:
+    """True si ALGUNA parte de la expresion es un valor ajeno (para los destinos de texto)."""
+    return any(_foreign(sub, own_paths, tainted) for sub in ast.walk(node))
+
+
+def _tainted_names(nodes, own_paths, iter_loops) -> set:
+    """Variables de un ambito que reciben un valor ajeno (asignaciones, `:=`, desempaquetados, y el
+    objetivo de un `for block in content`). Se propaga por asignaciones sucesivas hasta no cambiar."""
+    tainted = set()
+    for node in nodes:
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            if _iter_source(node.iter) is not None and _iter_source(node.iter) not in own_paths:
+                tainted.add(node.target.id)
+    for _ in range(4):
+        before = len(tainted)
+        for node in nodes:
+            value, targets = None, []
+            if isinstance(node, ast.Assign):
+                value, targets = node.value, node.targets
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                value, targets = node.value, [node.target]
+            elif isinstance(node, ast.NamedExpr):
+                value, targets = node.value, [node.target]
+            if value is not None and _foreign(value, own_paths, tainted):
+                for target in targets:
+                    for sub in ast.walk(target):
+                        if isinstance(sub, ast.Name):
+                            tainted.add(sub.id)
+        if len(tainted) == before:
+            break
+    return tainted
+
+
+def _text_sink_offenders(scope, own_paths, iter_loops) -> list:
+    """Destinos de texto o acumulacion que reciben un valor ajeno en un ambito: `+`/`+=`, `join`,
+    `.format`/`format_map`, `%`, f-strings, str/repr/format, `__str__`/`__repr__`/`__format__`, `bytes(...)` y
+    `.append(...)` (a una ruta propia solo si el valor ajeno es un acceso directo, no una variable
+    ya filtrada por el lector)."""
+    nodes = _scope_nodes(scope)
+    tainted = _tainted_names(nodes, own_paths, iter_loops)
+    direct = set()
+    found = []
+    for sub in nodes:
+        if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Add):
+            if _foreign(sub.left, own_paths, tainted) or _foreign(sub.right, own_paths, tainted):
+                found.append("+ con un valor ajeno" + " (l.%d)" % sub.lineno)
+        elif isinstance(sub, ast.AugAssign) and isinstance(sub.op, ast.Add):
+            if _foreign(sub.value, own_paths, tainted):
+                found.append("+= con un valor ajeno" + " (l.%d)" % sub.lineno)
+        elif isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Mod):
+            if _any_foreign(sub.right, own_paths, tainted):
+                found.append("% con un valor ajeno" + " (l.%d)" % sub.lineno)
+        elif isinstance(sub, ast.FormattedValue):
+            if _any_foreign(sub.value, own_paths, tainted):
+                found.append("f-string con un valor ajeno" + " (l.%d)" % sub.lineno)
+        elif isinstance(sub, ast.Attribute) and sub.attr in ("__str__", "__repr__", "__format__"):
+            found.append(sub.attr)
+        elif isinstance(sub, ast.Call):
+            args = list(sub.args) + [k.value for k in sub.keywords]
+            if isinstance(sub.func, ast.Attribute):
+                attr, recv = sub.func.attr, _path(sub.func.value)
+                if attr in ("join", "format") and any(_any_foreign(a, own_paths, tainted) for a in args):
+                    found.append("%s con un valor ajeno" % attr + " (l.%d)" % sub.lineno)
+                elif attr == "format_map" and any(_path(a) not in own_paths for a in args):
+                    found.append("format_map sobre algo que no es propio" + " (l.%d)" % sub.lineno)
+                elif attr == "append" and args:
+                    if recv in own_paths:
+                        if any(_foreign(a, own_paths, direct) for a in args):
+                            found.append("append de un acceso ajeno" + " (l.%d)" % sub.lineno)
+                    elif any(_any_foreign(a, own_paths, tainted) for a in args):
+                        found.append("append de un valor ajeno" + " (l.%d)" % sub.lineno)
+            elif isinstance(sub.func, ast.Name):
+                if sub.func.id in ("str", "repr", "ascii", "format") and any(
+                        _any_foreign(a, own_paths, tainted) for a in args):
+                    found.append("%s de un valor ajeno" % sub.func.id + " (l.%d)" % sub.lineno)
+                elif sub.func.id in ("bytes", "bytearray") and args and not (
+                        isinstance(args[0], ast.Constant) and not isinstance(args[0].value, str)
+                        or _path(args[0]) in own_paths):
+                    found.append("%s(<ajeno>)" % sub.func.id + " (l.%d)" % sub.lineno)
+    return found
+
+
+def unsafe_key_access(source: str, own_paths=OWN_PATHS, allowed_loops=ALLOWED_KEY_LOOPS,
+                      iter_loops=ALLOWED_ITER_LOOPS, scalars=FORMAT_SCALARS, format_loops=FORMAT_LOOPS) -> list:
     """Accesos a diccionarios que keys_used_by no puede revisar. Se rechaza, salvo que el receptor
     sea una ruta propia COMPLETA (own_paths):
       - `.items()`, `.values()`, `.keys()`;
       - TODO subindice cuya clave no sea una constante (o un IfExp/tupla de constantes) o un corte con
         limites constantes; y `.get`/`.pop`/`.setdefault` con un primer argumento que no sea constante;
       - recorrer un diccionario: `for k in obj`, comprensiones, `dict(obj)`, `list(obj)`, `sorted(obj)`,
-        `{**obj}`, `dict(**obj)` y `json.dumps(obj)`.
-    Una variable solo vale como clave dentro de un bucle de allowed_loops."""
+        `{**obj}`, `dict(**obj)` y `json.dumps(obj)`;
+      - convertir a texto algo que no es propio o un escalar del lector: `str`, `repr`, `ascii`,
+        `format`, `.format`, f-strings y `%` (_format_ok), y desempaquetarlo (`*obj`, `**obj`);
+      - (T4) concatenar con `+`, `join`, `format_map`, `__str__`/`__repr__`/`__format__`, `bytes(...)` o
+        `.append(...)` un valor ajeno, directo o guardado antes en una variable (`name = block.get("name")`
+        seguido de `"%s" % name`): ver _text_sink_offenders.
+    Una variable solo vale como clave dentro de un bucle de allowed_loops, `content` solo se recorre
+    con un `for` de iter_loops (`for block in content`), y un nombre solo es un escalar de formato dentro
+    de un bucle o comprension de format_loops (`name` recorriendo TOKEN_FIELDS o `res.schema`)."""
     tree = ast.parse(source)
     shielded = set()
     for node in ast.walk(tree):
@@ -1898,6 +2224,20 @@ def unsafe_key_access(source: str, own_paths=OWN_PATHS, allowed_loops=ALLOWED_KE
                 and (node.target.id, _path(node.iter)) in allowed_loops):
             shielded |= {id(n) for stmt in node.body for n in ast.walk(stmt)
                          if isinstance(n, ast.Name) and n.id == node.target.id}
+    # nombres que valen como escalar de formato: solo los usos dentro de un bucle de format_loops
+    scalar_ids = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            if (node.target.id, _iter_source(node.iter)) in format_loops:
+                scalar_ids |= {id(n) for stmt in node.body for n in ast.walk(stmt)
+                               if isinstance(n, ast.Name) and n.id == node.target.id}
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            for gen in node.generators:
+                if isinstance(gen.target, ast.Name) and (gen.target.id, _iter_source(gen.iter)) in format_loops:
+                    parts = [node.elt] if not isinstance(node, ast.DictComp) else [node.key, node.value]
+                    parts += list(gen.ifs)
+                    scalar_ids |= {id(n) for part in parts for n in ast.walk(part)
+                                   if isinstance(n, ast.Name) and n.id == gen.target.id}
 
     def key_ok(key) -> bool:
         return _const_like(key) or (isinstance(key, ast.Name) and id(key) in shielded)
@@ -1930,13 +2270,39 @@ def unsafe_key_access(source: str, own_paths=OWN_PATHS, allowed_loops=ALLOWED_KE
             if not ok and recv not in own_paths:
                 offenders.append("subindice no constante sobre %s" % recv)
         elif isinstance(node, (ast.For, ast.comprehension)):
+            allowed = (isinstance(node, ast.For) and isinstance(node.target, ast.Name)
+                       and (node.target.id, _path(node.iter)) in iter_loops)
             for path in _iterated_paths(node.iter):
-                if path not in own_paths:
+                if path not in own_paths and not allowed:
                     offenders.append("recorrido de %s" % path)
         elif isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values):
                 if key is None and _path(value) not in own_paths:
                     offenders.append("{**%s}" % _path(value))
+        # convertir a texto o desempaquetar algo ajeno
+        if isinstance(node, ast.Call):
+            callee = node.func.id if isinstance(node.func, ast.Name) else (
+                node.func.attr if isinstance(node.func, ast.Attribute) else None)
+            if callee in ("str", "repr", "ascii", "format"):
+                for arg in list(node.args) + [k.value for k in node.keywords]:
+                    if not _format_ok(arg, own_paths, scalars, scalar_ids):
+                        offenders.append("%s(<ajeno>)" % callee)
+            for kw in node.keywords:
+                if kw.arg is None and _path(kw.value) not in own_paths:
+                    offenders.append("**%s" % _path(kw.value))
+        elif isinstance(node, ast.FormattedValue):
+            if not _format_ok(node.value, own_paths, scalars, scalar_ids):
+                offenders.append("f-string con un valor ajeno")
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            if not (isinstance(node.left, ast.Constant) and isinstance(node.left.value, (int, float))):
+                if not _format_ok(node.right, own_paths, scalars, scalar_ids):
+                    offenders.append("% con un operando ajeno")
+        elif isinstance(node, ast.Starred):
+            if _path(node.value) not in own_paths:
+                offenders.append("*%s" % _path(node.value))
+    # destinos de texto y acumulacion con valores ajenos, por ambito (modulo y cada funcion)
+    for scope in [tree] + [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        offenders += _text_sink_offenders(scope, own_paths, iter_loops)
     return offenders
 
 
@@ -2322,7 +2688,7 @@ class ReaderDedupAndRelease(ReaderBase):
         self.assertEqual(res.quality["hardlinks aceptados"], 1)
         self.assertEqual(res.calls[0].input_tokens, 7)   # no se cuenta dos veces
         # el nombre que se recorre primero (orden alfabetico: s1 antes que s2) crea la llamada
-        self.assertEqual(res.calls[0].session, ur._digest("c--p\0s1").hex())
+        self.assertEqual(res.calls[0].session, ur._digest("c--p\0s1", res._key).hex())
 
     def test_hardlinked_pair_with_outside_link_is_also_deduplicated(self):
         tree = us.Tree(self.base)
@@ -2351,6 +2717,19 @@ class ReaderDedupAndRelease(ReaderBase):
         res = self.read(tree)
         self.assertEqual(res.quality["message.id repetido entre archivos"], 0)
         self.assertEqual(res.warnings, [])
+
+    def test_release_key_forgets_the_digest_key_and_read_calls_does_not_call_it(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        res = self.read(tree)
+        self.assertEqual(len(res._key), 16)            # read_calls la conserva (las pruebas la usan)
+        res.release_key()
+        self.assertIsNone(res._key)
+        res.release_key()                               # idempotente
+        self.assertIsNone(res._key)
+        self.assertEqual(len(res.calls), 1)             # lo ya leido sigue ahi
+        self.assertEqual(ur.aggregate_calls(res, today=TODAY).total.calls, 0)   # (fuera de ventana)
+        self.assertEqual(ur.aggregate_calls(res, window=ur.make_window(TODAY, all_time=True)).total.calls, 1)
 
     def test_read_result_releases_id_and_inode_sets(self):
         tree = us.Tree(self.base)
@@ -2383,7 +2762,7 @@ def mk(n, **kw):
         status="correcta", damage=None, has_meta=True, has_usage=True, models=("claude-opus-4-1",),
         model="claude-opus-4-1", model_source="lineas", model_mismatch=False, input_tokens=10,
         output_tokens=5, cache_creation_tokens=2, cache_read_tokens=3, requests=1, tools=0,
-        fallback_time=None, versions=("2.1.330",), hardlink=False, oversize_lines=0, background=None)
+        fallback_time=None, versions=("2.1.330",), hardlink=False, oversize_lines=0, background=None, seq=n)
     fields.update(span(10))
     fields.update(kw)
     if "agent_key" not in fields:
@@ -2548,7 +2927,7 @@ class AggregationWindow(unittest.TestCase):
         with self.assertRaises(ur.SchemaError) as cm:
             agg(lost)
         self.assertIn("10 de 10", cm.exception.message)
-        # las no danadas sin hora NO entran en el denominador: 1 danada sin hora + 19 correctas = 5 %
+        # las no danadas sin hora NO entran en el denominador: 1 danada sin hora + 19 correctas = 1 de 20 = 5 %
         ok = [mk(100 + i) for i in range(19)]
         one = [damaged(1, damage="ilegible", start=None, end=None, fallback_time=None)]
         m = agg(ok + one)
@@ -2558,9 +2937,16 @@ class AggregationWindow(unittest.TestCase):
         with self.assertRaises(ur.SchemaError) as cm:
             agg(ok + two)
         self.assertIn("2 de 21", cm.exception.message)
-        # una correcta sin hora no suma al denominador: 19 + 1 danada sin hora + 1 correcta sin hora = 1 de 20
+        # una correcta sin hora no suma al denominador. Con 18 correctas + 1 danada sin hora son 1 de 19
+        # = 5,26 % y SI supera el umbral; con la correcta sin hora la cuenta seria 1 de 20 = 5 % y no
+        # fallaria: asi la prueba distingue «no sumar las no danadas sin hora» de sumarlas
         quiet = mk(200, start=None, end=None, fallback_time=None)
-        m = agg(ok + one + [quiet])
+        ok18 = ok[:18]
+        with self.assertRaises(ur.SchemaError) as cm:
+            agg(ok18 + one + [quiet])
+        self.assertIn("1 de 19", cm.exception.message)
+        # el dato de calidad sigue exponiendo las dos llamadas sin hora (con la comprobacion apagada)
+        m = agg(ok18 + one + [quiet], check_damage=False)
         self.assertEqual((m.quality.without_any_time, m.quality.without_any_time_excluded), (2, 1))
         # con fallback_time la danada se ubica en la ventana y cuenta una sola vez
         located = [damaged(3, damage="ilegible", start=None, end=None, fallback_time=dt(15, 12))]
@@ -2928,15 +3314,21 @@ class ConsecutiveRepeats(unittest.TestCase):
         self.assertEqual(self.repeats(calls), 0)        # la llamada sin meta rompe la cadena de forge
         self.assertEqual(self.repeats([mk(0, **self._t(0, 1)), mk(1, **self._t(2, 3)), nometa(2, 4, 5)]), 1)
 
-    def test_tie_on_start_and_end_is_broken_by_call_id(self):
-        # X (forge, id mayor) e Y (scout, id menor) empiezan y terminan a la vez; Z (scout) viene
-        # despues. Con desempate por call_id el orden es Y, X, Z: la anterior de Z es X (forge): 0.
-        # Sin el desempate, el orden de entrada (X, Y, Z) daria 1.
-        x = mk(0, call_id="c9", agent="forge", **self._t(0, 10))
-        y = mk(1, call_id="c1", agent="scout", **self._t(0, 10))
-        z = mk(2, call_id="c5", agent="scout", **self._t(20, 30))
+    def test_tie_on_start_and_end_is_broken_by_the_traversal_ordinal_never_by_call_id(self):
+        # X (forge, seq mayor) e Y (scout, seq menor) empiezan y terminan a la vez; Z (scout) viene
+        # despues. Con desempate por seq el orden es Y, X, Z: la anterior de Z es X (forge): 0.
+        # Sin el desempate, el orden de entrada (X, Y, Z) daria 1. Los call_id van AL REVES de los seq:
+        # si el desempate fuera call_id, el resultado seria el contrario.
+        x = mk(0, seq=9, call_id="c1", agent="forge", **self._t(0, 10))
+        y = mk(1, seq=1, call_id="c9", agent="scout", **self._t(0, 10))
+        z = mk(2, seq=5, call_id="c5", agent="scout", **self._t(20, 30))
         for order in ([x, y, z], [z, y, x], [y, z, x], [x, z, y]):
             self.assertEqual(self.repeats(order), 0)
+        # con los seq invertidos el orden es X, Y, Z: la anterior de Z es Y (scout): 1
+        x2, y2 = mk(0, seq=1, call_id="c1", agent="forge", **self._t(0, 10)), \
+            mk(1, seq=9, call_id="c9", agent="scout", **self._t(0, 10))
+        for order in ([x2, y2, z], [z, y2, x2], [y2, z, x2]):
+            self.assertEqual(self.repeats(order), 1)
 
     def test_adjacency_is_an_inferred_signal_with_documented_limits(self):
         # A1 [0,100], A2 [10,20], A3 [30,40] del mismo agente: A3 se marca aunque corre en paralelo
@@ -3025,6 +3417,11 @@ class AggregationDeterminismAndPurity(unittest.TestCase):
         "RANGE_NONE", "READ_QUALITY_LABELS", "SMALL_N", "VERIFIED_MAX", "VERSION_RANGES", "WINDOW_DAYS",
         "WARN_ID_CAP", "WARN_ID_REPEATED", "WARN_NO_MESSAGE_ID", "_DOUBTFUL_FROM", "_DOUBTFUL_TO",
         "_VERSION_PARTS_RE", "MSG_TODAY_REQUIRED", "MSG_WINDOW_RANGE", "MSG_WINDOW_INVALID", "NO_META_KEY",
+        # T4: skills, validacion de tipos de la ventana
+        "skill_metrics", "SkillRow", "SkillGroupRow", "SkillAgentRow", "SkillQuality", "SkillMetrics",
+        "OTHER_SKILL", "ORIGIN_MAIN", "ORIGIN_SUBAGENT", "WARN_SKILL_ID_REPEATED",
+        "WARN_SKILL_ID_CAP", "_is_date", "MSG_WINDOW_TYPES",
+        "WARN_MAIN_HARDLINK", "WARN_MAIN_CAP", "WARN_MAIN_UNREADABLE",
     ))
     # Nombres de funcion que el codigo alcanzable puede llamar (ademas de los de PURE_REACHABLE).
     CALLABLE_OK = frozenset((
@@ -3034,7 +3431,7 @@ class AggregationDeterminismAndPurity(unittest.TestCase):
         # metodos de contenedores, de re y de las fechas
         "Counter", "defaultdict", "add", "append", "sort", "items", "values", "get", "match", "join",
         "timedelta", "astimezone", "replace", "date", "contains", "__init__", "__post_init__", "field",
-        "dataclass", "super", "format", "isoformat", "groups",
+        "dataclass", "super", "format", "isoformat", "groups", "id",
     ))
     FORBIDDEN = frozenset((
         "now", "utcnow", "fromtimestamp", "__import__", "importlib", "io", "getattr", "setattr",
@@ -3201,7 +3598,7 @@ class AggregationOverSyntheticTree(ReaderBase):
         self.assertEqual(len(plugin_calls), 3)
         self.assertEqual(len({c.agent_key for c in plugin_calls}), 2)
         for c, raw in zip([x for x in calls if x.agent_group != "sin-meta"], raws):
-            self.assertEqual(c.agent_key, ur._digest(raw).hex())
+            self.assertEqual(c.agent_key, ur._digest(raw, res._key).hex())
         self.assertEqual([c.agent_key for c in calls if c.agent_group == "sin-meta"], [ur.NO_META_KEY])
         # un agentType crudo y distinto de otro nunca comparte clave
         self.assertNotEqual(plugin_calls[0].agent_key, plugin_calls[1].agent_key)
@@ -3288,6 +3685,969 @@ class InspectHardlinkSessions(Base):
         self.assertEqual(field(out, "subagente lineas"), 30)
         self.assertEqual(field(out, "lineas corruptas"), 0)
         self.assertEqual(field(out, "subagente lineas assistant con usage"), 30)
+
+
+# --- T4: conteo de uso de skills ---
+SK_TS = "2026-03-10T10:00:%02dZ"
+
+
+def su(n, **kw):
+    """SkillUse a mano. Por defecto: la skill `brainstorm` (conjunto otros) invocada desde la sesion
+    principal s1 el 10 de marzo a las 10:00 UTC."""
+    fields = dict(skill="brainstorm", group="otros", origin="sesion", project="p-00000001",
+                  session="s1", moment=dt(10, 10), agent=None, agent_group=None)
+    fields.update(kw)
+    return ur.SkillUse(**fields)
+
+
+# Nombres de prueba para la lista de skills integradas: BUILTIN_SKILLS esta vacia (sin evidencia), asi que
+# las pruebas del MECANISMO de lista cerrada la sustituyen por estos.
+TEST_BUILTIN_SKILLS = frozenset(("review", "init"))
+
+
+class SkillClassification(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(ur, "BUILTIN_SKILLS", TEST_BUILTIN_SKILLS)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_names_by_closed_lists_and_narrow_pattern(self):
+        other = ur.OTHER_SKILL
+        self.assertEqual(other, "(otra skill)")
+        cases = (
+            ("brainstorm", ("brainstorm", "otros")),
+            ("my_skill-2", ("my_skill-2", "otros")),
+            ("0abc", ("0abc", "otros")),
+            ("x" * 64, ("x" * 64, "otros")),            # 1 + 63 caracteres: el maximo
+            ("x" * 65, (other, "otros")),
+            ("review", ("review", "integrado")),
+            ("init", ("init", "integrado")),
+            # plugin:skill -> solo el prefijo validado; lo que hay tras el primer ":" no se muestra
+            ("superpowers:brainstorming", ("plugin:superpowers", "plugin:superpowers")),
+            ("a:b:c", ("plugin:a", "plugin:a")),
+            ("pl:" + us.M_SKILL_TAIL, ("plugin:pl", "plugin:pl")),
+            ("pl:", ("plugin:pl", "plugin:pl")),
+            ("a" * 32 + ":x", ("plugin:" + "a" * 32, "plugin:" + "a" * 32)),
+            ("a" * 33 + ":x", (other, "plugin:(no-valido)")),
+            ("Mi:skill", (other, "plugin:(no-valido)")),
+            (":x", (other, "plugin:(no-valido)")),
+            ("p_q:x", (other, "plugin:(no-valido)")),
+            # nombres que no pasan la lista permitida
+            ("", (other, "otros")),
+            ("Brainstorm", (other, "otros")),
+            ("a b", (other, "otros")),
+            (us.M_SKILL, (other, "otros")),
+            ("ok\n", (other, "otros")),
+            ("-x", (other, "otros")),
+            ("x/y", (other, "otros")),
+            ("x.y", (other, "otros")),
+            ("x@y", (other, "otros")),
+            ("café", (other, "otros")),
+            # no cadenas
+            (None, (other, "otros")),
+            (5, (other, "otros")),
+            (True, (other, "otros")),
+            ({"a": 1}, (other, "otros")),
+            (["x"], (other, "otros")),
+        )
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(ur.classify_skill(raw), expected)
+                for text in ur.classify_skill(raw):
+                    self.assertNotIn("ZZMARK", text)
+
+    def test_synclayer_ships_no_skills_today_and_the_set_is_honoured(self):
+        self.assertEqual(ur.SYNCLAYER_SKILLS, frozenset())
+        with mock.patch.object(ur, "SYNCLAYER_SKILLS", frozenset(("mine",))):
+            self.assertEqual(ur.classify_skill("mine"), ("mine", "SyncLayer"))
+            self.assertEqual(ur.classify_skill("other"), ("other", "otros"))
+
+    def test_builtin_names_pass_the_narrow_pattern_and_never_collide_with_synclayer(self):
+        for name in ur.BUILTIN_SKILLS | ur.SYNCLAYER_SKILLS:
+            self.assertRegex(name, ur.SKILL_NAME_RE.pattern)
+            self.assertNotIn(":", name)
+        self.assertFalse(ur.BUILTIN_SKILLS & ur.SYNCLAYER_SKILLS)
+
+    def test_pattern_does_not_admit_a_colon(self):
+        self.assertNotIn(":", ur.SKILL_NAME_RE.pattern)
+        self.assertIsNone(ur.SKILL_NAME_RE.match("a:b"))
+        self.assertIsNotNone(ur.SKILL_NAME_RE.match("a_b-c1"))
+        # el nombre con ":" nunca llega al patron: sale como plugin
+        self.assertEqual(ur.classify_skill("a:b"), ("plugin:a", "plugin:a"))
+
+    def test_user_skill_names_are_shown_as_is_documented_as_asymmetric_privacy_risk(self):
+        # una skill de usuario sale tal cual; un agente de usuario sale como "(otro agente)"
+        self.assertEqual(ur.classify_skill("mi-skill-privada"), ("mi-skill-privada", "otros"))
+        self.assertEqual(ur.classify_agent("mi-agente-privado"), (ur.OTHER_AGENT, "otros"))
+        self.assertIn("asimetric", ur.classify_skill.__doc__)
+        self.assertIn("USUARIO", ur.classify_skill.__doc__)
+        self.assertIn("(otra skill)", ur.classify_skill.__doc__)
+        self.assertIn("T6", ur.classify_skill.__doc__)
+
+
+class SkillBuiltinDefault(unittest.TestCase):
+    def test_builtin_list_is_empty_without_evidence(self):
+        self.assertEqual(ur.BUILTIN_SKILLS, frozenset())
+        for name in ("init", "review", "security-review", "simplify", "loop"):
+            self.assertEqual(ur.classify_skill(name), (name, "otros"))
+
+
+class SkillReading(ReaderBase):
+    FOLDER = "c--p"
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(ur, "BUILTIN_SKILLS", TEST_BUILTIN_SKILLS)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def main(self, tree, sid, items, folder=None, **kw):
+        return tree.main_session(folder or self.FOLDER, sid, items, **kw)
+
+    def uses(self, res):
+        return [(u.skill, u.group, u.origin) for u in res.skill_uses]
+
+    def test_skill_invoked_twice_in_one_session_and_once_in_another(self):
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [
+            us.user(SK_TS % 0, sidechain=False),
+            us.skill_line("a1", SK_TS % 1, ["brainstorm"]),
+            us.skill_line("a2", SK_TS % 5, ["brainstorm", "review"]),
+        ])
+        self.main(tree, "s2", [us.skill_line("b1", SK_TS % 9, ["brainstorm"])])
+        res = self.read(tree)
+        self.assertEqual(res.calls, [])    # una sesion sin subagentes no produce llamadas de agente
+        self.assertEqual(len(res.skill_uses), 4)
+        m = agg(res)
+        s = m.skills
+        # brainstorm: 3 invocaciones (2 en s1, 1 en s2) en 2 sesiones; review: 1 en s1
+        self.assertEqual([(r.skill, r.group, r.calls, r.main_calls, r.subagent_calls, r.sessions) for r in s.rows],
+                         [("brainstorm", "otros", 3, 3, 0, 2), ("review", "integrado", 1, 1, 0, 1)])
+        self.assertEqual((s.calls, s.sessions, s.main_calls, s.subagent_calls), (4, 2, 4, 0))
+        # por conjunto: otros = brainstorm (3 llamadas, 1 skill, 2 sesiones); integrado = review (1, 1, 1)
+        self.assertEqual([(g.group, g.skills, g.calls, g.sessions) for g in s.groups],
+                         [("otros", 1, 3, 2), ("integrado", 1, 1, 1)])
+        self.assertEqual(s.by_agent, ())
+        q = s.quality
+        self.assertEqual((q.uses_read, q.in_window, q.outside_window, q.without_time, q.other_name), (4, 4, 0, 0, 0))
+        self.assertEqual(m.window, ur.make_window(TODAY))
+        self.assertEqual(res.quality["sesiones principales leidas"], 2)
+
+    def test_repeated_lines_and_repeated_block_ids_count_once_blocks_without_id_each_time(self):
+        tree = us.Tree(self.base)
+        line = us.skill_line("a1", SK_TS % 1, ["brainstorm"])
+        other_line_same_block = us.assistant("a9", SK_TS % 2, blocks=[us.skill_block("a1-s0", "brainstorm")],
+                                             sidechain=False)
+        no_id = us.assistant("c1", SK_TS % 3, sidechain=False, blocks=[
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "review"}},
+            {"type": "tool_use", "id": 7, "name": "Skill", "input": {"skill": "review"}},
+        ])
+        self.main(tree, "s1", [line, line, other_line_same_block, no_id])
+        res = self.read(tree)
+        # el bloque a1-s0 cuenta una vez; los dos bloques sin id (ausente o no cadena) cuentan cada uno
+        self.assertEqual(self.uses(res), [("brainstorm", "otros", "sesion"), ("review", "integrado", "sesion"),
+                                          ("review", "integrado", "sesion")])
+        self.assertEqual(res.quality["skills: tool_use sin id"], 2)
+        # repetir una linea dentro del MISMO archivo no es un id repetido entre archivos
+        self.assertEqual(res.quality["skills: id repetido entre archivos"], 0)
+        self.assertEqual(res.warnings, [])
+
+    def test_same_tool_use_id_in_main_and_subagent_counts_once_and_is_reported(self):
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [us.skill_line("dup", SK_TS % 1, ["brainstorm"])])
+        tree.subagent(self.FOLDER, "s1", "a1", [us.user(SK_TS % 2), us.skill_line("dup", SK_TS % 3, ["brainstorm"],
+                                                                                    sidechain=True)])
+        res = self.read(tree)
+        self.assertEqual(self.uses(res), [("brainstorm", "otros", "sesion")])   # la sesion principal se lee primero
+        self.assertEqual(res.quality["skills: id repetido entre archivos"], 1)
+        self.assertIn(ur.WARN_SKILL_ID_REPEATED, res.warnings)
+        self.assertEqual(len(res.calls), 1)    # el subagente sigue siendo una llamada
+
+    def test_subagent_skills_are_linked_to_the_agent_that_invoked_them(self):
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [us.skill_line("m1", SK_TS % 1, ["x"])])
+        tree.subagent(self.FOLDER, "s1", "a1", [us.user(SK_TS % 2), us.skill_line("f1", SK_TS % 3, ["x", "review"],
+                                                                                     sidechain=True)])
+        tree.subagent(self.FOLDER, "s1", "a2", [us.skill_line("n1", SK_TS % 4, ["x"], sidechain=True)], meta=None)
+        tree.subagent(self.FOLDER, "s1", "a3", [us.skill_line("p1", SK_TS % 5, ["x"], sidechain=True)],
+                      meta={"agentType": "pl:" + us.M_TYPE})
+        tree.subagent(self.FOLDER, "s1", "a4", [us.skill_line("u1", SK_TS % 6, ["x"], sidechain=True)],
+                      meta={"agentType": us.M_TYPE})
+        tree.subagent(self.FOLDER, "s1", "a5", [us.skill_line("g1", SK_TS % 7, ["x"], sidechain=True)],
+                      meta={"agentType": ""})
+        res = self.read(tree)
+        self.assertEqual(len(res.skill_uses), 7)
+        by_origin = collections.Counter(u.origin for u in res.skill_uses)
+        self.assertEqual(by_origin, {"sesion": 1, "subagente": 6})
+        main_use = [u for u in res.skill_uses if u.origin == "sesion"][0]
+        self.assertEqual((main_use.agent, main_use.agent_group), (None, None))
+        m = agg(res)
+        s = m.skills
+        # x: 6 invocaciones (1 principal + 5 de subagentes) en UNA sesion (los subagentes comparten la de su sesion)
+        self.assertEqual([(r.skill, r.calls, r.main_calls, r.subagent_calls, r.sessions) for r in s.rows],
+                         [("x", 6, 1, 5, 1), ("review", 1, 0, 1, 1)])
+        self.assertEqual(s.sessions, 1)
+        # por agente: solo las de subagentes; (otro agente) agrupa al de usuario; el vacio es el agente por defecto
+        self.assertEqual([(r.agent, r.agent_group, r.skill, r.skill_group, r.calls) for r in s.by_agent], [
+            ("(otro agente)", "otros", "x", "otros", 1),
+            ("(sin-meta)", "sin-meta", "x", "otros", 1),
+            ("forge", "SyncLayer", "review", "integrado", 1),
+            ("forge", "SyncLayer", "x", "otros", 1),
+            ("general-purpose", "integrado", "x", "otros", 1),
+            ("plugin:pl", "plugin:pl", "x", "otros", 1),
+        ])
+        # la skill y la llamada del subagente comparten el resumen de sesion (clave por ejecucion)
+        sub_use = [u for u in res.skill_uses if u.origin == "subagente"][0]
+        self.assertEqual(sub_use.session, res.calls[0].session)
+        self.assertEqual(sub_use.session, main_use.session)
+        self.assertEqual(sub_use.project, res.calls[0].project)
+
+    def test_markers_in_args_skill_names_and_the_rest_of_the_main_session_never_appear(self):
+        tree = us.Tree(self.base)
+        blocks = [
+            us.skill_block("k1", "brainstorm", args=us.M_ARGS, **{us.M_UNKNOWN_INPUT_KEY: us.M_INPUT}),
+            us.skill_block("k2", us.M_SKILL, args={"nested": [us.M_ARGS, us.M_PROMPT]}),
+            us.skill_block("k3", "pl:" + us.M_SKILL_TAIL, args=None),
+            us.skill_block("k4", "review", args=us.M_ARGS * 100),
+            us.tool_use_block("k5", "Agent", {"subagent_type": "forge", "prompt": us.M_PROMPT,
+                                                 "description": us.M_DESCRIPTION}),
+            us.tool_use_block("k6", "Read", {"file_path": us.M_CWD}),
+        ]
+        self.main(tree, "s1", [
+            us.user(SK_TS % 0, sidechain=False),
+            us.assistant("m1", SK_TS % 1, blocks=blocks + [us.text_block()], sidechain=False,
+                         **{us.M_UNKNOWN_KEY: us.M_CONTENT}),
+            us.tool_result_line(SK_TS % 2),
+        ])
+        tree.subagent(self.FOLDER, "s1", "a1", [us.skill_line("z1", SK_TS % 3, [us.M_SKILL], sidechain=True)],
+                      meta={"agentType": "pl:" + us.M_SKILL_TAIL, "description": us.M_DESCRIPTION})
+        res = self.read(tree)
+        m = agg(res)
+        self.assertEqual([(r.skill, r.group, r.calls) for r in m.skills.rows], [
+            ("(otra skill)", "otros", 2), ("brainstorm", "otros", 1), ("plugin:pl", "plugin:pl", 1),
+            ("review", "integrado", 1)])
+        self.assertEqual(m.skills.quality.other_name, 2)
+        everything = (res.skill_uses, m, m.skills, res.quality, res.schema, res.versions, res.warnings,
+                      res.calls, [str(u) for u in res.skill_uses])
+        self.assert_no_markers(*everything)
+        self.assertNotIn("args", repr(everything))
+        repr(everything).encode("ascii")
+
+    def test_main_session_with_truncated_last_line_keeps_the_complete_lines(self):
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [us.skill_line("a1", SK_TS % 1, ["brainstorm"]),
+                               '{"type": "assistant", "timestamp": "2026-03-10T10:0' + us.M_CONTENT],
+                  final_newline=False)
+        res = self.read(tree)
+        self.assertEqual(self.uses(res), [("brainstorm", "otros", "sesion")])
+        self.assertEqual(res.quality["sesiones principales con ultima linea truncada"], 1)
+        self.assertEqual(res.quality["lineas corruptas (sesion principal)"], 0)
+        self.assert_no_markers(res.quality, res.skill_uses)
+
+    def test_corrupt_oversize_and_non_object_lines_are_counted_and_skipped(self):
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [us.skill_line("a1", SK_TS % 1, ["brainstorm"]),
+                               "no es json " + us.M_CONTENT, "[1, 2]",
+                               us.skill_line("a2", SK_TS % 2, ["review"])])
+        res = self.read(tree)
+        self.assertEqual(len(res.skill_uses), 2)
+        self.assertEqual(res.quality["lineas corruptas (sesion principal)"], 1)
+        self.assertEqual(res.quality["lineas que no son objeto (sesion principal)"], 1)
+        # las del lector de subagentes no se tocan
+        self.assertEqual(res.quality["lineas corruptas"], 0)
+        tree2 = us.Tree(os.path.join(self.base, "b"))
+        self.main(tree2, "s1", [us.skill_line("a1", SK_TS % 1, ["brainstorm"]),
+                                '{"type": "assistant", "x": "' + "y" * 4000 + '"}',
+                                us.skill_line("a2", SK_TS % 2, ["review"])])
+        with mock.patch.object(ur, "MAX_LINE_BYTES", 2000):
+            res2 = self.read(tree2)
+        self.assertEqual(res2.quality["lineas oversize (sesion principal)"], 1)
+        self.assertEqual([u.skill for u in res2.skill_uses], ["brainstorm", "review"])
+
+    def test_malformed_skill_values_count_as_other_skill_and_are_reported(self):
+        tree = us.Tree(self.base)
+        blocks = [
+            {"type": "tool_use", "id": "b1", "name": "Skill", "input": {"skill": 5}},
+            {"type": "tool_use", "id": "b2", "name": "Skill", "input": {"skill": None}},
+            {"type": "tool_use", "id": "b3", "name": "Skill", "input": {"skill": {"a": us.M_SKILL}}},
+            {"type": "tool_use", "id": "b4", "name": "Skill", "input": {"skill": [us.M_SKILL]}},
+            {"type": "tool_use", "id": "b5", "name": "Skill", "input": {"args": us.M_ARGS}},
+            {"type": "tool_use", "id": "b6", "name": "Skill", "input": us.M_INPUT},
+            {"type": "tool_use", "id": "b7", "name": "Skill"},
+            {"type": "tool_use", "id": "b8", "name": "Skill", "input": {"skill": us.M_SKILL}},
+        ]
+        self.main(tree, "s1", [us.assistant("m1", SK_TS % 1, blocks=blocks, sidechain=False)])
+        res = self.read(tree)
+        self.assertEqual(self.uses(res), [("(otra skill)", "otros", "sesion")] * 8)
+        self.assertEqual(res.quality["skills: nombre no cadena"], 7)   # b8 es cadena, solo no valida
+        self.assert_no_markers(res.skill_uses, res.quality)
+
+    def test_only_skill_tool_use_in_assistant_lines_of_real_requests_counts(self):
+        tree = us.Tree(self.base)
+        skill = us.skill_block("a1-s0", "brainstorm")
+        self.main(tree, "s1", [
+            us.assistant("m1", SK_TS % 1, sidechain=False, blocks=[
+                us.tool_use_block("t1", "Agent", {"skill": "brainstorm"}),
+                us.tool_use_block("t2", "Task", {"skill": "brainstorm"}),
+                us.tool_use_block("t3", "skill", {"skill": "brainstorm"}),
+                us.tool_use_block("t4", "Skills", {"skill": "brainstorm"}),
+                {"type": "text", "id": "t5", "name": "Skill", "input": {"skill": "brainstorm"}},
+                {"type": "tool_result", "id": "t6", "name": "Skill", "input": {"skill": "brainstorm"}},
+            ]),
+            us.user(SK_TS % 2, sidechain=False, **{"message": {"role": "user", "content": [skill]}}),
+            us.assistant("m3", SK_TS % 3, model="<synthetic>", blocks=[skill], sidechain=False),
+            us.assistant("m4", SK_TS % 4, blocks="no es una lista " + us.M_CONTENT, sidechain=False),
+            {"type": "assistant", "timestamp": SK_TS % 5, "message": "texto " + us.M_CONTENT},
+        ])
+        res = self.read(tree)
+        self.assertEqual(res.skill_uses, [])
+        self.assertEqual(res.quality["sesiones principales leidas"], 1)
+
+    def test_main_session_failures_leave_no_partial_counts(self):
+        # archivo mayor que el tope por fstat: omitido entero
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [us.skill_line("a%d" % i, SK_TS % i, ["brainstorm"]) for i in range(20)])
+        with mock.patch.object(ur, "MAX_FILE_BYTES", 2000):
+            res = self.read(tree)
+        self.assertEqual(res.skill_uses, [])
+        self.assertEqual(res.quality["sesiones principales omitidas por tope de tamano"], 1)
+        # crecimiento a mitad de lectura (fstat engana): tampoco deja nada
+        with mock.patch.object(ur, "MAX_FILE_BYTES", 2000), \
+                mock.patch.object(ur.os, "fstat", ReaderHardlinksAndLimits._lying_fstat()):
+            res = self.read(tree)
+        self.assertEqual(res.skill_uses, [])
+        self.assertEqual(res.quality["sesiones principales omitidas por tope de tamano"], 1)
+        # error de E/S a mitad
+        real = ur._iter_objects
+
+        def failing(f, info):
+            it = real(f, info)
+            yield next(it)
+            raise OSError("fallo " + us.M_CONTENT)
+
+        with mock.patch.object(ur, "_iter_objects", failing):
+            res = self.read(tree)
+        self.assertEqual(res.skill_uses, [])
+        self.assertEqual(res.quality["sesiones principales ilegibles"], 1)
+        # conjunto de ids por archivo por encima del tope
+        with mock.patch.object(ur, "MAX_IDS_PER_FILE", 5):
+            res = self.read(tree)
+        self.assertEqual(res.skill_uses, [])
+        self.assertEqual(res.quality["sesiones principales omitidas por tope de tamano"], 1)
+        self.assertEqual(res.warnings, [ur.WARN_MAIN_CAP])
+        # sin fallos: las 20
+        self.assertEqual(len(self.read(tree).skill_uses), 20)
+        self.assert_no_markers(res.quality, res.skill_uses)
+
+    def test_unopenable_main_session_is_counted_unreadable(self):
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [us.skill_line("a1", SK_TS % 1, ["brainstorm"])])
+        with mock.patch.object(ur, "_open_regular", side_effect=OSError("no se abre")):
+            res = self.read(tree)
+        self.assertEqual(res.skill_uses, [])
+        self.assertEqual(res.quality["sesiones principales ilegibles"], 1)
+        self.assertEqual(res.warnings, [ur.WARN_MAIN_UNREADABLE])
+
+    def test_hardlinked_main_session_is_not_read_and_is_counted(self):
+        tree = us.Tree(self.base)
+        outer = us.Tree(os.path.join(self.base, "afuera"))
+        target = outer.main_session("c--x", "s9", [us.skill_line("a1", SK_TS % 1, ["brainstorm"])])
+        self.hardlink(target, os.path.join(tree.folder(self.FOLDER), "s1.jsonl"))
+        res = self.read(tree)
+        self.assertEqual(res.skill_uses, [])
+        self.assertEqual(res.quality["sesiones principales omitidas por enlace duro"], 1)
+        self.assertEqual(res.quality["sesiones principales leidas"], 0)
+        self.assertEqual(res.warnings, [ur.WARN_MAIN_HARDLINK])
+        # y llegan a las metricas junto con el resto de los avisos
+        self.assertEqual(agg(res).warnings, (ur.WARN_MAIN_HARDLINK,))
+
+    def test_main_session_warnings_are_fixed_ascii_text_and_limitations_are_documented(self):
+        for text in (ur.WARN_MAIN_HARDLINK, ur.WARN_MAIN_CAP, ur.WARN_MAIN_UNREADABLE) + ur.SKILL_LIMITATIONS:
+            text.encode("ascii")
+            self.assertNotIn("ZZMARK", text)
+        self.assertEqual(len({ur.WARN_MAIN_HARDLINK, ur.WARN_MAIN_CAP, ur.WARN_MAIN_UNREADABLE}), 3)
+        # sin sesiones omitidas no hay aviso
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [us.skill_line("a1", SK_TS % 1, ["brainstorm"])])
+        self.assertEqual(self.read(tree).warnings, [])
+        # limitaciones para T5: linea corrupta (subconteo silencioso) y skills con /nombre
+        self.assertIsInstance(ur.SKILL_LIMITATIONS, tuple)
+        self.assertEqual(len(ur.SKILL_LIMITATIONS), 2)
+        joined = " ".join(ur.SKILL_LIMITATIONS)
+        for needle in ("corrupta", "esconder", "/nombre", "no se cuentan"):
+            self.assertIn(needle, joined)
+
+    def test_corrupt_line_in_a_main_session_or_subagent_hides_an_invocation_silently(self):
+        # la limitacion documentada: la sesion se lee igual y la invocacion perdida no deja rastro
+        tree = us.Tree(self.base)
+        lines = [us.skill_line("a1", SK_TS % 1, ["brainstorm"]), "{esto no es json",
+                 us.skill_line("a2", SK_TS % 3, ["brainstorm"])]
+        self.main(tree, "s1", lines)
+        tree.subagent(self.FOLDER, "s1", "a1", [us.assistant("m1", SK_TS % 4), "{corrupta",
+                                                us.skill_line("b1", SK_TS % 5, ["brainstorm"], sidechain=True)])
+        res = self.read(tree, check_damage=False)
+        self.assertEqual([u.origin for u in res.skill_uses], ["sesion", "sesion", "subagente"])
+        self.assertEqual(res.quality["lineas corruptas (sesion principal)"], 1)
+        self.assertEqual(res.calls[0].damage, "linea intermedia corrupta")
+        self.assertEqual(res.warnings, [])             # y no hay ningun aviso: subconteo silencioso
+
+    def test_symlinked_main_session_is_not_read(self):
+        tree = us.Tree(self.base)
+        outer = us.Tree(os.path.join(self.base, "afuera"))
+        target = outer.main_session("c--x", "s9", [us.skill_line("a1", SK_TS % 1, ["brainstorm"])])
+        if not self.make_link(target, os.path.join(tree.folder(self.FOLDER), "s1.jsonl"), is_dir=False):
+            self.skipTest("el sistema no permite crear el enlace")
+        res = self.read(tree)
+        self.assertEqual(res.skill_uses, [])
+        self.assertEqual(res.quality["enlaces omitidos"], 1)
+
+    def test_structural_signature_applies_to_main_sessions_too(self):
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [{"x": 1}, {"y": us.M_CONTENT}])
+        with self.assertRaises(ur.SchemaError) as cm:
+            self.read(tree)
+        self.assertIn(ur.CHK_NO_TYPE, cm.exception.message)
+        self.assert_no_markers(cm.exception.message)
+        tree = us.Tree(os.path.join(self.base, "b"))
+        line = us.skill_line("a1", "ayer " + us.M_CONTENT, ["brainstorm"])
+        self.main(tree, "s1", [line])
+        with self.assertRaises(ur.SchemaError) as cm:
+            self.read(tree)
+        self.assertIn(ur.CHK_TS, cm.exception.message)
+        self.assert_no_markers(cm.exception.message)
+        # otros tipos de linea pueden no traer hora
+        tree = us.Tree(os.path.join(self.base, "c"))
+        self.main(tree, "s1", [{"type": "summary", "summary": "x"}, us.skill_line("a1", SK_TS % 1, ["brainstorm"])])
+        self.assertEqual(len(self.read(tree).skill_uses), 1)
+
+    def test_window_is_decided_by_the_timestamp_of_the_tool_use_line(self):
+        tree = us.Tree(self.base)
+        lines = [
+            us.skill_line("w1", "2026-03-01T23:59:59Z", ["brainstorm"]),          # antes de since: fuera
+            us.skill_line("w2", "2026-03-02T00:00:00Z", ["brainstorm"]),          # primer instante de since: dentro
+            us.skill_line("w3", "2026-03-31T23:59:59.999999Z", ["brainstorm"]),   # ultimo de until: dentro
+            us.skill_line("w4", "2026-04-01T00:00:00Z", ["brainstorm"]),          # despues de until: fuera
+            us.skill_line("w5", "2026-03-02T01:00:00+02:00", ["brainstorm"]),     # 23:00Z del 1: fuera
+            us.skill_line("w6", "2026-03-15T12:00:00", ["review"]),               # sin zona: UTC, dentro
+        ]
+        self.main(tree, "s1", lines)
+        res = self.read(tree)
+        self.assertEqual(len(res.skill_uses), 6)
+        m = agg(res)
+        self.assertEqual([(r.skill, r.calls) for r in m.skills.rows], [("brainstorm", 2), ("review", 1)])
+        q = m.skills.quality
+        self.assertEqual((q.uses_read, q.in_window, q.outside_window), (6, 3, 3))
+        m = agg(res, window=ur.make_window(TODAY, all_time=True))
+        self.assertEqual((m.skills.calls, m.skills.quality.outside_window), (6, 0))
+
+    def test_subagent_file_damage_decides_whether_its_skills_count(self):
+        tree = us.Tree(self.base)
+        # linea intermedia corrupta: el archivo conserva herramientas y horas, y tambien sus skills
+        tree.subagent(self.FOLDER, "s1", "a1", [us.skill_line("c1", SK_TS % 1, ["brainstorm"], sidechain=True),
+                                                "no es json", us.assistant("c2", SK_TS % 2)])
+        # archivo omitido por tope: no deja nada
+        tree.subagent(self.FOLDER, "s1", "a2", [us.skill_line("t%d" % i, SK_TS % i, ["review"], sidechain=True)
+                                                for i in range(20)])
+        with mock.patch.object(ur, "MAX_FILE_BYTES", 4000):
+            res = self.read(tree, check_damage=False)
+        by_status = {c.damage: c for c in res.calls}
+        self.assertEqual(set(by_status), {"linea intermedia corrupta", "tope"})
+        self.assertEqual([(u.skill, u.agent) for u in res.skill_uses], [("brainstorm", "forge")])
+
+    def test_two_names_of_one_inode_count_the_skills_once(self):
+        tree = us.Tree(self.base)
+        first = tree.subagent(self.FOLDER, "s1", "a1", [us.skill_line("h1", SK_TS % 1, ["brainstorm"], sidechain=True)])
+        sub2 = os.path.join(tree.folder(self.FOLDER), "s2", "subagents")
+        os.makedirs(sub2)
+        self.hardlink(first, os.path.join(sub2, "agent-a2.jsonl"))
+        res = self.read(tree)
+        self.assertEqual(len(res.calls), 1)
+        self.assertEqual(len(res.skill_uses), 1)
+        self.assertEqual(res.quality["skills: id repetido entre archivos"], 0)
+
+    def test_hardlinked_subagent_transcript_is_read_and_its_skills_count(self):
+        tree = us.Tree(self.base)
+        outer = us.Tree(os.path.join(self.base, "afuera"))
+        target = outer.subagent("c--x", "s9", "a9", [us.skill_line("h1", SK_TS % 1, ["brainstorm"], sidechain=True)],
+                                meta=None)
+        sub = os.path.join(tree.folder(self.FOLDER), "s1", "subagents")
+        os.makedirs(sub)
+        self.hardlink(target, os.path.join(sub, "agent-h.jsonl"))
+        res = self.read(tree)
+        self.assertEqual([(u.skill, u.agent) for u in res.skill_uses], [("brainstorm", "(sin-meta)")])
+
+    def test_global_id_set_is_capped_and_reported(self):
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [us.skill_line("a1", SK_TS % 1, ["brainstorm", "review"])])
+        self.main(tree, "s2", [us.skill_line("b1", SK_TS % 2, ["brainstorm"])])
+        with mock.patch.object(ur, "MAX_IDS_GLOBAL", 1):
+            res = self.read(tree)
+        self.assertEqual(len(res.skill_uses), 3)           # no se omite nada: lo que no se recuerda se cuenta aparte
+        self.assertEqual(res.quality["skills: ids sin deduplicar (tope)"], 2)
+        self.assertIn(ur.WARN_SKILL_ID_CAP, res.warnings)
+
+    def test_project_filter_and_sessions_without_subagents_dir(self):
+        tree = us.Tree(self.base)
+        proj = os.path.join(self.base, "my proj")
+        os.makedirs(proj)
+        folder = us.folder_name_for(os.path.abspath(proj))
+        self.main(tree, "s1", [us.skill_line("a1", SK_TS % 1, ["brainstorm"])], folder=folder)
+        self.main(tree, "s2", [us.skill_line("b1", SK_TS % 2, ["review"])], folder="c--otra")
+        res = ur.read_calls(tree.claude_dir, project_dir=proj)
+        self.assertEqual([u.skill for u in res.skill_uses], ["brainstorm"])
+        self.assertEqual(len(ur.read_calls(tree.claude_dir).skill_uses), 2)
+
+    def test_skill_records_are_deterministic_for_a_fixed_key_and_have_no_raw_content(self):
+        tree = us.Tree(self.base)
+        self.main(tree, "s1", [us.skill_line("a1", SK_TS % 1, ["brainstorm", us.M_SKILL])])
+        key = b"d" * 16
+        a = ur.read_calls(tree.claude_dir, digest_key=key)
+        b = ur.read_calls(tree.claude_dir, digest_key=key)
+        self.assertEqual(a.skill_uses, b.skill_uses)
+        for u in a.skill_uses:
+            self.assertRegex(u.session, r"^[0-9a-f]{16}$")
+            self.assertRegex(u.project, r"^p-[0-9a-f]{8}$")
+            self.assertIsInstance(u.moment, datetime.datetime)
+            self.assertEqual(u.moment.utcoffset(), datetime.timedelta(0))
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            a.skill_uses[0].skill = "x"
+
+    def test_reader_does_not_read_input_args(self):
+        # `args` puede ser un objeto enorme o con contenido: el lector no lo mira. Con `args` de formas
+        # raras el resultado es identico.
+        results = []
+        for i, args in enumerate((us.M_ARGS, None, [us.M_ARGS] * 50, {"a": {"b": us.M_ARGS}}, 12345, True)):
+            tree = us.Tree(os.path.join(self.base, "t%d" % i))
+            self.main(tree, "s1", [us.assistant("m1", SK_TS % 1, sidechain=False,
+                                                blocks=[us.skill_block("k1", "brainstorm", args=args)])])
+            res = ur.read_calls(tree.claude_dir, digest_key=b"a" * 16)
+            results.append(repr(res.skill_uses))
+        self.assertEqual(len(set(results)), 1)
+
+
+class SkillAggregation(unittest.TestCase):
+    def test_rows_groups_and_agent_links_by_hand(self):
+        fa = dict(agent="forge", agent_group="SyncLayer", origin="subagente")
+        uses = [
+            su(1), su(2), su(3, session="s2"),
+            su(4, skill="review", group="integrado"),
+            su(5, skill="plugin:pl", group="plugin:pl", session="s2", **fa),
+            su(6, session="s1", **fa),
+            su(7, agent="(otro agente)", agent_group="otros", origin="subagente"),
+            su(8, skill="(otra skill)", session="s3"),
+        ]
+        m = ur.aggregate_calls([], today=TODAY, skill_uses=uses)
+        s = m.skills
+        # 8 invocaciones en 3 sesiones; principal: 1, 2, 3, 4, 8 = 5; subagentes: 5, 6, 7 = 3
+        self.assertEqual((s.calls, s.sessions, s.main_calls, s.subagent_calls), (8, 3, 5, 3))
+        # brainstorm: 1, 2, 3, 6, 7 = 5 (3 principal + 2 de subagentes) en s1 y s2; el resto, 1 cada una:
+        # orden por llamadas descendente y luego nombre: "(otra skill)" < "plugin:pl" < "review"
+        self.assertEqual([(r.skill, r.group, r.calls, r.main_calls, r.subagent_calls, r.sessions) for r in s.rows], [
+            ("brainstorm", "otros", 5, 3, 2, 2),
+            ("(otra skill)", "otros", 1, 1, 0, 1),
+            ("plugin:pl", "plugin:pl", 1, 0, 1, 1),
+            ("review", "integrado", 1, 1, 0, 1),
+        ])
+        # otros = brainstorm 5 + (otra skill) 1 = 6 llamadas, 2 skills, sesiones s1, s2, s3 = 3
+        self.assertEqual([(g.group, g.skills, g.calls, g.sessions) for g in s.groups], [
+            ("otros", 2, 6, 3), ("integrado", 1, 1, 1), ("plugin:pl", 1, 1, 1)])
+        self.assertEqual([(r.agent, r.agent_group, r.skill, r.skill_group, r.calls) for r in s.by_agent], [
+            ("(otro agente)", "otros", "brainstorm", "otros", 1),
+            ("forge", "SyncLayer", "brainstorm", "otros", 1),
+            ("forge", "SyncLayer", "plugin:pl", "plugin:pl", 1),
+        ])
+        q = s.quality
+        self.assertEqual((q.uses_read, q.in_window, q.outside_window, q.without_time, q.other_name), (8, 8, 0, 0, 1))
+
+    def test_window_boundaries_by_date_in_utc_and_uses_without_time(self):
+        east = datetime.timezone(datetime.timedelta(hours=2))
+        uses = [
+            su(1, moment=dt(2, 0, 0, 0)),                                   # primer instante de since: dentro
+            su(2, moment=dt(31, 23, 59, 59, 999999)),                       # ultimo de until: dentro
+            su(3, moment=dt(1, 23, 59, 59, 999999)),                        # fuera
+            su(4, moment=dt(1, month=4)),                                   # fuera
+            su(5, moment=datetime.datetime(2026, 3, 2, 1, 0, tzinfo=east)),   # 23:00Z del 1: fuera
+            su(6, moment=datetime.datetime(2026, 3, 5, 12, 0)),             # sin zona: UTC, dentro
+            su(7, moment=None),                                             # sin hora: solo con --all
+        ]
+        m = ur.aggregate_calls([], today=TODAY, skill_uses=uses)
+        q = m.skills.quality
+        self.assertEqual((m.skills.calls, q.uses_read, q.in_window, q.outside_window, q.without_time), (3, 7, 3, 4, 1))
+        m = ur.aggregate_calls([], window=ur.make_window(TODAY, all_time=True), skill_uses=uses)
+        q = m.skills.quality
+        self.assertEqual((m.skills.calls, q.in_window, q.outside_window, q.without_time), (7, 7, 0, 1))
+
+    def test_no_skills_gives_zeros_and_calls_alone_carry_none(self):
+        m = ur.aggregate_calls([mk(0)], today=TODAY)
+        s = m.skills
+        self.assertEqual((s.calls, s.sessions, s.main_calls, s.subagent_calls, s.rows, s.groups, s.by_agent),
+                         (0, 0, 0, 0, (), (), ()))
+        self.assertEqual((s.quality.uses_read, s.quality.in_window), (0, 0))
+
+    def test_result_is_deterministic_frozen_and_without_session_identifiers(self):
+        uses = [su(i, session="IDENT-SESSION-%d" % (i % 3), skill="s%d" % (i % 4),
+                   moment=dt(1 + i % 28), agent="forge" if i % 2 else None,
+                   agent_group="SyncLayer" if i % 2 else None, origin="subagente" if i % 2 else "sesion")
+                for i in range(40)]
+        base = ur.aggregate_calls([], today=TODAY, skill_uses=uses)
+        rnd = random.Random(3)
+        for _ in range(4):
+            shuffled = list(uses)
+            rnd.shuffle(shuffled)
+            other = ur.aggregate_calls(iter([]), today=TODAY, skill_uses=iter(shuffled))
+            self.assertEqual(other, base)
+            self.assertEqual(repr(other), repr(base))
+        self.assertNotIn("IDENT-SESSION", repr(base))
+        self.assertNotIn("p-00000001", repr(base.skills))
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            base.skills.calls = 1
+
+    def test_read_result_skills_are_taken_automatically_and_an_explicit_list_wins(self):
+        res = ur.ReadResult()
+        res.skill_uses.append(su(1))
+        self.assertEqual(ur.aggregate_calls(res, today=TODAY).skills.calls, 1)
+        self.assertEqual(ur.aggregate_calls(res, today=TODAY, skill_uses=[su(1), su(2)]).skills.calls, 2)
+        self.assertEqual(ur.aggregate_calls(res.calls, today=TODAY).skills.calls, 0)
+
+    # LISTA BLANCA de los campos de los dataclasses Skill*: un campo nuevo (p. ej. tokens o duracion) hace
+    # fallar la prueba y obliga a decidir si una skill puede llevarlo (3.6: solo conteos y distribucion).
+    SKILL_FIELDS = {
+        "SkillRow": ("skill", "group", "calls", "main_calls", "subagent_calls", "sessions"),
+        "SkillGroupRow": ("group", "skills", "calls", "sessions"),
+        "SkillAgentRow": ("agent", "agent_group", "skill", "skill_group", "calls"),
+        "SkillQuality": ("uses_read", "in_window", "outside_window", "without_time", "other_name"),
+        "SkillMetrics": ("calls", "sessions", "main_calls", "subagent_calls", "rows", "groups", "by_agent",
+                         "quality"),
+    }
+
+    def test_comparison_across_groups_is_only_counts_and_distribution(self):
+        # no hay tokens, duracion ni costo atribuido a una skill: los dataclasses solo tienen conteos
+        for cls_name, expected in self.SKILL_FIELDS.items():
+            cls = getattr(ur, cls_name)
+            self.assertEqual(tuple(f.name for f in dataclasses.fields(cls)), expected, cls_name)
+        # y no hay otro dataclass Skill* sin revisar
+        found = {n for n in dir(ur) if n.startswith("Skill") and dataclasses.is_dataclass(getattr(ur, n))}
+        found -= {"SkillUse"}       # la invocacion cruda (interna, no sale en ningun resultado)
+        self.assertEqual(found, set(self.SKILL_FIELDS))
+
+    def test_version_range_is_computed_once_per_call(self):
+        # Minor 9: antes se calculaba ~16 veces por llamada (por rango y ambito)
+        calls = [mk(i, agent="a%d" % (i % 3), agent_group="otros", project="p-0000000%d" % (i % 2),
+                    versions=("2.1.300", "2.1.315")) for i in range(12)]
+        real = ur.version_range
+        counter = collections.Counter()
+
+        def counting(call):
+            counter[call.call_id] += 1
+            return real(call)
+
+        with mock.patch.object(ur, "version_range", counting):
+            m = agg(calls)
+        self.assertEqual(m.total.calls, 12)
+        self.assertEqual(set(counter.values()), {1})
+        self.assertEqual(len(counter), 12)
+        self.assertEqual(m.total.versions[1].calls, 12)    # y el resultado no cambia
+
+
+class ReaderRandomKey(ReaderBase):
+    """T4 (Minor 6): call_id, session y agent_key llevan una clave aleatoria por ejecucion."""
+
+    def _tree(self):
+        tree = us.Tree(self.base)
+        tree.main_session("c--p", "s1", [us.skill_line("a1", SK_TS % 1, ["brainstorm"])])
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", SK_TS % 2)])
+        tree.subagent("c--p", "s1", "a2", [us.assistant("m2", SK_TS % 3)], meta={"agentType": "pl:" + us.M_TYPE})
+        tree.subagent("c--p", "s1", "a3", [us.assistant("m3", SK_TS % 4)], meta=None)
+        return tree
+
+    def test_two_default_reads_give_different_identifiers_but_the_same_aliases(self):
+        tree = self._tree()
+        a, b = self.read(tree), self.read(tree)
+        self.assertEqual(len(a.calls), 3)
+        for x, y in zip(a.calls, b.calls):
+            self.assertNotEqual(x.call_id, y.call_id)
+            self.assertNotEqual(x.session, y.session)
+            self.assertEqual(x.project, y.project)           # el alias del reporte global si es estable
+            self.assertEqual((x.agent, x.agent_group, x.input_tokens), (y.agent, y.agent_group, y.input_tokens))
+        self.assertNotEqual(a.calls[0].agent_key, b.calls[0].agent_key)
+        self.assertNotEqual(a.skill_uses[0].session, b.skill_uses[0].session)
+        # las claves por agente siguen distinguiendo agentes dentro de una ejecucion
+        self.assertEqual(len({c.agent_key for c in a.calls}), 3)
+        self.assertNotEqual(a._key, b._key)
+        self.assertEqual(len(a._key), 16)
+
+    def test_fixed_key_is_reproducible_and_changes_every_identifier(self):
+        tree = self._tree()
+        a = ur.read_calls(tree.claude_dir, digest_key=b"1" * 16)
+        b = ur.read_calls(tree.claude_dir, digest_key=b"1" * 16)
+        c = ur.read_calls(tree.claude_dir, digest_key=b"2" * 16)
+        self.assertEqual(a.calls, b.calls)
+        for x, z in zip(a.calls, c.calls):
+            self.assertNotEqual((x.call_id, x.session, x.agent_key), (z.call_id, z.session, z.agent_key))
+        # y no son el resumen sin clave de nada que un tercero pueda recalcular
+        for x in a.calls:
+            self.assertNotEqual(x.session, ur._digest("c--p\0s1").hex())
+            self.assertNotEqual(x.call_id, ur._digest("c--p\0s1\0agent-a1").hex())
+
+    def test_aggregates_and_metrics_hold_no_identifier_of_the_run(self):
+        tree = self._tree()
+        res = self.read(tree)
+        m = ur.aggregate_calls(res, today=TODAY)
+        text = repr(m) + repr(m.skills) + repr(m.agents) + repr(m.groups) + repr(m.projects)
+        text += repr(m.quality) + repr(m.read_quality) + repr(m.skills.quality)
+        self.assertEqual(m.total.calls, 3)
+        for c in res.calls:
+            for ident in (c.call_id, c.session, c.agent_key):
+                self.assertNotIn(ident, text)
+        for u in res.skill_uses:
+            self.assertNotIn(u.session, text)
+        self.assertNotIn(res._key.hex(), text)
+        self.assertNotIn(repr(res._key), text)
+        self.assert_no_markers(text)
+        # tampoco ningun hex de 16 caracteres (el patron de los resumenes); el alias p-<8 hex> es de 8
+        self.assertEqual(re.findall(r"\b[0-9a-f]{16}\b", text), [])
+
+    def test_call_record_is_never_serialised_by_the_tool(self):
+        # T5 a T7 no deben serializar un CallRecord ni un SkillUse (asdict, vars, pickle, __dict__):
+        # llevan resumenes con la clave de la ejecucion. Esta prueba revisa el codigo de la herramienta.
+        with open(SCRIPT, "rb") as f:
+            tree = ast.parse(f.read().decode("utf-8"))
+        banned = {"asdict", "astuple", "vars", "pickle", "marshal", "shelve", "__dict__", "copyreg",
+                  "__reduce__", "__getstate__", "__reduce_ex__", "__getstate__", "fields", "copy", "deepcopy",
+                  "getmembers", "__slots__", "__repr__", "__str__", "__format__", "__setstate__"}
+        seen = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id in banned:
+                seen.add(node.id)
+            elif isinstance(node, ast.Attribute) and node.attr in banned:
+                seen.add(node.attr)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    if alias.name.split(".")[0] in banned:
+                        seen.add(alias.name)
+        self.assertEqual(seen, set())
+        # `str(call)` / `repr(call)` / `format(call)` / f-string sobre un CallRecord o un SkillUse: ninguna
+        # llamada a str/repr/format/print recibe `call`, `c`, `use`, `u` ni sus campos con clave
+        keyed = {"call_id", "session", "agent_key", "seq", "_key"}
+        used = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in (
+                    "str", "repr", "format", "print", "ascii"):
+                for arg in node.args:
+                    for sub in ast.walk(arg):
+                        if isinstance(sub, ast.Attribute) and sub.attr in keyed:
+                            used.add(sub.attr)
+                        if isinstance(sub, ast.Name) and sub.id in ("call", "use", "calls", "uses", "res"):
+                            used.add(sub.id)
+            elif isinstance(node, ast.FormattedValue):
+                for sub in ast.walk(node.value):
+                    if (isinstance(sub, ast.Attribute) and sub.attr in keyed) or (
+                            isinstance(sub, ast.Name) and sub.id in ("call", "use", "calls", "uses")):
+                        used.add("f-string")
+        self.assertEqual(used, set())
+        # y la autoprueba: el criterio ve un uso prohibido
+        probe = ast.parse("import pickle\nx = dataclasses.asdict(c)\ny = vars(c)\nz = c.__dict__\n"
+                          "w = getattr(c, '__dict__')\nv = dataclasses.fields(c)\nu = copy.copy(c)\n"
+                          "t = c.__repr__()")
+        found = {n.id for n in ast.walk(probe) if isinstance(n, ast.Name)} | \
+                {n.attr for n in ast.walk(probe) if isinstance(n, ast.Attribute)} | \
+                {n.value for n in ast.walk(probe) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+        self.assertTrue(found & banned >= {"asdict", "vars", "__dict__", "fields", "copy", "__repr__"})
+        for snippet in ("x = str(call)", "x = repr(u.session)", "x = format(c.call_id)", "print(call.agent_key)",
+                        "x = f'{call.session}'", "x = f'{uses}'"):
+            probe = ast.parse(snippet)
+            hit = False
+            for node in ast.walk(probe):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in (
+                        "str", "repr", "format", "print", "ascii"):
+                    hit = hit or any(
+                        (isinstance(sub, ast.Attribute) and sub.attr in keyed)
+                        or (isinstance(sub, ast.Name) and sub.id in ("call", "use", "calls", "uses", "res"))
+                        for arg in node.args for sub in ast.walk(arg))
+                elif isinstance(node, ast.FormattedValue):
+                    hit = hit or any(
+                        (isinstance(sub, ast.Attribute) and sub.attr in keyed)
+                        or (isinstance(sub, ast.Name) and sub.id in ("call", "use", "calls", "uses"))
+                        for sub in ast.walk(node.value))
+            self.assertTrue(hit, snippet)
+        # los identificadores con clave tienen repr=False (marcadores en los campos de la llamada)
+        for cls, names in ((ur.CallRecord, ("call_id", "session", "agent_key", "seq")), (ur.SkillUse, ("session",))):
+            by_name = {f.name: f for f in dataclasses.fields(cls)}
+            for name in names:
+                self.assertFalse(by_name[name].repr, "%s.%s" % (cls.__name__, name))
+        call = mk(1, call_id="MARK-CALL-ID", session="MARK-SESSION", agent_key="MARK-AGENT-KEY", seq=987654)
+        use = su(1, session="MARK-USE-SESSION")
+        for text in (repr(call), str(call), repr(use), str(use)):
+            for marker in ("MARK-CALL-ID", "MARK-SESSION", "MARK-AGENT-KEY", "987654", "MARK-USE-SESSION"):
+                self.assertNotIn(marker, text)
+        self.assertIn("agent='forge'", repr(call))      # y el resto de los campos si salen
+
+
+class ReaderDeterminism(ReaderBase):
+    """T4 (auditor, Important): mismos argumentos y mismos datos dan las mismas metricas aunque la clave
+    aleatoria de cada lectura cambie. Ningun orden ni desempate puede depender de call_id, session o
+    agent_key (llevan la clave): el desempate es el ordinal de recorrido `seq`."""
+
+    ALL = ur.make_window(TODAY, all_time=True)
+
+    def _tie_tree(self, base=None):
+        # A (forge) y B (scout) empiezan y terminan a la vez; C (forge) viene despues, en la misma sesion
+        tree = us.Tree(base or self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("ma", T0 + "1Z")], meta={"agentType": "forge"})
+        tree.subagent("c--p", "s1", "a2", [us.assistant("mb", T0 + "1Z")], meta={"agentType": "scout"})
+        tree.subagent("c--p", "s1", "a3", [us.assistant("mc", T0 + "5Z")], meta={"agentType": "forge"})
+        return tree
+
+    def _metrics(self, tree):
+        res = self.read(tree, check_damage=False)       # sin digest_key: clave aleatoria nueva
+        return ur.aggregate_calls(res, window=self.ALL, check_damage=False)
+
+    def test_ties_on_start_and_end_give_the_same_metrics_in_every_read(self):
+        tree = self._tie_tree()
+        first = self._metrics(tree)
+        for _ in range(20):
+            again = self._metrics(tree)
+            self.assertEqual(again, first)
+            self.assertEqual(repr(again), repr(first))
+        # el orden de recorrido (a1, a2, a3) manda: B (scout) queda entre A y C, asi que C no repite
+        self.assertEqual(first.total.repeats, 0)
+
+    def test_ties_give_the_same_metrics_when_the_tied_pair_is_the_same_agent(self):
+        tree = us.Tree(self.base)
+        for i, agent in enumerate(("forge", "forge", "scout", "forge", "scout")):
+            ts = T0 + ("1Z" if i < 3 else "5Z")
+            tree.subagent("c--p", "s1", "a%d" % i, [us.assistant("m%d" % i, ts)], meta={"agentType": agent})
+        first = self._metrics(tree)
+        for _ in range(20):
+            self.assertEqual(self._metrics(tree), first)
+
+    def test_metrics_do_not_depend_on_the_random_key_over_the_rich_tree(self):
+        tree = rich_tree(self.base)
+        self._tie_tree()
+        us.Tree(self.base).subagent("c--q", "s7", "b1", [us.assistant("n1", T0 + "2Z")], meta={"agentType": "plugin:x"})
+        first = self._metrics(tree)
+        self.assertGreater(first.total.calls, 5)
+        seen_keys = set()
+        for _ in range(8):
+            res = self.read(tree, check_damage=False)
+            seen_keys.add(res._key)
+            m = ur.aggregate_calls(res, window=self.ALL, check_damage=False)
+            self.assertEqual(m, first)
+            self.assertEqual(repr(m), repr(first))
+        self.assertGreater(len(seen_keys), 1)            # las claves SI cambiaron entre lecturas
+
+    def test_seq_is_the_traversal_ordinal_and_stays_out_of_repr(self):
+        tree = self._tie_tree()
+        res = self.read(tree)
+        self.assertEqual([c.seq for c in res.calls], [0, 1, 2])
+        self.assertNotIn("seq", repr(res.calls[0]))
+        # y no cambia con la clave
+        again = self.read(tree)
+        self.assertEqual([c.seq for c in again.calls], [0, 1, 2])
+
+    def test_call_record_and_skill_use_repr_hold_no_run_identifier(self):
+        tree = self._tie_tree()
+        tree.main_session("c--p", "s1", [us.skill_line("k1", SK_TS % 1, ["brainstorm"])])
+        res = self.read(tree)
+        for c in res.calls:
+            text = repr(c) + str(c)
+            for ident in (c.call_id, c.session, c.agent_key):
+                self.assertNotIn(ident, text)
+            for name in ("call_id", "session", "agent_key", "seq"):
+                self.assertNotIn(name + "=", text)
+        self.assertEqual(len(res.skill_uses), 1)
+        for u in res.skill_uses:
+            text = repr(u) + str(u)
+            self.assertNotIn(u.session, text)
+            self.assertNotIn("session=", text)
+
+
+class AgentKeyAndSentinel(ReaderBase):
+    def test_agent_key_uses_the_canonical_name_empty_is_the_default_agent(self):
+        tree = us.Tree(self.base)
+        for i, raw in enumerate(("", "general-purpose", "forge", "")):
+            tree.subagent("c--p", "s1", "a%d" % i, [us.assistant("m%d" % i, T0 + "%dZ" % i)], meta={"agentType": raw})
+        res = self.read(tree)
+        keys = [c.agent_key for c in res.calls]
+        self.assertEqual(keys[0], keys[1])        # "" y general-purpose son el mismo agente
+        self.assertEqual(keys[0], keys[3])
+        self.assertNotEqual(keys[0], keys[2])
+        self.assertEqual(keys[0], ur._digest(ur.DEFAULT_AGENT, res._key).hex())
+        self.assertEqual([c.agent for c in res.calls][:2], ["general-purpose", "general-purpose"])
+        # y el conteo de agentes de un conjunto los junta
+        m = ur.aggregate_calls(res, window=ur.make_window(TODAY, all_time=True))
+        self.assertEqual({g.group: g.agents for g in m.groups}, {"integrado": 1, "SyncLayer": 1})
+        # las repeticiones: "" despues de general-purpose es el mismo agente
+        repeats = ur.repeat_flags([mk(0, agent="general-purpose", agent_group="integrado", agent_key=keys[0],
+                                      **span(1)),
+                                   mk(1, agent="general-purpose", agent_group="integrado", agent_key=keys[1],
+                                      start=dt(10, 10, 0, 5), end=dt(10, 10, 0, 6))])
+        self.assertEqual(repeats, frozenset(["c001"]))
+
+    def test_no_meta_sentinel_is_outside_the_digest_space(self):
+        # la constante anterior era un blake2b de 8 bytes: un agentType fabricado la reproducia y una
+        # llamada con meta se tomaba por una sin meta. Ahora no es un digest hexadecimal.
+        self.assertNotRegex(ur.NO_META_KEY, r"^[0-9a-f]{16}$")
+        self.assertEqual(ur.NO_META_KEY, "<sin-meta>")
+        tree = us.Tree(self.base)
+        crafted = "\0sin-meta"
+        for i in range(2):
+            tree.subagent("c--p", "s1", "a%d" % i, [us.assistant("m%d" % i, T0 + "%dZ" % (i * 3)),
+                                                    us.assistant("n%d" % i, T0 + "%dZ" % (i * 3 + 1))],
+                          meta={"agentType": crafted})
+        tree.subagent("c--p", "s1", "z", [us.assistant("mz", T0 + "9Z")], meta=None)
+        res = self.read(tree)
+        crafted_calls = [c for c in res.calls if c.has_meta]
+        self.assertEqual(len(crafted_calls), 2)
+        for c in res.calls:
+            if c.has_meta:
+                self.assertRegex(c.agent_key, r"^[0-9a-f]{16}$")
+                self.assertNotEqual(c.agent_key, ur.NO_META_KEY)
+            else:
+                self.assertEqual(c.agent_key, ur.NO_META_KEY)
+        # el agente fabricado participa como cualquier otro: su segunda llamada es una repeticion
+        self.assertEqual(ur.repeat_flags(crafted_calls), frozenset([crafted_calls[1].call_id]))
+
+
+class MakeWindowTypes(unittest.TestCase):
+    def test_wrong_types_give_a_clear_value_error_never_a_type_error(self):
+        d = datetime.date
+        bad_values = (datetime.datetime(2026, 3, 31, 12, 0), datetime.datetime(2026, 3, 31, tzinfo=UTC),
+                      "2026-03-31", 20260331, 1.5, True, [d(2026, 3, 31)], b"2026-03-31")
+        for bad in bad_values:
+            with self.subTest(today=bad):
+                with self.assertRaises(ValueError) as cm:
+                    ur.make_window(bad)
+                self.assertEqual(str(cm.exception), ur.MSG_WINDOW_TYPES)
+            with self.subTest(since=bad):
+                with self.assertRaises(ValueError) as cm:
+                    ur.make_window(TODAY, since=bad)
+                self.assertEqual(str(cm.exception), ur.MSG_WINDOW_TYPES)
+            with self.subTest(until=bad):
+                with self.assertRaises(ValueError) as cm:
+                    ur.make_window(TODAY, until=bad)
+                self.assertEqual(str(cm.exception), ur.MSG_WINDOW_TYPES)
+        # `today` ausente solo falla si hace falta; con since y until explicitos no se usa
+        with self.assertRaises(ValueError) as cm:
+            ur.make_window(None)
+        self.assertEqual(str(cm.exception), ur.MSG_WINDOW_TYPES)
+        w = ur.make_window(None, since=d(2026, 3, 1), until=d(2026, 3, 2))
+        self.assertEqual((w.since, w.until), (d(2026, 3, 1), d(2026, 3, 2)))
+        # un `today` malo no importa con all_time; la mezcla con fechas se rechaza igual
+        self.assertTrue(ur.make_window("x", all_time=True).is_all)
+        with self.assertRaises(ValueError):
+            ur.make_window(TODAY, all_time=True, since=datetime.datetime(2026, 3, 1))
+        # `days` debe ser un entero positivo
+        for days in (0, -3, "30", 2.5, None, True):
+            with self.subTest(days=days):
+                with self.assertRaises(ValueError):
+                    ur.make_window(TODAY, days=days)
+        self.assertEqual(ur.make_window(TODAY, days=1).since, TODAY)
+        # una ventana valida no cambia
+        self.assertEqual(ur.make_window(TODAY).since, d(2026, 3, 2))
+        self.assertEqual(ur.make_window(TODAY, since=d(2026, 3, 10)).until, TODAY)
+        with self.assertRaises(ValueError):
+            ur.make_window(TODAY, since=d(2026, 3, 10), until=d(2026, 3, 9))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,15 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 2, T4)
+
+- `tools/usage_report.py`: conteo de uso de skills desde la sesión principal y los subagentes (sólo
+  `name`, `id` e `input.skill`; nunca `input.args`), con nombres filtrados, conjuntos y agregación pura.
+- Identificadores de llamada, sesión y agente con blake2b y clave aleatoria por ejecución; el orden y
+  los desempates usan un ordinal de recorrido determinista (`seq`) para que el reporte sea idéntico
+  entre ejecuciones.
+- `docs/plans/2026-11-19-fase2-reporte-de-uso.md`: `CHK_TS` verificado con datos reales y notas para T5 a T7.
+
 ### Añadido (Fase 2, T3)
 
 - `tools/usage_report.py`: agregación pura sin E/S (`aggregate_calls`, `make_window`, `distribution`):

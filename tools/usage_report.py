@@ -357,8 +357,10 @@ def _iter_objects(f, info: _LineInfo):
             info.not_object += 1
 
 
-def _digest(value: str) -> bytes:
-    return hashlib.blake2b(value.encode("utf-8", "surrogatepass"), digest_size=8).digest()
+def _digest(value: str, key: bytes = b"") -> bytes:
+    """Resumen blake2b de 8 bytes. Con `key` (clave por ejecucion, ver read_calls) el resumen no se
+    puede recalcular desde fuera de la ejecucion; sin ella solo sirve para conjuntos en memoria."""
+    return hashlib.blake2b(value.encode("utf-8", "surrogatepass"), digest_size=8, key=key).digest()
 
 
 class _Stats:
@@ -702,6 +704,27 @@ def _scan_project_folder(folder: str, st: _Stats) -> None:
 # tabla 3.3 del plan: en las lineas `type`, `timestamp`, `version`, `message`; en `message`
 # `id`, `model`, `usage` (cuatro campos numericos) y `content`; en cada bloque `type` e `id`;
 # en el meta `agentType` y `model`. Nada mas.
+#
+# T4 (skills): de un bloque `tool_use` de nombre `Skill` se lee ademas `name` e `input.skill`; NUNCA
+# `input.args` (puede llevar contenido). Se leen las lineas `assistant` de la sesion principal
+# (`<sesion>.jsonl`) y las de cada subagente. El origen de una invocacion sale del ARCHIVO donde esta
+# (sesion principal o subagente, y el agente de ese archivo), no de `isSidechain` ni de `agentId`: asi no
+# se lee ninguna clave mas. La hora es la de la linea del tool_use. Los topes (tamano, ids, lineas), la
+# firma estructural y la regla "un archivo omitido a mitad no deja nada" son los del lector de subagentes;
+# los enlaces duros SI se aceptan en subagentes (decision G1) y NO en sesiones principales (G1 no los
+# observo ahi: se rechazan y se cuentan). Los identificadores internos (`call_id`, `session`, `agent_key`)
+# son resumenes con una clave aleatoria por ejecucion (read_calls): un CallRecord o un SkillUse no debe
+# serializarse jamas (T5 a T7: nada de asdict, vars, pickle ni __dict__; una prueba lo vigila).
+#
+# LIMITACIONES DEL CONTEO DE SKILLS (SKILL_LIMITATIONS, que T5 vuelca en "Como leer estos numeros"):
+#   (a) Un subagente con una linea intermedia corrupta conserva sus skills (su llamada queda danada para
+#       los tokens, no para las skills), y una sesion principal con lineas corruptas tambien se lee: una
+#       linea corrupta puede esconder una invocacion, y eso es un subconteo SILENCIOSO.
+#   (b) Las skills que el usuario invoca con `/nombre` no generan un `tool_use` de Skill y no se cuentan.
+#   Las sesiones principales omitidas (enlace duro, tope de tamano, ilegibles) si avisan: salen en
+#   `ReadResult.warnings` (WARN_MAIN_*) y en `read_quality`.
+# Los nombres de skill de USUARIO salen tal cual (si pasan SKILL_NAME_RE), a diferencia de los agentes de
+# usuario, que salen como `(otro agente)`: riesgo de privacidad asimetrico (ver SKILL_NAME_RE; T6).
 
 # Ultima version de Claude Code contra la que se verifico el formato (G1: 2.1.287 a 2.1.326).
 VERIFIED_MAX = "2.1.326"
@@ -720,8 +743,33 @@ BUILTIN_AGENTS = frozenset((
 DEFAULT_AGENT = "general-purpose"
 OTHER_AGENT = "(otro agente)"
 NO_META_AGENT = "(sin-meta)"
-# Clave interna de las llamadas sin meta: una constante, para que nunca se tomen por "el mismo agente".
-NO_META_KEY = hashlib.blake2b(b"\0sin-meta", digest_size=8).hexdigest()
+# Clave interna de las llamadas sin meta: una constante FUERA del espacio de los resumenes (los
+# resumenes son 16 caracteres hexadecimales; esta cadena no lo es), para que ningun agentType fabricado
+# la reproduzca y para que nunca se tomen por "el mismo agente".
+NO_META_KEY = "<sin-meta>"
+# Skills: igual que los agentes, el nombre visible sale de listas cerradas o de un patron estrecho. Un
+# nombre con ":" es de un plugin y solo se muestra su PREFIJO validado (como en classify_agent). Un nombre
+# que no pasa el patron se muestra como "(otra skill)". El nombre de una skill es configuracion, no
+# contenido de conversacion, pero puede revelar nombres privados (de skills de usuario, que se muestran
+# si pasan el patron, y de plugins, por el prefijo): riesgo aceptado y documentado (T8).
+# ASIMETRIA DE PRIVACIDAD: un agente de usuario sale como `(otro agente)` (lista cerrada), pero una skill
+# de usuario sale TAL CUAL su nombre si pasa el patron. T6 debe valorar, para el reporte global
+# compartible, agrupar las skills de usuario como `(otra skill)` salvo una lista cerrada de integradas.
+# El patron no admite ":" (los nombres con ":" son de plugin y se tratan antes, en classify_skill).
+SKILL_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
+OTHER_SKILL = "(otra skill)"
+# SyncLayer no distribuye skills hoy: el conjunto existe para cuando las haya (una prueba lo fija vacio).
+# Si algun dia hay un `skills/` en el repositorio, derivar el conjunto de sus nombres (como los agentes,
+# que una prueba compara con agents/*.md) en lugar de mantener la lista a mano.
+SYNCLAYER_SKILLS = frozenset()
+# Skills integradas de Claude Code que se reconocen por nombre. VACIA a proposito: ninguna fuente del
+# repositorio (G1 incluida) verifica nombres de skills integradas, y los comandos (`init`, `review`,
+# `security-review`...) no son skills. Hasta tener evidencia, toda skill sale en el conjunto "otros"
+# (visible si pasa el patron). Aunque se llene, un nombre de la lista NO distingue una skill integrada de
+# una skill de usuario con el mismo nombre: sale como "integrado" igualmente, y el reporte debe decirlo.
+BUILTIN_SKILLS = frozenset()
+ORIGIN_MAIN = "sesion"          # la skill se invoco en la sesion principal
+ORIGIN_SUBAGENT = "subagente"   # la skill se invoco dentro de un subagente
 # Alias de modelo que el meta puede traer en lugar de un id completo (lista cerrada).
 # "inherit" NO esta: no es un modelo (el subagente hereda el del padre), se trata como ausente.
 MODEL_ALIASES = frozenset(("opus", "sonnet", "haiku", "fable"))
@@ -735,10 +783,32 @@ WARN_ID_REPEATED = ("hay message.id repetidos entre archivos (p. ej. agentes rea
                     "segundo archivo no suma esas peticiones")
 WARN_ID_CAP = ("se alcanzo el tope de ids para deduplicar entre archivos: puede haber peticiones "
                "repetidas sin detectar")
+WARN_SKILL_ID_REPEATED = ("hay tool_use de Skill con el mismo id en varios archivos (p. ej. agentes "
+                          "reanudados): la segunda aparicion no se cuenta")
+WARN_SKILL_ID_CAP = ("se alcanzo el tope de ids de Skill para deduplicar entre archivos: puede haber "
+                     "invocaciones repetidas sin detectar")
+WARN_MAIN_HARDLINK = ("hay sesiones principales omitidas por ser enlaces duros: sus invocaciones de "
+                      "Skill no se cuentan")
+WARN_MAIN_CAP = ("hay sesiones principales omitidas por superar el tope de tamano: sus invocaciones de "
+                 "Skill no se cuentan")
+WARN_MAIN_UNREADABLE = "hay sesiones principales ilegibles: sus invocaciones de Skill no se cuentan"
+
+# Limitaciones del conteo de skills: texto fijo para "Como leer estos numeros" (T5), como
+# REPEAT_LIMITATIONS. Las dos son subconteos SILENCIOSOS (el lector no puede saber que se perdio algo).
+SKILL_LIMITATIONS = (
+    "Una linea corrupta en medio de una sesion principal o de un subagente se descarta y puede esconder"
+    " una invocacion de Skill: el conteo de skills puede ser menor que el real.",
+    "Las skills que el usuario invoca con /nombre no generan un bloque tool_use de Skill y no se cuentan:"
+    " solo se cuentan las que invoca el modelo.",
+)
 
 # Comprobaciones de esquema (exit 3). Los nombres salen en el mensaje: texto fijo.
 CHK_USAGE_OBJ = "usage presente y no es objeto"
 CHK_TOKENS = "campo de tokens que no es entero no negativo"
+# Verificado con datos reales en G1+: 0 lineas user/assistant sin timestamp (el 100 % de las lineas `user`,
+# `assistant`, `attachment` y `system` lo traen) y 0 lineas corruptas; solo `file-history-snapshot`,
+# `last-prompt` y similares carecen de el, y la firma estructural no los exige. Vale tambien para las
+# sesiones principales (CHK_TS y CHK_NO_TYPE se aplican a ellas con la misma firma).
 CHK_TS = "timestamp ausente o no interpretable"
 CHK_META = "meta que no es objeto JSON o sin agentType cadena"
 CHK_NO_TYPE = "archivo con lineas validas y ninguna con type"
@@ -800,16 +870,54 @@ def classify_agent(raw):
     return OTHER_AGENT, "otros"
 
 
+def classify_skill(raw):
+    """(nombre visible, conjunto) de un `input.skill`.
+
+    Igual que classify_agent: SyncLayer e integrado salen de listas cerradas; un nombre con ":" es de un
+    plugin y solo se muestra el PREFIJO validado con PLUGIN_PREFIX_RE, como `plugin:<prefijo>` (nombre
+    y conjunto); lo que hay tras el primer ":" nunca se muestra. El resto pasa por SKILL_NAME_RE y se
+    muestra tal cual (conjunto "otros"); lo que no la cumple, o no es una cadena, es "(otra skill)".
+
+    PRIVACIDAD: los nombres de skill de USUARIO salen tal cual, a diferencia de los agentes de usuario
+    (que salen como `(otro agente)`): riesgo asimetrico. T6 debe valorar agrupar las skills de usuario en
+    el reporte global compartible (opcion: `(otra skill)` salvo una lista cerrada de integradas)."""
+    if isinstance(raw, str):
+        if raw in SYNCLAYER_SKILLS:
+            return raw, "SyncLayer"
+        if raw in BUILTIN_SKILLS:
+            return raw, "integrado"
+        if ":" in raw:
+            prefix = raw.split(":", 1)[0]
+            if PLUGIN_PREFIX_RE.match(prefix):
+                label = "plugin:" + prefix
+                return label, label
+            return OTHER_SKILL, "plugin:(no-valido)"
+        if SKILL_NAME_RE.match(raw):
+            return raw, "otros"
+    return OTHER_SKILL, "otros"
+
+
 @dataclasses.dataclass(frozen=True)
 class CallRecord:
     """Una llamada a un subagente (un agent-<id>.jsonl). Sin contenido: solo numeros y
     etiquetas de listas cerradas. Los identificadores son resumenes (blake2b de 64 bits) para
     agrupar en memoria; no se escriben en ningun reporte.
 
-    `agent_key`: resumen blake2b de 8 bytes del `agentType` CRUDO del meta (NO_META_KEY sin meta).
+    `agent_key`: resumen blake2b de 8 bytes (con la clave de la ejecucion) del NOMBRE CANONICO del
+    agente: el `agentType` crudo del meta, con "" equivalente a DEFAULT_AGENT (NO_META_KEY sin meta).
     Es la identidad interna del agente: las etiquetas visibles (`agent`, `agent_group`) juntan
     agentes distintos ("(otro agente)", "plugin:<prefijo>"), la clave no. Solo T3 la usa (repeticiones
     y numero de agentes por conjunto); no entra en `repr`/`str` ni en ningun reporte.
+
+    `call_id`, `session` y `agent_key` llevan la clave aleatoria de la ejecucion: no se pueden
+    recalcular desde fuera ni comparar entre ejecuciones. Los tres (y `seq`) tienen `repr=False`: ni
+    `repr` ni `str` de un CallRecord los muestran. Un CallRecord no se serializa nunca (T5 a T7).
+
+    `seq`: ordinal de recorrido, 0, 1, 2... en el orden DETERMINISTA de enumeracion de `read_calls`
+    (carpetas, sesiones y archivos ordenados por nombre). Es el unico desempate permitido cuando dos
+    llamadas coinciden en una clave de orden visible: `call_id`, `session` y `agent_key` cambian en cada
+    ejecucion (clave aleatoria) y ordenar o desempatar con ellos haria que los mismos datos dieran
+    metricas distintas (3.6: mismos argumentos, mismos bytes). No se escribe en ningun reporte.
 
     `damage` (None | "linea intermedia corrupta" | "ilegible" | "tope") marca una llamada EXCLUIDA
     de las estadisticas de tokens (propiedad `excluded`). Con "linea intermedia corrupta" la
@@ -823,12 +931,13 @@ class CallRecord:
     `fallback_time`: mtime del archivo (del fstat del descriptor ya abierto), en UTC. Es una
     hora APROXIMADA (la ultima escritura, no el inicio de la llamada) y solo sirve para ubicar en
     una ventana las llamadas con `start=None`. None si no se pudo abrir el archivo."""
-    call_id: str
+    call_id: str = dataclasses.field(repr=False)     # resumen con clave: no sale en repr (ver arriba)
     project: str            # alias p-<8 hex> (3.7)
-    session: str            # resumen de la sesion, solo para agrupar
+    session: str = dataclasses.field(repr=False)     # resumen de la sesion, solo para agrupar
     agent: str              # nombre visible (lista cerrada) o "(otro agente)" / "(sin-meta)"
     agent_group: str        # SyncLayer | integrado | plugin:<prefijo> | plugin:(no-valido) | otros | sin-meta
     agent_key: str = dataclasses.field(repr=False)   # identidad interna del agente (ver arriba)
+    seq: int = dataclasses.field(repr=False)         # ordinal de recorrido (ver arriba)
     status: str             # correcta | sin_usage | sin_meta | danada
     damage: object          # None | "linea intermedia corrupta" | "ilegible" | "tope"
     has_meta: bool
@@ -875,15 +984,45 @@ class CallRecord:
         return any(is_unverified(v) for v in self.versions)
 
 
+@dataclasses.dataclass(frozen=True)
+class SkillUse:
+    """Una invocacion de la herramienta Skill (un bloque tool_use de nombre `Skill`). Sin contenido:
+    `skill` y `group` salen de classify_skill (lista cerrada o patron estrecho), nunca `input.args`.
+
+    `origin`: ORIGIN_MAIN (sesion principal) u ORIGIN_SUBAGENT; en este ultimo caso `agent` y
+    `agent_group` son el agente (etiquetas visibles) del archivo de subagente donde se encontro, y en el
+    primero None. `moment`: marca de tiempo de la linea del tool_use (UTC) o None. `session`: resumen con
+    la clave de la ejecucion, el MISMO que el de las llamadas de esa sesion (CallRecord.session); sirve
+    para contar sesiones distintas, no se escribe en ningun reporte y tiene `repr=False`. No se serializa
+    (ver CallRecord)."""
+    skill: str
+    group: str
+    origin: str
+    project: str            # alias p-<8 hex> (3.7)
+    session: str = dataclasses.field(repr=False)   # resumen con clave: no sale en repr
+    moment: object           # datetime UTC o None
+    agent: object           # etiqueta visible del agente o None
+    agent_group: object
+
+
 class ReadResult:
     def __init__(self):
         self.calls = []
+        self.skill_uses = []                   # SkillUse, en el orden del recorrido
+        self._key = b""                        # clave de los resumenes (la fija read_calls)
+        self._seen_skill_ids = set()           # digests de id de tool_use Skill ya contados (entre archivos)
         self.quality = collections.Counter()
         self.schema = collections.Counter()    # comprobacion -> archivos
         self.versions = collections.Counter()  # version filtrada -> archivos
         self.schema_versions = collections.Counter()  # version -> archivos que fallan una comprobacion
         self._seen_ids = set()                 # digests de message.id ya sumados (entre archivos)
         self._seen_inodes = set()              # (st_dev, st_ino) de los hardlinks (nlink > 1) ya leidos
+
+    def release_key(self) -> None:
+        """Olvida la clave de los resumenes (`_key = None`). T7 la invoca cuando ya no se crean mas
+        resumenes (tras leer y agregar): sin la clave, call_id/session/agent_key no se pueden recalcular
+        ni siquiera desde este objeto. `read_calls` NO la libera: las pruebas la necesitan."""
+        self._key = None
 
     @property
     def usage_without_message_id(self) -> bool:
@@ -900,6 +1039,16 @@ class ReadResult:
             out.append(WARN_ID_REPEATED)
         if self.quality["message.id sin deduplicar entre archivos (tope)"] > 0:
             out.append(WARN_ID_CAP)
+        if self.quality["skills: id repetido entre archivos"] > 0:
+            out.append(WARN_SKILL_ID_REPEATED)
+        if self.quality["skills: ids sin deduplicar (tope)"] > 0:
+            out.append(WARN_SKILL_ID_CAP)
+        if self.quality["sesiones principales omitidas por enlace duro"] > 0:
+            out.append(WARN_MAIN_HARDLINK)
+        if self.quality["sesiones principales omitidas por tope de tamano"] > 0:
+            out.append(WARN_MAIN_CAP)
+        if self.quality["sesiones principales ilegibles"] > 0:
+            out.append(WARN_MAIN_UNREADABLE)
         return out
 
 
@@ -918,6 +1067,8 @@ class _CallAcc:
         self.usage_no_id = []
         self.tools = set()
         self.synthetic = 0
+        self.skills = []       # (digest del id o None, nombre visible, conjunto, hora, nombre era cadena)
+        self.skill_ids = set()
 
 
 def _parse_ts(value):
@@ -944,7 +1095,8 @@ def _token_tuple(usage: dict):
     return tuple(out)
 
 
-def _acc_line(obj: dict, acc: _CallAcc) -> None:
+def _acc_head(obj: dict, acc: _CallAcc):
+    """Parte comun a los dos lectores: tipo, version y hora de la linea. Devuelve (type, hora UTC)."""
     acc.lines += 1
     kind = obj.get("type")
     if isinstance(kind, str):
@@ -961,6 +1113,50 @@ def _acc_line(obj: dict, acc: _CallAcc) -> None:
             acc.first = ts
         if acc.last is None or ts > acc.last:
             acc.last = ts
+    return kind, ts
+
+
+def _acc_skill(block: dict, ts, acc: _CallAcc) -> None:
+    """Una invocacion de la herramienta Skill: de un bloque tool_use solo `name`, `id` e `input.skill`
+    (NUNCA `input.args`). Se deduplica por el id del bloque dentro del archivo; un bloque sin id (o con un
+    id que no es cadena) cuenta cada vez que aparece. El nombre se clasifica aqui: no se conserva crudo."""
+    if block.get("name") != "Skill":
+        return
+    block_id = block.get("id")
+    key = None
+    if isinstance(block_id, str):
+        key = _digest(block_id)
+        if key in acc.skill_ids:
+            return
+        if len(acc.skill_ids) >= MAX_IDS_PER_FILE:
+            raise _TooBig()
+        acc.skill_ids.add(key)
+    if len(acc.skills) >= MAX_IDS_PER_FILE:
+        raise _TooBig()
+    tool_input = block.get("input")
+    raw = tool_input.get("skill") if isinstance(tool_input, dict) else None
+    label, group = classify_skill(raw)
+    acc.skills.append((key, label, group, ts, isinstance(raw, str)))
+
+
+def _acc_main_line(obj: dict, acc: _CallAcc) -> None:
+    """Linea de la sesion principal: solo las invocaciones de Skill de las lineas `assistant` de
+    peticiones reales (no `<synthetic>`)."""
+    kind, ts = _acc_head(obj, acc)
+    if kind != "assistant":
+        return
+    message = obj.get("message")
+    if not isinstance(message, dict) or message.get("model") == SYNTHETIC_MODEL:
+        return
+    content = message.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                _acc_skill(block, ts, acc)
+
+
+def _acc_line(obj: dict, acc: _CallAcc) -> None:
+    kind, ts = _acc_head(obj, acc)
     if kind != "assistant":
         return
     message = obj.get("message")
@@ -1001,6 +1197,7 @@ def _acc_line(obj: dict, acc: _CallAcc) -> None:
                     if key not in acc.tools and len(acc.tools) >= MAX_IDS_PER_FILE:
                         raise _TooBig()
                     acc.tools.add(key)
+                _acc_skill(block, ts, acc)
 
 
 def _model_label(raw, allow_alias: bool):
@@ -1171,11 +1368,13 @@ def _read_call(sub_dir, name, kinds, folder_name, sid, res: ReadResult) -> None:
     if group == "sin-meta":
         q["llamadas sin meta"] += 1
     res.calls.append(CallRecord(
-        call_id=_digest(folder_name + "\0" + sid + "\0" + stem).hex(),
-        project="p-" + hashlib.sha256(folder_name.lower().encode("utf-8", "surrogatepass")).hexdigest()[:8],
-        session=_digest(folder_name + "\0" + sid).hex(),
+        seq=len(res.calls),    # ordinal de recorrido (CallRecord.seq)
+        call_id=_digest(folder_name + "\0" + sid + "\0" + stem, res._key).hex(),
+        project=_project_alias(folder_name),
+        session=_session_digest(folder_name, sid, res._key),
         agent=agent, agent_group=group, status=status, damage=damage,
-        agent_key=_digest(agent_raw).hex() if (present and not meta_bad) else NO_META_KEY,
+        # nombre canonico: agentType "" y general-purpose son el mismo agente
+        agent_key=_digest(agent_raw or DEFAULT_AGENT, res._key).hex() if (present and not meta_bad) else NO_META_KEY,
         has_meta=present and not meta_bad, has_usage=has_usage,
         models=models,
         model=("mixto" if len(models) > 1 else models[0]) if models else "(desconocido)",
@@ -1187,6 +1386,87 @@ def _read_call(sub_dir, name, kinds, folder_name, sid, res: ReadResult) -> None:
         versions=tuple(sorted(acc.versions, key=lambda v: (version_key(v), v))),
         hardlink=hardlink, oversize_lines=info.oversize, background=None,
     ))
+    if failure is None:   # un archivo omitido a mitad de lectura (acc reiniciado) no deja skills
+        _merge_skills(acc, res, folder_name, sid, ORIGIN_SUBAGENT, agent, group)
+
+
+def _project_alias(folder_name: str) -> str:
+    """Alias del proyecto en el reporte global (3.7): p- y 8 hex del SHA-256 del nombre en minusculas.
+    Estable entre ejecuciones a proposito (no lleva la clave de la ejecucion)."""
+    return "p-" + hashlib.sha256(folder_name.lower().encode("utf-8", "surrogatepass")).hexdigest()[:8]
+
+
+def _session_digest(folder_name: str, sid: str, key: bytes) -> str:
+    return _digest(folder_name + "\0" + sid, key).hex()
+
+
+def _merge_skills(acc: _CallAcc, res: ReadResult, folder_name, sid, origin, agent, agent_group) -> None:
+    """Pasa las invocaciones de Skill de UN archivo (leido sin fallos) al resultado. Un id de tool_use ya
+    contado en otro archivo no se vuelve a contar (se anota y avisa); pasado MAX_IDS_GLOBAL no se recuerdan
+    ids nuevos (no se omite nada: se cuenta aparte y avisa). El primer archivo del recorrido gana: la sesion
+    principal antes que los subagentes de su sesion."""
+    q = res.quality
+    seen = res._seen_skill_ids
+    project = _project_alias(folder_name)
+    session = _session_digest(folder_name, sid, res._key)
+    for key, label, skill_group, ts, named in acc.skills:
+        if key is None:
+            q["skills: tool_use sin id"] += 1
+        elif key in seen:
+            q["skills: id repetido entre archivos"] += 1
+            continue
+        elif len(seen) < MAX_IDS_GLOBAL:
+            seen.add(key)
+        else:
+            q["skills: ids sin deduplicar (tope)"] += 1
+        if not named:
+            q["skills: nombre no cadena"] += 1
+        res.skill_uses.append(SkillUse(
+            skill=label, group=skill_group, origin=origin, project=project, session=session, moment=ts,
+            agent=agent, agent_group=agent_group))
+
+
+def _read_main(folder_path, folder_name, sid, res: ReadResult) -> None:
+    """Lee `<sesion>.jsonl` SOLO para las invocaciones de Skill (ver la cabecera de la seccion). Los
+    enlaces duros se rechazan y se cuentan; un archivo omitido o ilegible no deja nada."""
+    q = res.quality
+    try:
+        f = _open_regular(os.path.join(folder_path, sid + ".jsonl"))
+    except LinkRefused:
+        q["sesiones principales omitidas por enlace duro"] += 1
+        return
+    except OSError:
+        q["sesiones principales ilegibles"] += 1
+        return
+    acc = _CallAcc()
+    info = _LineInfo()
+    try:
+        with f:
+            if os.fstat(f.fileno()).st_size > MAX_FILE_BYTES:
+                raise _TooBig()
+            for obj in _iter_objects(f, info):
+                _acc_main_line(obj, acc)
+    except _TooBig:
+        q["sesiones principales omitidas por tope de tamano"] += 1
+        return
+    except OSError:
+        q["sesiones principales ilegibles"] += 1
+        return
+    if acc.lines and not acc.typed:
+        acc.schema.add(CHK_NO_TYPE)
+    for check in acc.schema:
+        res.schema[check] += 1
+    for label in acc.versions:
+        res.versions[label] += 1
+        if acc.schema:
+            res.schema_versions[label] += 1
+    q["sesiones principales leidas"] += 1
+    q["lineas corruptas (sesion principal)"] += info.corrupt
+    q["lineas oversize (sesion principal)"] += info.oversize
+    q["lineas que no son objeto (sesion principal)"] += info.not_object
+    if info.truncated_tail:
+        q["sesiones principales con ultima linea truncada"] += 1
+    _merge_skills(acc, res, folder_name, sid, ORIGIN_MAIN, None, None)
 
 
 def _read_session(folder_path, folder_name, sid, res: ReadResult) -> None:
@@ -1209,8 +1489,10 @@ def _read_session(folder_path, folder_name, sid, res: ReadResult) -> None:
 
 
 def _read_project_folder(folder_path, folder_name, res: ReadResult) -> None:
-    for sid, _has_main, has_dir in _enum_sessions(folder_path, res.quality) or ():
-        if has_dir:   # el lector solo abre transcripciones de subagentes
+    for sid, has_main, has_dir in _enum_sessions(folder_path, res.quality) or ():
+        if has_main:   # la sesion principal solo se lee para las invocaciones de Skill (T4)
+            _read_main(folder_path, folder_name, sid, res)
+        if has_dir:
             _read_session(folder_path, folder_name, sid, res)
 
 
@@ -1269,13 +1551,20 @@ def check_damaged(calls) -> None:
             % (damaged, total, MAX_DAMAGED_PERCENT), versions, failing))
 
 
-def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True) -> ReadResult:
-    """Lee todas las llamadas de subagentes bajo <claude_dir>/projects (o solo las del proyecto).
+def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True,
+               digest_key=None) -> ReadResult:
+    """Lee todas las llamadas de subagentes bajo <claude_dir>/projects (o solo las del proyecto) y las
+    invocaciones de Skill de las sesiones principales y de los subagentes (T4).
 
     Lanza EnvError (entorno) o SchemaError (esquema desconocido, o danados sobre el umbral si
     check_damage). No escribe nada. Las llamadas salen en el orden del recorrido (carpetas,
     sesiones y archivos por nombre): la salida es determinista. Una sesion sin transcripciones
-    de subagentes no produce llamadas; el reporte de sesiones sale de las llamadas.
+    de subagentes no produce llamadas (si produce invocaciones de Skill); el reporte de sesiones
+    sale de las llamadas y de las invocaciones.
+
+    `call_id`, `session` y `agent_key` son resumenes blake2b con una clave aleatoria generada aqui,
+    por ejecucion (os.urandom): no se pueden recalcular desde fuera ni comparar entre ejecuciones.
+    `digest_key` (bytes, hasta 64) la fija a mano; solo para pruebas reproducibles.
 
     Con check_damage=False el 5 % de danadas no se comprueba aqui: T3 (aggregate_calls) lo mide
     sobre las llamadas de la ventana. Un message.id repetido entre archivos se atribuye al
@@ -1293,6 +1582,7 @@ def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True) -> 
     if project_dir is not None:
         wanted = derive_folder_name(os.path.abspath(project_dir)).lower()
     res = ReadResult()
+    res._key = digest_key if digest_key is not None else os.urandom(16)
     for name, kind in listing:
         if kind == "link":
             res.quality["enlaces omitidos"] += 1
@@ -1303,6 +1593,7 @@ def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True) -> 
                 _read_project_folder(os.path.join(projects, name), name, res)
     res._seen_ids = None      # memoria: ya no se necesitan al terminar la lectura
     res._seen_inodes = None
+    res._seen_skill_ids = None
     check_schema(res)
     if check_damage:
         check_damaged(res.calls)
@@ -1439,11 +1730,11 @@ def render_inspect(st: _Stats) -> str:
 #     determinista, sin interpolar. `small` marca n < 10 ("n pequeno").
 #   - Duracion: ultima menos primera marca de tiempo, en segundos enteros (medio hacia arriba).
 #   - Repeticiones consecutivas (INFERIDO, no es un reintento confirmado): dentro de una sesion se
-#     ordenan TODAS las llamadas con inicio y fin por (inicio, fin, id); una llamada cuenta si la
-#     anterior en ese orden es del mismo (agente, conjunto) y termino ESTRICTAMENTE antes de que
+#     ordenan TODAS las llamadas con inicio y fin por (inicio, fin, seq); una llamada cuenta si la
+#     anterior en ese orden es del mismo agente (`agent_key`) y termino ESTRICTAMENTE antes de que
 #     esta empezara. Las paralelas y las separadas por otro agente no cuentan. Cuenta la llamada
 #     posterior, y se atribuye a su agente. Una llamada danada que conservo sus horas participa.
-#     "Mismo agente" = misma `agent_key` (resumen del agentType CRUDO), no la misma etiqueta
+#     "Mismo agente" = misma `agent_key` (resumen del NOMBRE CANONICO: "" = general-purpose), no la misma etiqueta
 #     visible: dos agentes de un mismo plugin, o dos agentes de usuario, no se repiten entre si.
 #     Las llamadas SIN meta (clave constante) participan en la cadena (rompen la de otros) pero
 #     nunca se marcan: sin meta no hay identidad de agente. Es una senal INFERIDA con limites
@@ -1454,8 +1745,16 @@ def render_inspect(st: _Stats) -> str:
 #     fila para "sin version" y "version no reconocible"; los contadores de calidad `without_version`
 #     y `unrecognized_version` las separan). El numero de llamadas con versiones en varios rangos
 #     se informa en la calidad de datos.
-#   - Agrupacion: siempre por (agente, conjunto): "(otro agente)" lo comparten usuario y plugins
-#     con prefijo no valido, que son conjuntos distintos.
+#   - Agrupacion: las filas por agente son por (nombre visible, conjunto), nunca solo por nombre:
+#     "(otro agente)" lo comparten los agentes de usuario y los de plugin con prefijo no valido, que son
+#     conjuntos distintos. La IDENTIDAD de un agente es `agent_key` (nombre canonico, "" = general-purpose):
+#     el numero de agentes de un conjunto cuenta `agent_key` distintas, y las repeticiones comparan `agent_key`.
+#   - Skills (T4): una invocacion pertenece a la ventana por la hora de la linea de su tool_use (sin hora,
+#     solo con la ventana "todo"). Se cuentan por skill (nombre visible, conjunto), por conjunto y por
+#     origen (sesion principal / subagente); las de subagentes se enlazan con el agente del archivo donde
+#     estan. Sesiones = resumenes de sesion distintos (los subagentes comparten el de su sesion). Solo
+#     conteos: no se atribuye ningun token, duracion ni costo a una skill (corre en el contexto de la
+#     sesion) y la comparacion con otros conjuntos es de conteos y distribucion, no de calidad ni ahorro.
 
 WINDOW_DAYS = 30
 SMALL_N = 10          # con menos llamadas, mediana y p90 dicen poco
@@ -1467,7 +1766,6 @@ VERSION_RANGES = (RANGE_BEFORE, RANGE_DOUBTFUL, RANGE_AFTER, RANGE_NONE)
 _DOUBTFUL_FROM = (2, 1, 310)
 _DOUBTFUL_TO = (2, 1, 327)
 
-# Contadores de la LECTURA completa (no de la ventana) que se copian al resultado, en orden fijo.
 # Limitaciones de la senal "repeticiones consecutivas": texto fijo para "Como leer estos numeros" (T5).
 REPEAT_LIMITATIONS = (
     "Las repeticiones son una senal inferida por horas de inicio y fin, no un reintento confirmado.",
@@ -1482,7 +1780,10 @@ REPEAT_LIMITATIONS = (
 MSG_TODAY_REQUIRED = "aggregate_calls necesita `today` (o `window`): no lee el reloj"
 MSG_WINDOW_RANGE = "la ventana sale del rango de fechas admitido"
 MSG_WINDOW_INVALID = "ventana invalida: since y until deben ser fechas (datetime.date), ambas o ninguna, y since <= until"
+MSG_WINDOW_TYPES = ("ventana invalida: today, since y until deben ser fechas (datetime.date; no datetime, "
+                    "None ni cadena) y days un entero positivo")
 
+# Contadores de la LECTURA completa (no de la ventana) que se copian al resultado, en orden fijo.
 READ_QUALITY_LABELS = (
     "message.id repetido entre archivos",
     "message.id sin deduplicar entre archivos (tope)",
@@ -1501,6 +1802,19 @@ READ_QUALITY_LABELS = (
     "enlaces omitidos",
     "nombres no validos omitidos",
     "carpetas ilegibles",
+    # skills (T4) y lectura de las sesiones principales
+    "skills: tool_use sin id",
+    "skills: nombre no cadena",
+    "skills: id repetido entre archivos",
+    "skills: ids sin deduplicar (tope)",
+    "sesiones principales leidas",
+    "sesiones principales ilegibles",
+    "sesiones principales omitidas por enlace duro",
+    "sesiones principales omitidas por tope de tamano",
+    "sesiones principales con ultima linea truncada",
+    "lineas corruptas (sesion principal)",
+    "lineas oversize (sesion principal)",
+    "lineas que no son objeto (sesion principal)",
 )
 
 
@@ -1542,15 +1856,29 @@ class Window:
         return self.since <= day <= self.until
 
 
+def _is_date(value) -> bool:
+    """datetime.date, no datetime.datetime (que es subclase de date pero lleva hora)."""
+    return isinstance(value, datetime.date) and not isinstance(value, datetime.datetime)
+
+
 def make_window(today, since=None, until=None, all_time=False, days: int = WINDOW_DAYS) -> Window:
     """Ventana por defecto: las `days` fechas UTC que terminan en `today` (since = until - days + 1).
     `since`/`until` son datetime.date. ValueError si all_time se combina con fechas, si la ventana
-    queda invertida o si sale del rango de fechas de Python (cerca de date.min)."""
+    queda invertida o si sale del rango de fechas de Python (cerca de date.min). Los tipos se validan
+    ANTES de restar o comparar: un datetime, None o una cadena dan ValueError (MSG_WINDOW_TYPES), no un
+    TypeError. `today` solo se valida si hace falta (until ausente)."""
     if all_time:
         if since is not None or until is not None:
             raise ValueError("all_time es incompatible con since/until")
         return Window(None, None)
+    if isinstance(days, bool) or not isinstance(days, int) or days < 1:
+        raise ValueError(MSG_WINDOW_TYPES)
+    for value in (since, until):
+        if value is not None and not _is_date(value):
+            raise ValueError(MSG_WINDOW_TYPES)
     if until is None:
+        if not _is_date(today):
+            raise ValueError(MSG_WINDOW_TYPES)
         until = today
     if since is None:
         try:
@@ -1672,6 +2000,56 @@ class DataQuality:
 
 
 @dataclasses.dataclass(frozen=True)
+class SkillRow:
+    """Una skill (nombre visible y conjunto) en la ventana. Solo conteos."""
+    skill: str
+    group: str
+    calls: int              # invocaciones
+    main_calls: int         # de ellas, desde la sesion principal
+    subagent_calls: int     # de ellas, desde un subagente
+    sessions: int           # sesiones distintas
+
+
+@dataclasses.dataclass(frozen=True)
+class SkillGroupRow:
+    group: str
+    skills: int             # nombres visibles distintos del conjunto
+    calls: int
+    sessions: int
+
+
+@dataclasses.dataclass(frozen=True)
+class SkillAgentRow:
+    """Invocaciones de una skill hechas dentro de subagentes, por agente (etiquetas visibles)."""
+    agent: str
+    agent_group: str
+    skill: str
+    skill_group: str
+    calls: int
+
+
+@dataclasses.dataclass(frozen=True)
+class SkillQuality:
+    uses_read: int          # invocaciones leidas (todas, con o sin hora)
+    in_window: int
+    outside_window: int
+    without_time: int       # sin marca de tiempo (solo entran con la ventana "todo")
+    other_name: int         # en la ventana, con nombre no valido o no cadena: "(otra skill)"
+
+
+@dataclasses.dataclass(frozen=True)
+class SkillMetrics:
+    calls: int
+    sessions: int
+    main_calls: int
+    subagent_calls: int
+    rows: tuple             # SkillRow: llamadas desc., skill, conjunto
+    groups: tuple           # SkillGroupRow: llamadas desc., conjunto
+    by_agent: tuple         # SkillAgentRow: llamadas desc., agente, conjunto, skill, conjunto de la skill
+    quality: SkillQuality
+
+
+@dataclasses.dataclass(frozen=True)
 class UsageMetrics:
     window: Window
     total: ScopeMetrics
@@ -1684,6 +2062,7 @@ class UsageMetrics:
     quality: DataQuality
     read_quality: tuple       # ((etiqueta, n), ...) de la lectura completa (no de la ventana)
     warnings: tuple           # avisos de texto fijo del lector (T5 los muestra en la cabecera)
+    skills: SkillMetrics      # uso de skills en la ventana (T4)
 
 
 def _range_of(key) -> str:
@@ -1745,20 +2124,21 @@ def token_stats(calls) -> TokenStats:
 def repeat_flags(calls) -> frozenset:
     """call_id de las llamadas que repiten a la anterior de su sesion (INFERIDO).
 
-    "Mismo agente" es la misma `agent_key` (agentType crudo), no la misma etiqueta visible. Una
+    "Mismo agente" es la misma `agent_key` (nombre canonico), no la misma etiqueta visible. Una
     llamada sin meta (NO_META_KEY) no se marca nunca, aunque la anterior tambien sea sin meta; si
     participa en la cadena (rompe la de otros agentes). Solo entran las llamadas con `start` y
     `end`: una sin `start` no participa ni rompe la cadena, y si la anterior cayo fuera de la
     ventana (el llamador solo pasa las de la ventana) la primera de la ventana no se marca. Mira
-    solo la anterior inmediata por (start, end, call_id): A1 [0,100], A2 [10,20], A3 [30,40] marca
-    A3 aunque corre en paralelo con A1. Ver REPEAT_LIMITATIONS."""
+    solo la anterior inmediata por (start, end, seq): A1 [0,100], A2 [10,20], A3 [30,40] marca
+    A3 aunque corre en paralelo con A1. Con empate de (start, end) manda el ordinal de recorrido `seq`
+    (determinista), no call_id, que lleva la clave aleatoria de la ejecucion. Ver REPEAT_LIMITATIONS."""
     by_session = collections.defaultdict(list)
     for c in calls:
         if c.start is not None and c.end is not None:
             by_session[c.session].append(c)
     flagged = set()
     for items in by_session.values():
-        items.sort(key=lambda c: (c.start, c.end, c.call_id))
+        items.sort(key=lambda c: (c.start, c.end, c.seq))   # seq: desempate determinista, nunca call_id
         for prev, cur in zip(items, items[1:]):
             if (cur.agent_key != NO_META_KEY and prev.agent_key == cur.agent_key
                     and prev.end < cur.start):
@@ -1766,14 +2146,16 @@ def repeat_flags(calls) -> frozenset:
     return frozenset(flagged)
 
 
-def _scope(calls, flagged) -> ScopeMetrics:
+def _scope(calls, flagged, ranges) -> ScopeMetrics:
+    """`ranges`: rango de version de cada llamada, calculado UNA vez por aggregate_calls (clave: id(c))."""
     live = [c for c in calls if not c.excluded]
     sessions = len({c.session for c in calls})
     durations = [d for d in (_duration_seconds(c) for c in live) if d is not None]
     models = collections.Counter(c.model for c in live)
+    by_range = _by_key(calls, lambda c: ranges[id(c)])
     rows = []
     for name in VERSION_RANGES:
-        in_range = [c for c in calls if version_range(c) == name]
+        in_range = by_range.get(name, [])
         rows.append(VersionRow(name, len(in_range), token_stats(in_range)))
     return ScopeMetrics(
         calls=len(calls),
@@ -1826,10 +2208,57 @@ def _by_key(calls, key):
     return groups
 
 
-def aggregate_calls(source, window=None, today=None, check_damage: bool = True) -> UsageMetrics:
+def skill_metrics(uses, window) -> SkillMetrics:
+    """Conteos de uso de skills en la ventana (ver la cabecera de la seccion). Pura: solo cuenta."""
+    uses = list(uses)
+    inside = []
+    without_time = 0
+    for u in uses:
+        if u.moment is None:
+            without_time += 1
+            if window.is_all:
+                inside.append(u)
+        elif window.contains(u.moment):
+            inside.append(u)
+    rows = []
+    for (skill, group), items in _by_key(inside, lambda u: (u.skill, u.group)).items():
+        rows.append(SkillRow(
+            skill, group, len(items),
+            sum(1 for u in items if u.origin == ORIGIN_MAIN),
+            sum(1 for u in items if u.origin == ORIGIN_SUBAGENT),
+            len({u.session for u in items})))
+    rows.sort(key=lambda r: (-r.calls, r.skill, r.group))
+    groups = []
+    for group, items in _by_key(inside, lambda u: u.group).items():
+        groups.append(SkillGroupRow(group, len({u.skill for u in items}), len(items),
+                                    len({u.session for u in items})))
+    groups.sort(key=lambda g: (-g.calls, g.group))
+    linked = [u for u in inside if u.origin == ORIGIN_SUBAGENT]
+    by_agent = []
+    for (agent, agent_group, skill, group), items in _by_key(
+            linked, lambda u: (u.agent, u.agent_group, u.skill, u.group)).items():
+        by_agent.append(SkillAgentRow(agent, agent_group, skill, group, len(items)))
+    by_agent.sort(key=lambda r: (-r.calls, r.agent, r.agent_group, r.skill, r.skill_group))
+    return SkillMetrics(
+        calls=len(inside),
+        sessions=len({u.session for u in inside}),
+        main_calls=sum(1 for u in inside if u.origin == ORIGIN_MAIN),
+        subagent_calls=len(linked),
+        rows=tuple(rows),
+        groups=tuple(groups),
+        by_agent=tuple(by_agent),
+        quality=SkillQuality(
+            uses_read=len(uses), in_window=len(inside), outside_window=len(uses) - len(inside),
+            without_time=without_time, other_name=sum(1 for u in inside if u.skill == OTHER_SKILL)),
+    )
+
+
+def aggregate_calls(source, window=None, today=None, check_damage: bool = True,
+                    skill_uses=None) -> UsageMetrics:
     """Metricas de uso. `source`: un ReadResult (idealmente de read_calls(check_damage=False)) o
-    cualquier iterable de CallRecord. Sin `window`, la de WINDOW_DAYS dias UTC que terminan en
-    `today`, que el llamador inyecta (T7 usa utc_today()): sin `window` ni `today` lanza ValueError
+    cualquier iterable de CallRecord. `skill_uses`: invocaciones de Skill (SkillUse); por defecto las del
+    ReadResult (una lista de CallRecord no trae ninguna) y, si se pasan, mandan. Sin `window`, la de
+    WINDOW_DAYS dias UTC que terminan en `today`, que el llamador inyecta (T7 usa utc_today()): sin `window` ni `today` lanza ValueError
     (MSG_TODAY_REQUIRED); aqui no se lee el reloj. Con check_damage, lanza SchemaError si mas del
     5 % de las llamadas DE LA VENTANA, mas las danadas sin ninguna hora (fuera de la ventana pero
     contadas por prudencia), esta danado. Pura: no hace E/S y el resultado no depende del orden de
@@ -1838,10 +2267,14 @@ def aggregate_calls(source, window=None, today=None, check_damage: bool = True) 
         calls = list(source.calls)
         warnings = tuple(source.warnings)
         read_quality = tuple((label, int(source.quality[label])) for label in READ_QUALITY_LABELS)
+        if skill_uses is None:
+            skill_uses = source.skill_uses
     else:
         calls = list(source)
         warnings = ()
         read_quality = ()
+    if skill_uses is None:
+        skill_uses = ()
     if window is None:
         if today is None:
             raise ValueError(MSG_TODAY_REQUIRED)
@@ -1861,21 +2294,22 @@ def aggregate_calls(source, window=None, today=None, check_damage: bool = True) 
         # con --all las danadas sin hora ya estan en `inside`: no se cuentan dos veces
         check_damaged(inside if window.is_all else inside + lost)
     flagged = repeat_flags(inside)
-    agents = [AgentMetrics(agent, group, _scope(items, flagged))
+    ranges = {id(c): version_range(c) for c in inside}   # una vez por llamada (no por ambito y rango)
+    agents = [AgentMetrics(agent, group, _scope(items, flagged, ranges))
               for (agent, group), items in _by_key(inside, lambda c: (c.agent, c.agent_group)).items()]
     agents.sort(key=lambda a: (-a.metrics.calls, a.agent, a.group))
     groups = []
     for group, items in _by_key(inside, lambda c: c.agent_group).items():
-        groups.append(GroupMetrics(group, len({c.agent_key for c in items}), _scope(items, flagged)))
+        groups.append(GroupMetrics(group, len({c.agent_key for c in items}), _scope(items, flagged, ranges)))
     groups.sort(key=lambda g: (-g.metrics.calls, g.group))
-    projects = [ProjectMetrics(project, _scope(items, flagged))
+    projects = [ProjectMetrics(project, _scope(items, flagged, ranges))
                 for project, items in _by_key(inside, lambda c: c.project).items()]
     projects.sort(key=lambda p: (-p.metrics.calls, p.project))
     seen = collections.Counter(v for c in inside for v in set(_numeric_versions(c)))
     seen_sorted = tuple(sorted(seen.items(), key=lambda kv: (version_key(kv[0]), kv[0])))
     return UsageMetrics(
         window=window,
-        total=_scope(inside, flagged),
+        total=_scope(inside, flagged, ranges),
         agents=tuple(agents),
         groups=tuple(groups),
         projects=tuple(projects),
@@ -1886,6 +2320,7 @@ def aggregate_calls(source, window=None, today=None, check_damage: bool = True) 
                                  len(lost)),
         read_quality=read_quality,
         warnings=warnings,
+        skills=skill_metrics(skill_uses, window),
     )
 
 
