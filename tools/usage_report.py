@@ -56,6 +56,7 @@ import argparse
 import collections
 import dataclasses
 import datetime
+import functools
 import hashlib
 import json
 import ntpath
@@ -72,6 +73,9 @@ EXIT_SCHEMA = 3
 # leyendola por trozos acotados: la memoria no depende del tamano de la linea.
 MAX_LINE_BYTES = 4 * 1024 * 1024
 MAX_META_BYTES = 64 * 1024
+# Buffer de lectura de las transcripciones JSONL (el de Python es de 8 KiB: con lineas de decenas o
+# cientos de KB cada linea costaba decenas de lecturas). Es memoria de UN archivo abierto a la vez.
+READ_BUFFER = 256 * 1024
 # Tope de tamano de un archivo JSONL (512 MiB). Se comprueba con fstat().st_size y con los
 # bytes realmente leidos (un archivo puede crecer mientras se lee). Pasado el tope el archivo
 # se omite y se cuenta en "archivos omitidos por tope de tamano".
@@ -295,7 +299,7 @@ class _TooBig(Exception):
     """Archivo o conjunto de ids por encima de los topes: se omite el archivo."""
 
 
-def _open_regular(path: str, allow_hardlink: bool = False):
+def _open_regular(path: str, allow_hardlink: bool = False, buffering: int = -1):
     """Abre en binario un archivo regular sin seguir enlaces. Lanza OSError si no lo es.
 
     Rechaza enlaces simbolicos, puntos de reanalisis, no regulares y, salvo allow_hardlink,
@@ -316,7 +320,7 @@ def _open_regular(path: str, allow_hardlink: bool = False):
             raise OSError("cambio de archivo")
         if st2.st_nlink != 1 and not allow_hardlink:
             raise LinkRefused("mas de un enlace duro")
-        return os.fdopen(fd, "rb")
+        return os.fdopen(fd, "rb", buffering)
     except BaseException:
         os.close(fd)
         raise
@@ -1097,15 +1101,21 @@ class _CallAcc:
         self.skill_ids = set()
 
 
+_UTC = datetime.timezone.utc
+
+
 def _parse_ts(value):
     """datetime UTC de un ISO 8601 (sin zona se toma como UTC); None si no se interpreta."""
     if not isinstance(value, str) or len(value) > 64:
         return None
     try:
         dt = datetime.datetime.fromisoformat(value)
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=datetime.timezone.utc)
-        return dt.astimezone(datetime.timezone.utc)
+        tz = dt.tzinfo
+        if tz is None:
+            return dt.replace(tzinfo=_UTC)
+        if tz is _UTC:
+            return dt   # ya es UTC (la "Z" final): astimezone solo copiaria el valor
+        return dt.astimezone(_UTC)
     except (ValueError, OverflowError):
         return None
 
@@ -1115,10 +1125,42 @@ def _token_tuple(usage: dict):
     out = []
     for name in TOKEN_FIELDS:
         value = usage.get(name)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        # `type(...) is int` rechaza bool y todo lo que no sea entero, igual que isinstance doble
+        if type(value) is not int or value < 0:
             return None
         out.append(value)
     return tuple(out)
+
+
+# VERSION_RE y MODEL_RE nunca aceptan mas de 64 caracteres: una cadena mas larga es siempre la etiqueta
+# "otro", y NO entra en la cache (la cache retiene sus claves todo el proceso: una linea de 4 MiB con
+# una version enorme se quedaria en memoria).
+_LABEL_KEY_MAX = 64
+
+
+@functools.lru_cache(maxsize=256)
+def _cached_version_label(value: str) -> str:
+    return hist_label("version", value)
+
+
+@functools.lru_cache(maxsize=256)
+def _cached_model_label(value: str) -> str:
+    return hist_label("model", value)
+
+
+def _version_label(value: str) -> str:
+    """hist_label("version", value) con memoria LRU acotada en entradas (256) y en el tamano de las
+    claves (hasta 64 caracteres): las versiones distintas reales son decenas."""
+    if len(value) > _LABEL_KEY_MAX:
+        return OTHER_LABELS["version"]
+    return _cached_version_label(value)
+
+
+def _model_label_of_line(value: str) -> str:
+    """hist_label("model", value) con la misma memoria acotada que _version_label."""
+    if len(value) > _LABEL_KEY_MAX:
+        return OTHER_LABELS["model"]
+    return _cached_model_label(value)
 
 
 def _acc_head(obj: dict, acc: _CallAcc):
@@ -1129,7 +1171,7 @@ def _acc_head(obj: dict, acc: _CallAcc):
         acc.typed += 1
     version = obj.get("version")
     if isinstance(version, str):
-        acc.versions.add(hist_label("version", version))
+        acc.versions.add(_version_label(version))
     ts = _parse_ts(obj.get("timestamp"))
     if ts is None:
         if kind in ("user", "assistant"):
@@ -1193,7 +1235,7 @@ def _acc_line(obj: dict, acc: _CallAcc) -> None:
         acc.synthetic += 1   # sin peticion real: fuera de modelos, tokens y herramientas
         return
     if isinstance(model, str):
-        acc.models.add(hist_label("model", model))
+        acc.models.add(_model_label_of_line(model))
     if "usage" in message:
         usage = message.get("usage")
         if not isinstance(usage, dict):
@@ -1297,7 +1339,7 @@ def _read_call(sub_dir, name, kinds, folder_name, sid, res: ReadResult) -> None:
     fallback_time = None
     failure = None
     try:
-        with _open_regular(os.path.join(sub_dir, name), allow_hardlink=True) as f:
+        with _open_regular(os.path.join(sub_dir, name), allow_hardlink=True, buffering=READ_BUFFER) as f:
             st = os.fstat(f.fileno())
             # se anotan antes de leer: valen aunque la lectura falle despues
             hardlink = st.st_nlink > 1
@@ -1457,7 +1499,7 @@ def _read_main(folder_path, folder_name, sid, res: ReadResult) -> None:
     enlaces duros se rechazan y se cuentan; un archivo omitido o ilegible no deja nada."""
     q = res.quality
     try:
-        f = _open_regular(os.path.join(folder_path, sid + ".jsonl"))
+        f = _open_regular(os.path.join(folder_path, sid + ".jsonl"), buffering=READ_BUFFER)
     except LinkRefused:
         q["sesiones principales omitidas por enlace duro"] += 1
         return

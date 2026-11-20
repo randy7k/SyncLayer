@@ -623,7 +623,7 @@ recalcula: Fase 2 = k ÷ 9, global = (100 + 100 × k ÷ 9) ÷ 5.
 | Tokens inflados entre 2.1.310 y 2.1.327 | Deduplicación por `message.id`; aviso por versión; sin corrección numérica, dicho en el reporte |
 | Versiones 2.1.311 a 2.1.325 sin revisar | Consulta opcional a `scout` en G1; la firma estructural no depende de la versión |
 | Doble conteo por líneas repetidas | Deduplicación por `message.id`; caso 7; G1 mide líneas frente a identificadores |
-| Rendimiento con miles de archivos | Lectura línea a línea, sin caché; medición en C4 (objetivo 60 s). Si se supera: prefiltro por fecha de modificación como mejora posterior, no en esta fase |
+| Rendimiento con miles de archivos | Lectura línea a línea, sin caché entre ejecuciones; memoización LRU en proceso de etiquetas de versión y modelo (claves <= 64 caracteres); buffer de lectura de 256 KiB; C4 midió 2 min 55 s en `global --all` antes de optimizar; se acepta y se documenta. Si se supera el objetivo (60 s): prefiltro por fecha de modificación como mejora posterior, no en esta fase |
 | Línea gigante (imagen en base64) agota la memoria | Foco de `shield`; si se confirma, límite de tamaño por línea con conteo en «Calidad de los datos» |
 | El usuario lee los números como calidad, costo o ahorro | Sección fija «Cómo leer estos números» y «Qué compara y qué no»; «inferido» y «aprox.» en los encabezados; marca «n pequeño» |
 | La repetición consecutiva se toma por reintento real | Etiqueta «inferido»; las paralelas no cuentan; explicación en el reporte |
@@ -770,3 +770,14 @@ Para T8 (documentar) y C4:
 - (e) `BrokenPipeError` con `--stdout | head` da exit 1 «error no previsto»; sin probar.
 - (f) La nota 4 de T3 (atribuir un `message.id` repetido al archivo más temprano) sigue sin aplicar: hoy se
   atribuye al primero que se recorre.
+
+## Decisión sobre T9 (2026-11-20, propietario): retirado de la fase
+
+`scout` verificó en la documentación oficial de Claude Code (hooks y subagentes; páginas leídas el 2026-11-20, sin fecha propia):
+
+- `SubagentStop` documenta `agent_id`, `agent_type`, `agent_transcript_path` y `last_assistant_message`; **no** documenta tokens, modelo ni duración.
+- Duración y tokens salen de `PostToolUse` sobre `Agent` (`totalDurationMs`, `totalTokens`, `usage`), pero un lanzamiento en segundo plano devuelve `async_launched` sin métricas, y los tokens de `tool_response` cubren sólo la última petición.
+- `SubagentStart` y `SubagentStop` están documentados en `settings.json`; el frontmatter acepta hooks del propio subagente (`Stop` se convierte en `SubagentStop`).
+- Sin confirmar: campos extra de `SubagentStop`, `toolStats`, `run_in_background` en `tool_input`, versión de introducción de `SubagentStart`/`SubagentStop`, que `SubagentStop` se emita siempre en segundo plano (sólo evidencia indirecta, changelog 2.1.327).
+
+Conclusión: un registrador de fuente estable daría identidad y hora, pero no duración ni tokens fiables de los subagentes en segundo plano, que son la mayoría; esos datos ya salen de leer las transcripciones. **T9 se retira de la fase** (decisión P6). La Fase 2 pasa a **9 unidades** (T1 a T8 y el cierre del núcleo), todas cerradas: Fase 2 = 100 %, proyecto completo = (100 + 100) ÷ 5 = 40 %. Si Claude Code llega a documentar métricas en `SubagentStop`, se puede reabrir como fase aparte. Los apartados 3.10 y T9 de este plan quedan como diseño archivado.

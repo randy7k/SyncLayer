@@ -2,6 +2,14 @@
 
 ## [Sin publicar]
 
+### Cambiado (reporte de uso, rendimiento C4)
+
+- Lector de transcripciones más rápido sin cambiar la salida (bytes idénticos): buffer de lectura
+  de 256 KiB, etiquetas de versión y modelo con caché LRU acotada en entradas (256) y con claves de hasta 64 caracteres, `_parse_ts` y `_token_tuple` sin
+  trabajo redundante. En un árbol sintético de 558 MB, `global --all` baja de 18,8 s a 15,1 s (promedio de tres corridas alternadas, 19,7 % menos).
+  Pruebas de equivalencia contra la implementación anterior y de tope de trabajo en
+  `tests/test_usage_report_perf.py`. El resto del tiempo es lectura y `json.loads`, por byte.
+
 ### Añadido (reporte de uso, Fase 2)
 
 - `tools/usage_report.py`: reporte de uso de subagentes a partir de las transcripciones locales
@@ -29,8 +37,9 @@
 - Reporte de proyecto con «Carpetas de transcripciones leídas: N».
 - `README.md`: secciones «Reporte de uso» y «Límites del reporte de uso» (Windows ACL y OneDrive,
   rama POSIX sin verificar, TOCTOU residual). `docs/agentes.md`: cómo usar el reporte.
-- Siguientes: cierre del núcleo (`sentinel`, `shield`, `auditor` y la verificación real C4) y, opcional,
-  el hook registrador `usage_logger.py` (T9, ya planificado).
+- Siguientes: comprobaciones restantes de C4 del propietario y merge a `main`. El hook registrador
+  `usage_logger.py` (T9) se retiró de la fase: `SubagentStop` no documenta tokens ni duración
+  (consulta de `scout`, decisión en el plan).
 
 ### Añadido (Fase 2, T6)
 
