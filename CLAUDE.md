@@ -9,7 +9,23 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`.
+`__pycache__`. La suite: 464 pruebas, 109 saltadas (no hay pwsh), unos 4 minutos. No la
+corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
+OutOfMemory).
+
+Manifiesto del instalador (regenerar tras cambiar cualquiera de los doce archivos gestionados):
+
+```
+python -B tools/build_manifest.py
+python -B tools/build_manifest.py --check
+```
+
+El segundo sólo comprueba: sale con 0 si está al día y con 1 si no. Probar el instalador sin
+tocar `~/.claude`, siempre con `-Target` a una carpeta temporal:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DryRun -Target <carpeta-temporal>
+```
 
 Probar la guarda a mano con un payload JSON por stdin (el código de salida es 0 o 2;
 el motivo del bloqueo sale por stderr). Construye el payload con Python, no con
@@ -45,7 +61,7 @@ github.com/IBM/plex). Las fuentes no se versionan.
 
 ## Arquitectura
 
-Tres piezas, de la más abstracta a la más concreta:
+Cuatro piezas, de la más abstracta a la más concreta (la cuarta, el instalador, está más abajo):
 
 1. `agents/*.md`: un archivo por agente (nueve). Frontmatter + prompt.
 2. `rules/agentes.md`: reglas de orquestación. Forma de estrella: sólo la sesión
@@ -53,6 +69,12 @@ Tres piezas, de la más abstracta a la más concreta:
 3. `hooks/agent_guard.py`: guarda `PreToolUse`, enlazada desde el frontmatter
    (`hooks:`) de `sentinel` (modo `tests-only`) y de `auditor`, `shield` y `debugger`
    (modo `readonly --allow-temp`).
+
+4. El instalador: `install.ps1` (Windows PowerShell 5.1), `install-manifest.json` (los doce
+   archivos gestionados con su hash canónico) y `tools/build_manifest.py` (lo genera y lo
+   comprueba). En el destino deja el estado `<Target>/synclayer-manifest.json`, copia del
+   manifiesto instalado. Ni el instalador, ni `tools/`, ni el manifiesto del repo se instalan
+   en `~/.claude`.
 
 `docs/agentes.md` es la guía humana. `docs/brand/` define la marca (estrategia, voz, identidad
 visual); el copy oficial va en inglés y no declara capacidades que el repositorio no tenga.
@@ -74,6 +96,9 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Un agente por archivo.
 - Todo cambio en `hooks/agent_guard.py` empieza con una prueba que falla en
   `tests/test_agent_guard.py`.
+- Todo cambio en `install.ps1` empieza con una prueba que falla en `tests/test_install.py`.
+- `install.ps1` va en ASCII puro y sin BOM: Windows PowerShell 5.1 lee como ANSI un archivo
+  sin BOM. Los mensajes van en español sin acentos. Hay una prueba.
 - Ejecuta Python con `-B`. No se versiona `__pycache__`.
 - Los SVG de `assets/brand/` se regeneran con los scripts de `assets/brand/src/`; no se
   editan a mano.
@@ -135,12 +160,33 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   `cwd` del payload. Fuera de `cwd`, o sin `cwd`, una ruta absoluta sólo vale si es temporal.
 - Las sesiones ya abiertas no ven agentes nuevos o modificados: reiniciarlas.
 
+- El manifiesto hay que REGENERAR cada vez que cambie cualquiera de los doce archivos
+  gestionados (`agents/*.md`, `rules/agentes.md`, `hooks/agent_guard.py`,
+  `docs/agentes.md`). La prueba de sincronía de `tests/test_manifest.py` falla y su mensaje
+  trae el comando de regeneración.
+- Hash canónico: SHA-256 de los bytes con CRLF convertido a LF, para que `autocrlf` no cambie
+  el hash. El instalador escribe en el destino los bytes canónicos (LF).
+- `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
+  pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
+  compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
+- Las pruebas del instalador pasan SIEMPRE `-Target` a una carpeta temporal, nunca
+  `~/.claude`, y no escriben el nombre de usuario como literal.
+- Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
+  inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
+  pruebas.
+- pwsh no está instalado: las pruebas contra pwsh se saltan (109 en la última corrida).
+- El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
+  borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
+  se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los
+  agentes apuntan a `$HOME/.claude/hooks/agent_guard.py`. El manifiesto da integridad, no
+  autenticidad; los riesgos residuales están en `README.md` («Límites del instalador»).
 - Copia `~/.claude` -> repo sólo por archivo (`git ls-files`), nunca con comodines:
   `~/.claude/hooks/` y otras carpetas tienen archivos ajenos y el repo es público.
 
 ## Cierre de un cambio
 
-En el mismo cambio se actualizan `README.md`, `CLAUDE.md` y `HISTORY.md`. Si cambia el
+En el mismo cambio se actualizan `README.md`, `CLAUDE.md` y `HISTORY.md`. Si cambia un archivo
+gestionado, se regenera el manifiesto (`python -B tools/build_manifest.py`). Si cambia el
 catálogo, la guía `docs/agentes.md` y el catálogo de `rules/agentes.md` también.
 
 Al cerrar una sub-fase del plan en curso (instalador y backlog), actualiza en el mismo

@@ -2,6 +2,39 @@
 
 ## [Sin publicar]
 
+### Añadido (instalador)
+
+- `install.ps1` (Windows PowerShell 5.1) con `-Target`, `-BackupDir`, `-DryRun` y `-Force`.
+  Copia a `~/.claude/` doce archivos (nueve agentes, `rules/agentes.md`,
+  `hooks/agent_guard.py`, `docs/agentes.md`); no instala `docs/brand/`, `assets/`, `tests/` ni
+  `tools/`, y nunca borra ni toca archivos ajenos. Códigos de salida: 0 correcto, 1 uso o
+  entorno, 2 origen distinto del manifiesto, 3 cambios locales sin `-Force`, 4 fallo al copiar,
+  verificar o escribir el estado.
+- `install-manifest.json` y `tools/build_manifest.py` (escribe y `--check`): manifiesto con el
+  SHA-256 canónico (CRLF convertido a LF) de cada archivo. `tests/test_manifest.py` falla si el
+  manifiesto queda desactualizado. El instalador escribe los archivos con LF.
+- Clasificación `NUEVO`, `IGUAL`, `ACTUALIZAR`, `MODIFICADO` y `HUERFANO` con el estado
+  `<Target>/synclayer-manifest.json`. `MODIFICADO` aborta con exit 3 sin escribir; con
+  `-Force` respalda y sobrescribe. Los `HUERFANO` sólo se informan.
+- Respaldo verificado en una carpeta nueva (por defecto `<Target>-backup-<yyyyMMdd-HHmmss>`),
+  copia atómica con el hook primero (temporal en la misma carpeta y movimiento) y verificación
+  posterior.
+- Decisiones: un `-Target` que es punto de reanálisis se rechaza; un estado bloqueado o
+  ilegible se trata como ausente; `-BackupDir` debe ser nuevo y no estar dentro de `-Target`;
+  el mensaje de exit 2 manda a revisar `git status`/`git diff` y sólo a los mantenedores a
+  regenerar el manifiesto; un bloqueo o enlace detectado antes de escribir da exit 1 y
+  después de escribir, exit 4; la carrera con enlaces no se cierra y se informa con exit 4.
+- `tests/test_install.py` y `tests/test_manifest.py`: la suite pasa a 464 pruebas, 109
+  saltadas porque pwsh no está instalado.
+- `README.md`: «Instalación» con el uso de `install.ps1` y «Límites del instalador» con los
+  riesgos residuales (el manifiesto da integridad, no autenticidad; no verificado: pwsh 7,
+  volúmenes de red y OneDrive, enlace simbólico de archivo real, corte de energía, Windows 10).
+  `CLAUDE.md` con comandos, arquitectura y comportamientos no obvios.
+- La copia `~/.claude` -> repo sigue siendo manual y por archivo, ahora limitada a los doce
+  archivos gestionados.
+- Siguientes (fuera de alcance de esta fase, sin diseñar): comando `status` que compare por
+  hash el destino con el manifiesto, y copia inversa `~/.claude` -> repositorio automatizada.
+
 ### Añadido (plan y línea de tiempo)
 
 - `README.md`: sección «Línea de tiempo y avance» (avance global, la Fase 1 por frentes, línea

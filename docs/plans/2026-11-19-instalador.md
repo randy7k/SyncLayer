@@ -1,6 +1,8 @@
 # Plan: instalador `install.ps1` con manifiesto SHA-256
 
-Fecha: 2026-11-19. Estado: pendiente de aprobación del propietario.
+Fecha: 2026-11-19. Estado: aprobado (2026-11-19).
+
+Estado de ejecución: T1 a T5 cerradas, T6 en curso.
 
 ## 1. Objetivo
 
@@ -24,8 +26,8 @@ Archivos gestionados (doce):
 - No borra nada en el destino, ni siquiera archivos que una versión anterior instaló.
 - No hace rollback automático si falla a mitad de la copia (deja el respaldo e informa).
 - No usa Pester (ver 3.6).
-- La sección «Línea de tiempo y avance» del README no aplica: este plan no es un plan
-  extenso por fases que se implemente por etapas.
+- La sección «Línea de tiempo y avance» sí existe en el README: este plan es la Fase 1 de un
+  proyecto con plan por fases, y la sección se mantiene al cerrar cada sub-fase.
 
 ### Siguientes (decidido: no se diseñan aquí)
 
@@ -35,7 +37,8 @@ Archivos gestionados (doce):
 
 ## 2. Supuestos
 
-1. Entorno principal: Windows PowerShell 5.1. `install.ps1` debe correr igual en pwsh 7.
+1. Entorno principal: Windows PowerShell 5.1. `install.ps1` se escribió para correr igual en pwsh 7: compatibilidad intentada, no
+   verificada en este equipo (pwsh no está instalado).
    Otros sistemas operativos no se verifican y no se documentan como soportados.
 2. El instalador no depende de git ni de Python. El generador del manifiesto y las pruebas
    sí usan Python 3.12 (biblioteca estándar) y git, como el resto del repositorio.
@@ -443,7 +446,7 @@ para todas: primero la prueba que falla, después la implementación; Python sie
 | La política de ejecución bloquea `install.ps1` | Invocación documentada con `-ExecutionPolicy Bypass -File`, limitada al proceso |
 | Windows PowerShell 5.1 lee mal un script con acentos sin BOM | Script en ASCII; caso 19 |
 | Las pruebas del instalador se saltan sin que nadie lo note | Motivo de salto explícito; C1 exige ejecución sin saltos |
-| Archivo de destino bloqueado por otro proceso o por antivirus | Exit 4 con el archivo afectado; el respaldo queda; reejecutar es seguro |
+| Archivo de destino bloqueado por otro proceso o por antivirus | Bloqueo detectado antes de escribir: exit 1 con el archivo afectado y sin escribir nada; exit 4 sólo para fallos al escribir (el respaldo queda; reejecutar es seguro) |
 | Fallo a mitad de la copia deja versiones mezcladas | Sin rollback: se informa qué se escribió y dónde está el respaldo; reejecutar completa |
 | `tools/` o el manifiesto acaban instalados por error | La lista permitida no los incluye; caso 18 |
 
@@ -464,3 +467,7 @@ Cada una tiene un valor por defecto, que es el que el plan implementa si no hay 
 - **P4. Invocación documentada.** Por defecto: el README muestra `.\install.ps1` y, aparte,
   la forma con `-ExecutionPolicy Bypass -File` para equipos con política restrictiva.
   Alternativa: documentar sólo `.\install.ps1` y dejar la política al usuario.
+  **Decisión final:** el README muestra `powershell -NoProfile -ExecutionPolicy Bypass -File
+  .\install.ps1` como invocación estándar, con las advertencias (vale sólo para ese proceso,
+  salta la marca de origen web, una directiva de grupo tiene precedencia, leer el script antes).
+  No se muestra `.\install.ps1` por separado.
