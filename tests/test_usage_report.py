@@ -1,5 +1,7 @@
 import ast
+import collections
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -451,9 +453,11 @@ class HistogramFilters(Base):
         for bad in ("1.2.3-AKIAIOSFODNN7EXAMPLE", "4111111111111111.12.2030",
                     "1.2.3-" + "a" * 5000, "12345.1.1", "1.12345.1", "1.1.1234567",
                     "1.2.3-a/b", "1.2.3-a b", "1.2.3-a@b", "1.2.3-" + "a" * 25,
-                    "1.2.3-a\n"):
+                    "1.2.3-a\n", "1.2.3-abcdefgh", "1.2.3-preview", "1.2.3-RC1", "1.2.3-rc1234",
+                    "1.2.3-rc1.2.3.4", "1.2.3-beta.1234", "1.2.3-gamma", "1.2.3-rcx"):
             self.assertEqual(ur.hist_label("version", bad), "(otra version)", repr(bad))
-        for good in ("1.2.3-rc1", "1234.1234.123456", "2.1.330-beta.1"):
+        for good in ("1.2.3-rc1", "1234.1234.123456", "2.1.330-beta.1", "1.2.3-alpha", "1.2.3-rc",
+                     "1.2.3-beta123.1.2", "1.2.3-rc999"):
             self.assertEqual(ur.hist_label("version", good), good)
 
     def test_free_text_values_never_reach_the_output(self):
@@ -735,7 +739,9 @@ class HardlinksAndLinkCount(Base):
         self._hardlink(target, os.path.join(sub, "agent-h.jsonl"))
         code, out, err = self.inspect(tree)
         self.assertEqual(code, 0, err)
-        self.assertEqual(field(out, "enlaces omitidos"), 1)
+        # G1: los hardlinks de subagentes son legitimos; inspect no los lee pero los cuenta aparte
+        self.assertEqual(field(out, "hardlinks (nlink > 1)"), 1)
+        self.assertEqual(field(out, "enlaces omitidos"), 0)
         self.assertEqual(field(out, "archivos de subagente"), 1)
         self.assertEqual(field(out, "subagente lineas"), 1)
         self.assertEqual(field(out, "archivos ilegibles"), 0)
@@ -751,7 +757,8 @@ class HardlinksAndLinkCount(Base):
         self._hardlink(main, os.path.join(tree.projects, "c--p", "s1.jsonl"))
         self._hardlink(meta, os.path.join(tree.projects, "c--p", "s1", "subagents", "agent-a1.meta.json"))
         _, out, _ = self.inspect(tree)
-        self.assertEqual(field(out, "enlaces omitidos"), 2)
+        self.assertEqual(field(out, "hardlinks (nlink > 1)"), 2)
+        self.assertEqual(field(out, "enlaces omitidos"), 0)
         self.assertEqual(field(out, "sesion lineas"), 0)
         self.assertEqual(field(out, "archivos de sesion principal"), 0)
         self.assertEqual(field(out, "meta con agentType cadena"), 0)
@@ -778,7 +785,8 @@ class HardlinksAndLinkCount(Base):
         self._hardlink(tgt, os.path.join(sub, "agent-h.jsonl"))
         code, out, err = self.inspect(tree)
         self.assertEqual(code, 0, err)
-        self.assertEqual(field(out, "enlaces omitidos"), 5)
+        self.assertEqual(field(out, "enlaces omitidos"), 4)
+        self.assertEqual(field(out, "hardlinks (nlink > 1)"), 1)
         self.assertEqual(field(out, "archivos de subagente"), 1)
         self.assertEqual(field(out, "sesiones"), 1)
 
@@ -1113,6 +1121,950 @@ class RealInvocation(unittest.TestCase):
             bad = subprocess.run([sys.executable, "-B", SCRIPT], stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, timeout=120)
             self.assertEqual(bad.returncode, 2)
+
+
+T0 = "2026-03-01T10:00:0"
+
+
+class ReaderBase(Base):
+    def read(self, tree, **kw):
+        kw.setdefault("check_damage", True)
+        return ur.read_calls(tree.claude_dir, **kw)
+
+    def one(self, tree, **kw):
+        res = self.read(tree, **kw)
+        self.assertEqual(len(res.calls), 1)
+        return res.calls[0]
+
+    def hardlink(self, target, link):
+        try:
+            os.link(target, link)
+        except (OSError, NotImplementedError, AttributeError) as e:
+            self.skipTest("el sistema no permite hardlinks: %s" % e)
+
+    def assert_no_markers(self, *objs):
+        joined = "\n".join(repr(o) for o in objs)
+        for marker in us.ALL_MARKERS:
+            self.assertNotIn(marker, joined, marker)
+
+
+class ReaderTokens(ReaderBase):
+    def test_streaming_lines_with_same_id_count_once_last_line_wins(self):
+        tree = us.Tree(self.base)
+        items = [us.user(T0 + "0Z")]
+        items += us.stream("m1", T0 + "1Z", [us.usage(1, 2, 3, 4), us.usage(10, 20, 30, 40), us.usage(100, 200, 300, 400)])
+        items += us.stream("m2", T0 + "2Z", [us.usage(1, 1, 1, 1), us.usage(1, 1, 1, 1)])
+        tree.subagent("c--p", "s1", "a1", items)
+        c = self.one(tree)
+        # m1 -> ultima linea (100,200,300,400); m2 -> (1,1,1,1) una sola vez
+        self.assertEqual((c.input_tokens, c.output_tokens, c.cache_creation_tokens, c.cache_read_tokens),
+                         (101, 201, 301, 401))
+        self.assertEqual(c.requests, 2)
+        self.assertEqual(c.total_tokens, 101 + 201 + 301 + 401)
+        self.assertEqual(c.status, "correcta")
+
+    def test_retry_with_new_id_is_counted_as_another_request(self):
+        # limite conocido del diseno (3.5): un reintento con message.id nuevo no se corrige
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z"), us.assistant("m1b", T0 + "2Z")])
+        c = self.one(tree)
+        self.assertEqual(c.requests, 2)
+        self.assertEqual(c.input_tokens, 20)
+
+    def test_usage_without_message_id_counts_each_line_and_is_reported(self):
+        tree = us.Tree(self.base)
+        line = us.assistant("x", T0 + "1Z")
+        del line["message"]["id"]
+        tree.subagent("c--p", "s1", "a1", [line, line])
+        res = self.read(tree)
+        self.assertEqual(res.calls[0].requests, 2)
+        self.assertEqual(res.quality["usage sin message.id"], 2)
+
+    def test_call_without_usage_is_a_call_but_not_usable(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.user(T0 + "0Z"), us.assistant("m1", T0 + "1Z", usage_value=None)])
+        c = self.one(tree)
+        self.assertFalse(c.has_usage)
+        self.assertFalse(c.usable)
+        self.assertEqual(c.status, "sin_usage")
+        self.assertEqual((c.requests, c.total_tokens), (0, 0))
+        self.assertEqual(self.read(tree).quality["llamadas sin usage"], 1)
+
+    def test_synthetic_model_excluded_from_models_and_tokens(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [
+            us.assistant("m1", T0 + "1Z"),
+            us.assistant("s1", T0 + "2Z", model="<synthetic>", usage_value=us.usage(999, 999, 999, 999)),
+        ])
+        res = self.read(tree)
+        c = res.calls[0]
+        self.assertEqual(c.input_tokens, 10)
+        self.assertEqual(c.models, ("claude-opus-4-1",))
+        self.assertEqual(res.quality["lineas synthetic excluidas"], 1)
+
+    def test_tool_use_blocks_counted_by_distinct_id(self):
+        tree = us.Tree(self.base)
+        blocks = [us.tool_use_block("t1", "Read"), us.tool_use_block("t2", "Bash")]
+        tree.subagent("c--p", "s1", "a1", [
+            us.assistant("m1", T0 + "1Z", blocks=blocks),
+            us.assistant("m1", T0 + "2Z", blocks=blocks),  # misma respuesta repetida
+            us.assistant("m2", T0 + "3Z", blocks=[us.tool_use_block("t2", "Bash"), us.text_block()]),
+        ])
+        self.assertEqual(self.one(tree).tools, 2)
+
+    def test_timestamps_start_end_in_utc(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [
+            us.user("2026-03-01T12:00:05+02:00"),   # 10:00:05Z
+            us.assistant("m1", "2026-03-01T10:00:09Z"),
+            us.assistant("m2", "2026-03-01T10:00:07"),  # sin zona: UTC
+        ])
+        c = self.one(tree)
+        self.assertEqual(c.start.isoformat(), "2026-03-01T10:00:05+00:00")
+        self.assertEqual(c.end.isoformat(), "2026-03-01T10:00:09+00:00")
+
+    def test_background_is_unknown_in_subagent_files(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        self.assertIsNone(self.one(tree).background)
+
+
+class ReaderAgentAndModel(ReaderBase):
+    def test_nine_synclayer_agents_and_builtins_pass(self):
+        for name in ("oracle", "scout", "atlas", "forge", "sentinel", "auditor", "shield", "debugger", "scribe"):
+            self.assertEqual(ur.classify_agent(name), (name, "SyncLayer"))
+        for name in ("general-purpose", "Explore", "Plan", "statusline-setup", "output-style-setup",
+                     "claude-code-guide"):
+            self.assertEqual(ur.classify_agent(name), (name, "integrado"))
+
+    def test_unknown_agent_names_are_never_shown(self):
+        for raw in ("user@example.com", "home/x/secret", "AKIAIOSFODNN7EXAMPLE", us.M_TYPE, "forge\n",
+                    "Forge", "a|b", "x" * 200, 5, None, {"a": 1}):
+            name, group = ur.classify_agent(raw)
+            self.assertEqual((name, group), ("(otro agente)", "otros"), repr(raw))
+        self.assertEqual(ur.classify_agent("plug:agent"), ("plugin:plug", "plugin:plug"))
+        self.assertEqual(ur.classify_agent(""), ("general-purpose", "integrado"))
+
+    def test_synclayer_agents_match_agent_files(self):
+        names = sorted(f[:-3] for f in os.listdir(os.path.join(ROOT, "agents")) if f.endswith(".md"))
+        self.assertEqual(sorted(ur.SYNCLAYER_AGENTS), names)
+
+    def test_agent_from_meta_and_default_agent_without_subagent_type(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")],
+                      meta={"agentType": "general-purpose"})   # meta sin toolUseId
+        tree.subagent("c--p", "s1", "a2", [us.assistant("m2", T0 + "1Z")], meta={"agentType": "scout", "toolUseId": 7})
+        res = self.read(tree)
+        self.assertEqual([(c.agent, c.agent_group, c.has_meta) for c in res.calls],
+                         [("general-purpose", "integrado", True), ("scout", "SyncLayer", True)])
+
+    def test_missing_meta_is_sin_meta_call(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")], meta=None)
+        c = self.one(tree)
+        self.assertEqual((c.agent, c.agent_group, c.status, c.has_meta), ("(sin-meta)", "sin-meta", "sin_meta", False))
+        self.assertEqual(c.input_tokens, 10)  # sus tokens cuentan
+        self.assertTrue(c.usable)
+
+    def test_agent_type_with_markers_is_not_in_records(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")], meta={"agentType": us.M_TYPE + "@x/y:z"})
+        c = self.one(tree)
+        self.assertEqual(c.agent, "(otro agente)")
+        self.assert_no_markers(c)
+
+    def test_model_from_lines_single_mixed_and_meta_fallback(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z", model="claude-opus-4-1"),
+                                           us.assistant("m2", T0 + "2Z", model="claude-opus-4-1")])
+        tree.subagent("c--p", "s1", "a2", [us.assistant("m3", T0 + "1Z", model="claude-opus-4-1"),
+                                           us.assistant("m4", T0 + "2Z", model="claude-haiku-4-5")])
+        tree.subagent("c--p", "s1", "a3", [us.assistant("m5", T0 + "1Z", usage_value=None, model=us.M_MODEL)],
+                      meta={"agentType": "forge", "model": "claude-sonnet-4-5"})
+        tree.subagent("c--p", "s1", "a4", [us.user(T0 + "1Z")], meta={"agentType": "forge", "model": "sonnet"})
+        tree.subagent("c--p", "s1", "a5", [us.user(T0 + "1Z")], meta={"agentType": "forge", "model": us.M_MODEL})
+        by = {c.call_id: c for c in self.read(tree, check_damage=False).calls}
+        got = sorted((c.model, c.models, c.model_source) for c in by.values())
+        self.assertEqual(got, sorted([
+            ("claude-opus-4-1", ("claude-opus-4-1",), "lineas"),
+            ("mixto", ("claude-haiku-4-5", "claude-opus-4-1"), "lineas"),
+            ("(otro modelo)", ("(otro modelo)",), "lineas"),
+            ("sonnet", ("sonnet",), "meta"),
+            ("(otro modelo)", ("(otro modelo)",), "meta"),
+        ]))
+
+    def test_model_meta_fallback_when_lines_have_no_model(self):
+        tree = us.Tree(self.base)
+        line = us.assistant("m1", T0 + "1Z")
+        del line["message"]["model"]
+        tree.subagent("c--p", "s1", "a1", [line], meta={"agentType": "forge", "model": "claude-sonnet-4-5"})
+        c = self.one(tree)
+        self.assertEqual((c.model, c.model_source), ("claude-sonnet-4-5", "meta"))
+
+    def test_model_discrepancy_between_lines_and_meta_is_recorded(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z", model="claude-opus-4-1")],
+                      meta={"agentType": "forge", "model": "claude-sonnet-4-5"})
+        tree.subagent("c--p", "s1", "a2", [us.assistant("m2", T0 + "1Z", model="claude-opus-4-1")],
+                      meta={"agentType": "forge", "model": "claude-opus-4-1"})
+        res = self.read(tree)
+        self.assertEqual([c.model_mismatch for c in res.calls], [True, False])
+        self.assertEqual([c.model for c in res.calls], ["claude-opus-4-1"] * 2)  # las lineas mandan
+        self.assertEqual(res.quality["llamadas con modelo distinto del meta"], 1)
+
+    def test_versions_per_call_and_unverified(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z", version="2.1.310"),
+                                           us.assistant("m2", T0 + "2Z", version="2.1.328")])
+        tree.subagent("c--p", "s1", "a2", [us.assistant("m3", T0 + "1Z", version="2.1.326")])
+        tree.subagent("c--p", "s1", "a3", [us.assistant("m4", T0 + "1Z", version="2.1.327")])
+        tree.subagent("c--p", "s1", "a4", [us.assistant("m5", T0 + "1Z", version=us.M_VERSION)])
+        res = self.read(tree)
+        self.assertEqual(ur.VERIFIED_MAX, "2.1.326")
+        got = {c.versions: c.unverified for c in res.calls}
+        self.assertEqual(got, {("2.1.310", "2.1.328"): True, ("2.1.326",): False, ("2.1.327",): True,
+                               ("(otra version)",): False})
+        self.assertEqual(res.versions["2.1.310"], 1)
+        self.assertNotIn(us.M_VERSION, repr(res.versions))
+
+
+class ReaderHardlinksAndLimits(ReaderBase):
+    def test_hardlinked_subagent_is_read_and_counted_apart(self):
+        tree = us.Tree(self.base)
+        outer = us.Tree(os.path.join(self.base, "afuera"))
+        target = outer.subagent("c--x", "s9", "a9", [us.assistant("h1", T0 + "1Z", usage_value=us.usage(7, 1, 1, 1))],
+                                meta=None)
+        sub = os.path.join(tree.folder("c--p"), "s1", "subagents")
+        os.makedirs(sub)
+        self.hardlink(target, os.path.join(sub, "agent-h.jsonl"))
+        res = self.read(tree)
+        self.assertEqual(len(res.calls), 1)
+        self.assertTrue(res.calls[0].hardlink)
+        self.assertEqual(res.calls[0].input_tokens, 7)
+        self.assertEqual(res.quality["hardlinks aceptados"], 1)
+
+    def test_hardlinked_file_with_foreign_content_fails_the_signature(self):
+        tree = us.Tree(self.base)
+        outer = os.path.join(self.base, "afuera.txt")
+        with open(outer, "wb") as f:
+            f.write(b'{"clave": "' + us.M_CONTENT.encode() + b'"}\n{"otra": 1}\n')
+        sub = os.path.join(tree.folder("c--p"), "s1", "subagents")
+        os.makedirs(sub)
+        self.hardlink(outer, os.path.join(sub, "agent-h.jsonl"))
+        with self.assertRaises(ur.SchemaError) as cm:
+            self.read(tree)
+        self.assertIn(ur.CHK_NO_TYPE, cm.exception.message)
+        self.assert_no_markers(cm.exception.message)
+
+    def test_hardlinked_meta_is_still_rejected(self):
+        tree = us.Tree(self.base)
+        path = tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")], meta=None)
+        outer = os.path.join(self.base, "meta-afuera.json")
+        with open(outer, "wb") as f:
+            f.write(b'{"agentType": "forge"}')
+        self.hardlink(outer, path[:-len(".jsonl")] + ".meta.json")
+        res = self.read(tree)
+        self.assertEqual(res.calls[0].agent, "(sin-meta)")
+        self.assertEqual(res.quality["metas rechazadas por enlace duro"], 1)
+
+    def test_symlinked_transcript_is_not_read(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        target = os.path.join(self.base, "objetivo.jsonl")
+        us.Tree.write_lines(target, [us.assistant("z", T0 + "1Z")])
+        link = os.path.join(tree.projects, "c--p", "s1", "subagents", "agent-l.jsonl")
+        if not self.make_link(target, link, is_dir=False):
+            self.skipTest("el sistema no permite enlaces de archivo")
+        res = self.read(tree)
+        self.assertEqual(len(res.calls), 1)
+        self.assertGreaterEqual(res.quality["enlaces omitidos"], 1)
+
+    def _big_tree(self):
+        tree = us.Tree(self.base)
+        items = ["esto no es json", us.assistant("b0", T0 + "1Z", version="2.1.299"),
+                 '{"type": "assistant", "x": "' + "y" * 5000 + '"}'] + \
+                [us.assistant("b%d" % i, T0 + "2Z", version="2.1.299",
+                              blocks=[us.tool_use_block("tb%d" % i, "Read")]) for i in range(1, 60)]
+        tree.subagent("c--p", "s1", "big", items)
+        return tree
+
+    @staticmethod
+    def _lying_fstat():
+        real = os.fstat
+
+        def lying(fd):
+            values = list(real(fd))
+            values[6] = 0
+            return os.stat_result(values)
+
+        return lying
+
+    def test_file_over_cap_mid_read_leaves_no_partial_counts(self):
+        tree = self._big_tree()
+        with mock.patch.object(ur, "MAX_FILE_BYTES", 5000), mock.patch.object(ur.os, "fstat", self._lying_fstat()), \
+                mock.patch.object(ur, "MAX_LINE_BYTES", 3000):
+            res = self.read(tree, check_damage=False)
+        c = res.calls[0]
+        self.assertEqual((c.status, c.damage), ("danada", "tope"))
+        self.assertEqual((c.requests, c.total_tokens, c.tools), (0, 0, 0))
+        self.assertEqual((c.start, c.end, c.versions, c.models), (None, None, (), ()))
+        self.assertEqual(res.quality["archivos omitidos por tope de tamano"], 1)
+        for label in ("lineas corruptas", "lineas oversize descartadas", "lineas que no son objeto",
+                      "usage sin message.id", "hardlinks aceptados"):
+            self.assertEqual(res.quality[label], 0, label)
+        self.assertNotIn("2.1.299", res.versions)
+
+    def test_file_over_cap_by_fstat_is_omitted_as_damaged(self):
+        tree = self._big_tree()
+        with mock.patch.object(ur, "MAX_FILE_BYTES", 5000):
+            res = self.read(tree, check_damage=False)
+        self.assertEqual(res.calls[0].damage, "tope")
+
+    def test_io_error_mid_read_leaves_no_partial_counts(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z"), us.assistant("m2", T0 + "2Z")])
+        real = ur._iter_objects
+
+        def failing(f, info):
+            it = real(f, info)
+            yield next(it)
+            raise OSError("fallo " + us.M_CONTENT)
+
+        with mock.patch.object(ur, "_iter_objects", failing):
+            res = self.read(tree, check_damage=False)
+        c = res.calls[0]
+        self.assertEqual((c.damage, c.requests, c.total_tokens), ("ilegible", 0, 0))
+        self.assertEqual(res.quality["archivos ilegibles"], 1)
+        self.assertEqual(res.versions, {})
+        self.assert_no_markers(res.quality, c)
+
+    def test_unopenable_file_is_damaged_call(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        with mock.patch.object(ur, "_open_regular", side_effect=PermissionError(us.M_CONTENT)):
+            res = self.read(tree, check_damage=False)
+        self.assertEqual(res.calls[0].damage, "ilegible")
+
+    def test_id_cap_marks_call_damaged(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("i%d" % i, T0 + "1Z") for i in range(10)])
+        with mock.patch.object(ur, "MAX_IDS_PER_FILE", 3):
+            res = self.read(tree, check_damage=False)
+        self.assertEqual(res.calls[0].damage, "tope")
+        self.assertEqual(res.calls[0].requests, 0)
+
+    def test_oversize_line_contributes_no_tokens_and_is_counted(self):
+        tree = us.Tree(self.base)
+        huge = json.dumps(us.assistant("big", T0 + "3Z", usage_value=us.usage(5000, 5000, 5000, 5000),
+                                       blocks=[us.text_block("x" * 50000)]))
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z"), huge, us.assistant("m2", T0 + "2Z")])
+        with mock.patch.object(ur, "MAX_LINE_BYTES", 2000):
+            res = self.read(tree)
+        c = res.calls[0]
+        self.assertEqual((c.input_tokens, c.requests, c.oversize_lines), (20, 2, 1))
+        self.assertEqual(res.quality["lineas oversize descartadas"], 1)
+        self.assertEqual(c.status, "correcta")
+
+
+class ReaderDefensive(ReaderBase):
+    def _expect_schema(self, tree, check, files=1):
+        before = snapshot(self.base)
+        with self.assertRaises(ur.SchemaError) as cm:
+            self.read(tree)
+        msg = cm.exception.message
+        self.assertIn(check, msg)
+        self.assertIn("%d archivos" % files, msg)
+        self.assertIn(ur.VERIFIED_MAX, msg)
+        self.assertIn("inspect", msg)
+        self.assertNotIn(self.base, msg)
+        self.assertNotIn("Traceback", msg)
+        msg.encode("ascii")
+        self.assert_no_markers(msg)
+        self.assertEqual(snapshot(self.base), before)  # nada escrito
+        return msg
+
+    def test_usage_not_object(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z", usage_value="texto " + us.M_CONTENT)])
+        msg = self._expect_schema(tree, ur.CHK_USAGE_OBJ)
+        self.assertIn("2.1.330", msg)  # version vista, filtrada
+
+    def test_token_field_invalid(self):
+        for bad in (us.usage(inp=-1), us.usage(inp=True), us.usage(inp="3"), us.usage(inp=1.5),
+                    {"input_tokens": 1, "output_tokens": 1, "cache_creation_input_tokens": 1}):
+            with self.subTest(bad=bad):
+                tree = us.Tree(os.path.join(self.base, str(abs(hash(repr(bad))))))
+                tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z", usage_value=bad)])
+                with self.assertRaises(ur.SchemaError) as cm:
+                    ur.read_calls(tree.claude_dir)
+                self.assertIn(ur.CHK_TOKENS, cm.exception.message)
+
+    def test_timestamp_missing_or_unparseable_in_recognized_line(self):
+        for ts in (None, "ayer", 5, "2026-13-45T00:00:00Z"):
+            with self.subTest(ts=ts):
+                tree = us.Tree(os.path.join(self.base, "t%s" % abs(hash(repr(ts)))))
+                line = us.assistant("m1", ts)
+                if ts is None:
+                    del line["timestamp"]
+                tree.subagent("c--p", "s1", "a1", [line])
+                with self.assertRaises(ur.SchemaError) as cm:
+                    ur.read_calls(tree.claude_dir)
+                self.assertIn(ur.CHK_TS, cm.exception.message)
+
+    def test_other_line_types_may_lack_timestamp(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z"), {"type": "summary", "summary": "x"}])
+        self.assertEqual(len(self.read(tree).calls), 1)
+
+    def test_meta_without_agent_type_or_not_object(self):
+        for meta in ({"toolUseId": "t"}, {"agentType": 5}, {"agentType": None}, b"[1]", b"{no json", b'"texto"'):
+            with self.subTest(meta=meta):
+                tree = us.Tree(os.path.join(self.base, "m%s" % abs(hash(repr(meta)))))
+                tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")], meta=meta)
+                with self.assertRaises(ur.SchemaError) as cm:
+                    ur.read_calls(tree.claude_dir)
+                self.assertIn(ur.CHK_META, cm.exception.message)
+
+    def test_oversize_or_unreadable_meta_is_not_schema_failure(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")],
+                      meta=b'{"agentType": "' + b"x" * 100000 + b'"}')
+        c = self.one(tree)
+        self.assertEqual(c.agent, "(sin-meta)")
+
+    def test_file_with_valid_lines_and_no_type(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [{"foo": 1}, {"bar": 2}])
+        self._expect_schema(tree, ur.CHK_NO_TYPE)
+
+    def test_message_counts_files_and_checks(self):
+        tree = us.Tree(self.base)
+        for i in range(3):
+            tree.subagent("c--p", "s1", "a%d" % i, [us.assistant("m1", T0 + "1Z", usage_value="x")])
+        tree.subagent("c--p", "s1", "z", [{"foo": 1}])
+        with self.assertRaises(ur.SchemaError) as cm:
+            self.read(tree)
+        self.assertIn(ur.CHK_USAGE_OBJ + ": 3 archivos", cm.exception.message)
+        self.assertIn(ur.CHK_NO_TYPE + ": 1 archivos", cm.exception.message)
+
+    def test_truncated_last_line_is_tolerated_and_counted(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z"), '{"type": "assistant", "times'],
+                      final_newline=False)
+        res = self.read(tree)
+        self.assertEqual(res.calls[0].status, "correcta")
+        self.assertEqual(res.quality["archivos con ultima linea truncada"], 1)
+
+    def test_middle_corrupt_line_damages_file_and_excludes_tokens(self):
+        tree = us.Tree(self.base)
+        for i in range(20):
+            items = [us.assistant("m%d" % i, T0 + "1Z")]
+            if i == 0:
+                items = ["basura " + us.M_CONTENT, us.assistant("n", T0 + "2Z")]
+            tree.subagent("c--p", "s1", "a%02d" % i, items)
+        res = self.read(tree)  # 1 de 20 = 5 %: exacto en el umbral, pasa
+        bad = [c for c in res.calls if c.status == "danada"]
+        self.assertEqual(len(bad), 1)
+        self.assertEqual((bad[0].damage, bad[0].requests, bad[0].total_tokens), ("linea intermedia corrupta", 0, 0))
+        self.assertFalse(bad[0].usable)
+        self.assertEqual(res.quality["llamadas danadas"], 1)
+        self.assertEqual(res.quality["lineas corruptas"], 1)
+        self.assert_no_markers(res.calls, res.quality)
+
+    def test_damaged_over_threshold_raises_schema_error(self):
+        tree = us.Tree(self.base)
+        for i in range(19):
+            items = [us.assistant("m%d" % i, T0 + "1Z")]
+            if i == 0:
+                items = ["basura " + us.M_CONTENT, us.assistant("n", T0 + "2Z")]
+            tree.subagent("c--p", "s1", "a%02d" % i, items)
+        with self.assertRaises(ur.SchemaError) as cm:
+            self.read(tree)
+        self.assertIn("1 de 19", cm.exception.message)
+        self.assertIn(ur.VERIFIED_MAX, cm.exception.message)
+        self.assert_no_markers(cm.exception.message)
+        res = self.read(tree, check_damage=False)
+        self.assertEqual(len(res.calls), 19)
+        with self.assertRaises(ur.SchemaError):
+            ur.check_damaged(res.calls)
+
+    def test_schema_error_maps_to_exit_3_without_output(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z", usage_value="x")])
+
+        def cmd(args):
+            ur.read_calls(args.claude_dir)
+            return 0
+
+        with mock.patch.object(ur, "_cmd_inspect", cmd):
+            code, out, err = self.inspect(tree)
+        self.assertEqual(code, 3)
+        self.assertEqual(out, "")
+        self.assertTrue(err.startswith("error: esquema desconocido"))
+        self.assertEqual(err.count("\n"), 1)
+
+    def test_environment_errors(self):
+        claude = os.path.join(self.base, "sin")
+        os.makedirs(claude)
+        with self.assertRaises(ur.EnvError) as cm:
+            ur.read_calls(claude)
+        self.assertIn("projects", cm.exception.message)
+        self.assertNotIn(self.base, cm.exception.message)
+
+    def test_no_markers_in_any_result(self):
+        tree = rich_tree(self.base)
+        res = ur.read_calls(tree.claude_dir, check_damage=False)
+        self.assertGreaterEqual(len(res.calls), 5)
+        self.assert_no_markers(res.calls, res.quality, res.versions, res.schema)
+
+    def test_ids_are_safe_and_stable(self):
+        tree = rich_tree(self.base)
+        a = ur.read_calls(tree.claude_dir, check_damage=False)
+        b = ur.read_calls(tree.claude_dir, check_damage=False)
+        self.assertEqual(a.calls, b.calls)  # determinista
+        ids = [c.call_id for c in a.calls]
+        self.assertEqual(len(set(ids)), len(ids))
+        for c in a.calls:
+            self.assertRegex(c.call_id, r"^[0-9a-f]{16}$")
+            self.assertRegex(c.session, r"^[0-9a-f]{16}$")
+            self.assertRegex(c.project, r"^p-[0-9a-f]{8}$")
+
+    def test_project_filter_and_case_insensitive_folder(self):
+        tree = us.Tree(self.base)
+        proj = os.path.join(self.base, "my proj")
+        os.makedirs(proj)
+        folder = us.folder_name_for(os.path.abspath(proj))
+        tree.subagent(folder.swapcase(), "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        tree.subagent("c--otra", "s2", "a2", [us.assistant("m2", T0 + "1Z")])
+        self.assertEqual(len(ur.read_calls(tree.claude_dir, project_dir=proj).calls), 1)
+        self.assertEqual(len(ur.read_calls(tree.claude_dir).calls), 2)
+
+    def test_session_with_only_main_file_is_not_a_call(self):
+        tree = us.Tree(self.base)
+        tree.main_session("c--p", "s1", [us.assistant("m1", T0 + "1Z")])
+        self.assertEqual(ur.read_calls(tree.claude_dir).calls, [])
+
+    def test_reader_only_touches_documented_keys(self):
+        # lista cerrada de claves que el lector accede, por recorrido AST del bloque del lector
+        with open(SCRIPT, "rb") as f:
+            src = f.read().decode("utf-8")
+        start = src.index("# --- Lector de subagentes (T2) ---")
+        end = src.index("# Orden fijo de las lineas del resumen")
+        used = keys_used_by(src[start:end])
+        self.assertGreater(len(used), 5)   # el recorrido no esta vacio
+        keys = {"type", "timestamp", "version", "message", "model", "id", "usage", "content", "agentType"}
+        # valores de comparaciones `in` (no son claves) y etiquetas de los contadores de calidad que
+        # el lector LEE en las propiedades de ReadResult
+        values = {"user", "assistant", ":", "(otro modelo)"}
+        labels = {"usage sin message.id", "message.id repetido entre archivos",
+                  "message.id sin deduplicar entre archivos (tope)"}
+        self.assertLessEqual(used, keys | values | labels | set(ur.TOKEN_FIELDS))
+        self.assertEqual(ur.TOKEN_FIELDS, ("input_tokens", "output_tokens", "cache_creation_input_tokens",
+                                           "cache_read_input_tokens"))
+
+    def test_key_extractor_detects_evasions(self):
+        for snippet, expected in (
+            ('x = meta["agentType"]', {"agentType"}),
+            ('x = obj["cwd"]', {"cwd"}),
+            ('if "cwd" in obj: pass', {"cwd"}),
+            ('if "cwd" not in obj: pass', {"cwd"}),
+            ('if k in ("gitBranch", "cwd"): pass', {"gitBranch", "cwd"}),
+            ('x = obj.get("prompt")', {"prompt"}),
+            ('x = obj.get("prompt", {}).get("description")', {"prompt", "description"}),
+            ('x = obj.pop("slug")', {"slug"}),
+            ('x = obj.setdefault("slug", 1)', {"slug"}),
+            ('x = a.b.c["toolUseResult"]["content"]', {"toolUseResult", "content"}),
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertEqual(keys_used_by(snippet), expected)
+        # un contador que se escribe (q["x"] += 1) no es una clave de transcripcion
+        self.assertEqual(keys_used_by('q["llamadas leidas"] += 1\nr = 3'), set())
+
+
+def keys_used_by(source: str) -> set:
+    """Constantes de cadena usadas como clave: subindices (solo lectura), `in`/`not in` y
+    llamadas .get/.pop/.setdefault."""
+    found = set()
+
+    def consts(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            found.add(node.value)
+        elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            for elt in node.elts:
+                consts(elt)
+
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+            consts(node.slice)
+        elif isinstance(node, ast.Compare) and any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops):
+            consts(node.left)
+            for comparator in node.comparators:
+                consts(comparator)
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and node.func.attr in ("get", "pop", "setdefault") and node.args):
+            consts(node.args[0])
+    return found
+
+
+class ReaderAuditFixes(ReaderBase):
+    # --- 1. plugins ---
+    def test_plugin_agents_are_grouped_by_validated_prefix(self):
+        self.assertEqual(ur.classify_agent("miplugin:agente"), ("plugin:miplugin", "plugin:miplugin"))
+        self.assertEqual(ur.classify_agent("otro-2:agente:mas"), ("plugin:otro-2", "plugin:otro-2"))
+        self.assertEqual(ur.classify_agent("0a:x"), ("plugin:0a", "plugin:0a"))
+        self.assertEqual(ur.classify_agent("a" * 32 + ":x")[1], "plugin:" + "a" * 32)
+        self.assertNotEqual(ur.classify_agent("p1:x")[1], ur.classify_agent("p2:x")[1])
+        self.assertEqual(ur.classify_agent("forge:x")[1], "plugin:forge")   # no se confunde con SyncLayer
+        for raw in ("Foo:x", "fo o:x", "a@b:x", "a/b:x", ":x", "a" * 33 + ":x", "-a:x", "foo\n:x",
+                    "a.b:x", us.M_TYPE + ":x", "２a:x", "a_b:x"):
+            self.assertEqual(ur.classify_agent(raw), ("(otro agente)", "plugin:(no-valido)"), repr(raw))
+
+    def test_user_agent_is_not_mixed_with_plugin_agent(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")], meta={"agentType": "mi-agente"})
+        tree.subagent("c--p", "s1", "a2", [us.assistant("m2", T0 + "1Z")], meta={"agentType": "pl1:mi-agente"})
+        tree.subagent("c--p", "s1", "a3", [us.assistant("m3", T0 + "1Z")], meta={"agentType": "pl2:mi-agente"})
+        tree.subagent("c--p", "s1", "a4", [us.assistant("m4", T0 + "1Z")], meta={"agentType": "pl1:otro"})
+        res = self.read(tree)
+        self.assertEqual(sorted(c.agent_group for c in res.calls), ["otros", "plugin:pl1", "plugin:pl1", "plugin:pl2"])
+
+    def test_text_after_colon_never_appears(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")],
+                      meta={"agentType": "pl:" + us.M_TYPE + us.M_PROMPT})
+        tree.subagent("c--p", "s1", "a2", [us.assistant("m2", T0 + "1Z")],
+                      meta={"agentType": us.M_TYPE + ":" + us.M_PROMPT})
+        res = self.read(tree)
+        self.assertEqual([(c.agent, c.agent_group) for c in res.calls],
+                         [("plugin:pl", "plugin:pl"), ("(otro agente)", "plugin:(no-valido)")])
+        self.assert_no_markers(res.calls, res.quality)
+
+    # --- 2. versiones en el mensaje de esquema ---
+    def _many_versions(self, extra_items, count=40):
+        tree = us.Tree(self.base)
+        for i in range(count):
+            tree.subagent("c--p", "s1", "a%02d" % i,
+                          [us.assistant("m%d" % i, T0 + "1Z", version="2.1.%d" % (300 + i))])
+        tree.subagent("c--p", "s1", "z-new", extra_items)
+        return tree
+
+    def test_schema_message_shows_range_and_the_new_failing_version(self):
+        tree = self._many_versions([us.assistant("mx", T0 + "1Z", usage_value="x", version="2.1.340")])
+        with self.assertRaises(ur.SchemaError) as cm:
+            self.read(tree)
+        msg = cm.exception.message
+        self.assertIn("2.1.300 a 2.1.340 (41 versiones)", msg)
+        self.assertIn("En archivos que fallan: 2.1.340", msg)
+        self.assertIn("Posteriores a la ultima verificada", msg)
+        self.assertIn(ur.VERIFIED_MAX, msg)
+        msg.encode("ascii")
+        self.assertLess(msg.index("2.1.340"), msg.index("2.1.339"))   # mas recientes primero
+        self.assertNotIn("2.1.305", msg)   # no vuelca la lista entera
+
+    def test_shown_versions_are_limited_and_recent_first(self):
+        text = ur._versions_text(
+            collections.Counter("2.1.%d" % n for n in range(300, 340)),
+            collections.Counter("2.1.%d" % n for n in range(320, 340)))
+        self.assertIn("2.1.300 a 2.1.339 (40 versiones)", text)
+        later = text.split("Posteriores", 1)[1]
+        self.assertLessEqual(len(set(re.findall(r"2\.1\.\d+", later))), 2 * ur.MAX_SHOWN_VERSIONS)
+        self.assertIn("mas)", text)
+        self.assertEqual(ur._versions_text(collections.Counter()), "(ninguna)")
+        self.assertEqual(ur._versions_text(collections.Counter(["2.1.300"])), "2.1.300 (1 version)")
+
+    def test_damaged_message_shows_versions_of_damaged_files(self):
+        tree = us.Tree(self.base)
+        for i in range(18):
+            tree.subagent("c--p", "s1", "a%02d" % i,
+                          [us.assistant("m%d" % i, T0 + "1Z", version="2.1.%d" % (300 + i))])
+        tree.subagent("c--p", "s1", "z", ["basura", us.assistant("n", T0 + "2Z", version="2.1.350")])
+        with self.assertRaises(ur.SchemaError) as cm:
+            self.read(tree)
+        msg = cm.exception.message
+        self.assertIn("1 de 19", msg)
+        self.assertIn("2.1.300 a 2.1.350 (19 versiones)", msg)
+        self.assertIn("En archivos que fallan: 2.1.350", msg)
+
+    # --- 3. deduplicacion entre archivos ---
+    def test_message_id_repeated_across_files_counts_once_and_is_reported(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("dup", T0 + "1Z", usage_value=us.usage(10, 1, 1, 1))])
+        tree.subagent("c--p", "s2", "a2", [us.assistant("dup", T0 + "2Z", usage_value=us.usage(10, 1, 1, 1)),
+                                           us.assistant("nuevo", T0 + "3Z", usage_value=us.usage(5, 1, 1, 1))])
+        res = self.read(tree)
+        first, second = res.calls
+        self.assertEqual((first.requests, first.input_tokens), (1, 10))
+        self.assertEqual((second.requests, second.input_tokens), (1, 5))   # el segundo archivo no suma `dup`
+        self.assertEqual(res.quality["message.id repetido entre archivos"], 1)
+        self.assertEqual(sum(c.input_tokens for c in res.calls), 15)
+        self.assertTrue(any("repetidos entre archivos" in w for w in res.warnings))
+
+    def test_file_fully_duplicated_keeps_has_usage_with_zero_requests(self):
+        tree = us.Tree(self.base)
+        for n in ("a1", "a2"):
+            tree.subagent("c--p", "s1", n, [us.assistant("dup", T0 + "1Z")])
+        first, second = self.read(tree).calls
+        self.assertEqual((second.requests, second.total_tokens, second.has_usage), (0, 0, True))
+        self.assertEqual(first.requests, 1)
+
+    def test_damaged_file_does_not_register_its_ids(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", ["basura", us.assistant("dup", T0 + "1Z")])
+        tree.subagent("c--p", "s1", "a2", [us.assistant("dup", T0 + "1Z")])
+        res = self.read(tree, check_damage=False)
+        self.assertEqual([c.requests for c in res.calls], [0, 1])
+        self.assertEqual(res.quality["message.id repetido entre archivos"], 0)
+
+    def test_same_id_twice_in_one_file_is_not_cross_file(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("dup", T0 + "1Z"), us.assistant("dup", T0 + "2Z")])
+        res = self.read(tree)
+        self.assertEqual(res.calls[0].requests, 1)
+        self.assertEqual(res.quality["message.id repetido entre archivos"], 0)
+        self.assertEqual(res.warnings, [])
+
+    def test_global_id_set_is_capped_and_reported(self):
+        tree = us.Tree(self.base)
+        for i in range(4):
+            tree.subagent("c--p", "s1", "a%d" % i, [us.assistant("i%d" % i, T0 + "1Z")])
+        tree.subagent("c--p", "s1", "b", [us.assistant("i0", T0 + "1Z")])   # repetido, dentro del tope
+        with mock.patch.object(ur, "MAX_IDS_GLOBAL", 2):
+            res = self.read(tree)
+        self.assertEqual(len(res.calls), 5)
+        self.assertEqual(res.quality["message.id repetido entre archivos"], 1)
+        self.assertEqual(res.quality["message.id sin deduplicar entre archivos (tope)"], 2)
+        self.assertTrue(any("tope" in w for w in res.warnings))
+
+    # --- 4. usage sin message.id ---
+    def test_usage_without_message_id_gives_a_fixed_warning(self):
+        tree = us.Tree(self.base)
+        line = us.assistant("x", T0 + "1Z")
+        del line["message"]["id"]
+        tree.subagent("c--p", "s1", "a1", [line])
+        res = self.read(tree)
+        self.assertEqual(res.quality["usage sin message.id"], 1)
+        self.assertTrue(res.usage_without_message_id)
+        self.assertEqual(res.warnings, [ur.WARN_NO_MESSAGE_ID])
+        ur.WARN_NO_MESSAGE_ID.encode("ascii")
+        clean = us.Tree(os.path.join(self.base, "limpio"))
+        clean.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        res = self.read(clean)
+        self.assertFalse(res.usage_without_message_id)
+        self.assertEqual(res.warnings, [])
+
+    def test_usage_without_id_in_damaged_file_is_not_counted(self):
+        tree = us.Tree(self.base)
+        line = us.assistant("x", T0 + "1Z")
+        del line["message"]["id"]
+        tree.subagent("c--p", "s1", "a1", ["basura", line])
+        res = self.read(tree, check_damage=False)
+        self.assertEqual(res.quality["usage sin message.id"], 0)
+        self.assertEqual(res.warnings, [])
+
+    # --- 5. modelo del meta ---
+    def test_meta_inherit_is_not_a_model(self):
+        tree = us.Tree(self.base)
+        line = us.assistant("m1", T0 + "1Z")
+        del line["message"]["model"]
+        tree.subagent("c--p", "s1", "a1", [line], meta={"agentType": "forge", "model": "inherit"})
+        tree.subagent("c--p", "s1", "a2", [us.assistant("m2", T0 + "1Z")],
+                      meta={"agentType": "forge", "model": "inherit"})
+        first, second = self.read(tree).calls
+        self.assertEqual((first.model, first.models, first.model_source, first.model_mismatch),
+                         ("(desconocido)", (), None, False))
+        self.assertEqual((second.model, second.model_source, second.model_mismatch),
+                         ("claude-opus-4-1", "lineas", False))
+
+    def test_model_mismatch_ignores_date_suffix_and_aliases(self):
+        cases = (
+            ("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", False),
+            ("claude-sonnet-4-5-20250929", "claude-sonnet-4-5", False),
+            ("claude-sonnet-4-5@20250929", "claude-sonnet-4-5-20250929", False),
+            ("claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20251001", False),
+            ("claude-sonnet-4-5", "claude-sonnet-4-5", False),
+            ("sonnet", "claude-opus-4-1", False),
+            ("opus", "claude-opus-4-1-20250805", False),
+            ("inherit", "claude-opus-4-1", False),
+            (us.M_MODEL, "claude-opus-4-1", False),
+            ("claude-sonnet-4-5", "claude-opus-4-1-20250805", True),
+            ("claude-sonnet-4-5-20250929", "claude-sonnet-4-4-20250929", True),
+            ("claude-sonnet-4", "claude-sonnet-4-5", True),
+        )
+        for i, (meta_model, line_model, expected) in enumerate(cases):
+            with self.subTest(meta=meta_model, line=line_model):
+                tree = us.Tree(os.path.join(self.base, "c%d" % i))
+                tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z", model=line_model)],
+                              meta={"agentType": "forge", "model": meta_model})
+                res = self.read(tree)
+                self.assertEqual(res.calls[0].model_mismatch, expected)
+                self.assertEqual(res.quality["llamadas con modelo distinto del meta"], int(expected))
+
+    def test_model_mismatch_with_mixed_lines_and_dated_meta(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z", model="claude-opus-4-1-20250805"),
+                                           us.assistant("m2", T0 + "2Z", model="claude-haiku-4-5-20251001")],
+                      meta={"agentType": "forge", "model": "claude-haiku-4-5"})
+        c = self.one(tree)
+        self.assertEqual((c.model, c.model_mismatch), ("mixto", False))
+
+    # --- 6. hora de respaldo ---
+    def test_fallback_time_is_file_mtime_in_utc(self):
+        tree = us.Tree(self.base)
+        path = tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        empty = tree.subagent("c--p", "s1", "a2", [])
+        trunc = tree.subagent("c--p", "s1", "a3", ['{"type": "assistant", "times'], final_newline=False)
+        epoch = 1_800_000_000
+        for p in (path, empty, trunc):
+            os.utime(p, (epoch, epoch))
+        res = self.read(tree)
+        expected = datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
+        for c in res.calls:
+            self.assertEqual(c.fallback_time, expected)
+            self.assertEqual(c.fallback_time.utcoffset(), datetime.timedelta(0))
+        self.assertIsNotNone(res.calls[0].start)
+        self.assertEqual([c.start for c in res.calls[1:]], [None, None])
+
+    def test_fallback_time_for_cap_damage_and_none_when_unopenable(self):
+        tree = us.Tree(self.base)
+        path = tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        os.utime(path, (1_800_000_000, 1_800_000_000))
+        with mock.patch.object(ur, "MAX_FILE_BYTES", 10):
+            c = self.read(tree, check_damage=False).calls[0]
+        self.assertEqual((c.damage, c.start), ("tope", None))
+        self.assertEqual(c.fallback_time.timestamp(), 1_800_000_000)
+        with mock.patch.object(ur, "_open_regular", side_effect=PermissionError(us.M_CONTENT)):
+            c = self.read(tree, check_damage=False).calls[0]
+        self.assertEqual((c.damage, c.fallback_time), ("ilegible", None))
+
+    # --- 7. damage / excluded / usable ---
+    def test_damaged_call_keeps_everything_but_tokens(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [
+            us.assistant("m1", T0 + "1Z", version="2.1.310", blocks=[us.tool_use_block("t1", "Read")]),
+            "basura " + us.M_CONTENT,
+            us.assistant("m2", T0 + "5Z", version="2.1.311", model="claude-haiku-4-5"),
+        ])
+        c = self.read(tree, check_damage=False).calls[0]
+        self.assertEqual((c.damage, c.status), ("linea intermedia corrupta", "danada"))
+        self.assertTrue(c.excluded)
+        self.assertFalse(c.usable)
+        self.assertTrue(c.has_usage)
+        self.assertEqual((c.requests, c.total_tokens), (0, 0))
+        self.assertEqual(c.tools, 1)
+        self.assertEqual(c.versions, ("2.1.310", "2.1.311"))
+        self.assertEqual(c.models, ("claude-haiku-4-5", "claude-opus-4-1"))
+        self.assertEqual((c.start.second, c.end.second), (1, 5))
+
+    def test_sin_usage_is_not_excluded_but_not_usable(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.user(T0 + "0Z"),
+                                           us.assistant("m1", T0 + "9Z", usage_value=None,
+                                                        blocks=[us.tool_use_block("t1", "Read")])])
+        tree.subagent("c--p", "s1", "a2", [us.assistant("m2", T0 + "1Z")])
+        sin_usage, ok = self.read(tree).calls
+        self.assertEqual(sin_usage.status, "sin_usage")
+        self.assertFalse(sin_usage.excluded)
+        self.assertFalse(sin_usage.usable)
+        self.assertEqual((sin_usage.tools, sin_usage.start.second, sin_usage.end.second), (1, 0, 9))
+        self.assertFalse(ok.excluded)
+        self.assertTrue(ok.usable)
+
+    def test_failed_file_is_excluded_and_empty(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        with mock.patch.object(ur, "MAX_FILE_BYTES", 10):
+            c = self.read(tree, check_damage=False).calls[0]
+        self.assertTrue(c.excluded)
+        self.assertFalse(c.usable)
+        self.assertEqual((c.tools, c.start, c.end, c.versions, c.models), (0, None, None, (), ()))
+
+    # --- 8. hardlinks aceptados aunque falle ---
+    def _hardlinked_big(self, tree):
+        outer = us.Tree(os.path.join(self.base, "afuera"))
+        target = outer.subagent("c--x", "s9", "a9", [us.assistant("h%d" % i, T0 + "1Z") for i in range(40)],
+                                meta=None)
+        sub = os.path.join(tree.folder("c--p"), "s1", "subagents")
+        os.makedirs(sub)
+        self.hardlink(target, os.path.join(sub, "agent-h.jsonl"))
+
+    def test_hardlink_counted_when_file_exceeds_cap(self):
+        tree = us.Tree(self.base)
+        self._hardlinked_big(tree)
+        with mock.patch.object(ur, "MAX_FILE_BYTES", 500):
+            res = self.read(tree, check_damage=False)
+        self.assertEqual(res.calls[0].damage, "tope")
+        self.assertTrue(res.calls[0].hardlink)
+        self.assertEqual(res.quality["hardlinks aceptados"], 1)
+
+    def test_hardlink_counted_when_file_is_unreadable_mid_read(self):
+        tree = us.Tree(self.base)
+        self._hardlinked_big(tree)
+        real = ur._iter_objects
+
+        def failing(f, info):
+            it = real(f, info)
+            yield next(it)
+            raise OSError("fallo")
+
+        with mock.patch.object(ur, "_iter_objects", failing):
+            res = self.read(tree, check_damage=False)
+        self.assertEqual(res.calls[0].damage, "ilegible")
+        self.assertTrue(res.calls[0].hardlink)
+        self.assertEqual(res.quality["hardlinks aceptados"], 1)
+
+    def test_hardlink_not_counted_for_regular_failed_file(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        with mock.patch.object(ur, "MAX_FILE_BYTES", 10):
+            res = self.read(tree, check_damage=False)
+        self.assertFalse(res.calls[0].hardlink)
+        self.assertEqual(res.quality["hardlinks aceptados"], 0)
+
+    # --- 12. un solo enumerador ---
+    def test_reader_and_inspect_enumerate_the_same_way(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--ok", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        folder = tree.folder("c--ok")
+        for name in ("a b.jsonl", "con.jsonl", "s.1.jsonl"):
+            with open(os.path.join(folder, name), "wb") as f:
+                f.write(b"{}\n")
+        os.makedirs(os.path.join(folder, "s 2", "subagents"))
+        res = self.read(tree)
+        code, out, err = self.inspect(tree)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(res.quality["nombres no validos omitidos"], field(out, "nombres no validos omitidos"))
+        self.assertEqual(res.quality["nombres no validos omitidos"], 4)
+        self.assertEqual(res.quality["carpetas de proyecto leidas"], field(out, "carpetas de proyecto leidas"))
+
+
+class InspectHardlinkSessions(Base):
+    def test_session_whose_only_file_is_a_hardlinked_main_is_not_read(self):
+        tree = us.Tree(self.base)
+        outer = us.Tree(os.path.join(self.base, "afuera"))
+        main = outer.main_session("c--x", "s9", [us.assistant("m9", T0 + "1Z")])
+        folder = tree.folder("c--p")
+        try:
+            os.link(main, os.path.join(folder, "s1.jsonl"))
+        except (OSError, NotImplementedError) as e:
+            self.skipTest("el sistema no permite hardlinks: %s" % e)
+        code, out, err = self.inspect(tree)
+        self.assertEqual(code, 1)  # ninguna sesion leida: no hay transcripciones
+        self.assertEqual(out, "")
+
+    def test_partial_file_leaves_no_lines_counted_in_inspect(self):
+        tree = us.Tree(self.base)
+        for i in range(30):
+            tree.subagent("c--p", "s1", "a%d" % i, [us.assistant("m1", T0 + "1Z")])
+        items = ["no es json"] + [us.assistant("b%d" % i, T0 + "1Z") for i in range(60)]
+        tree.subagent("c--p", "s1", "big", items)
+        with mock.patch.object(ur, "MAX_FILE_BYTES", 5000), \
+                mock.patch.object(ur.os, "fstat", ReaderHardlinksAndLimits._lying_fstat()):
+            code, out, err = self.inspect(tree)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(field(out, "archivos omitidos por tope de tamano"), 1)
+        self.assertEqual(field(out, "subagente lineas"), 30)
+        self.assertEqual(field(out, "lineas corruptas"), 0)
+        self.assertEqual(field(out, "subagente lineas assistant con usage"), 30)
 
 
 if __name__ == "__main__":

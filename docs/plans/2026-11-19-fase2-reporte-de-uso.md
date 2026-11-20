@@ -669,3 +669,20 @@ Detalle y cifras en [`2026-11-20-fase2-g1-resultado.md`](2026-11-20-fase2-g1-res
 4. **Líneas sobredimensionadas descartadas:** no aportan tokens y se cuentan aparte.
 5. **Pendientes de `shield` que entran en T2:** un archivo omitido a mitad de lectura no deja líneas contadas (acumular por archivo y fusionar sólo si termina bien); una sesión cuyo único archivo es un hardlink de la sesión principal no cuenta como sesión leída si no se leyó ningún archivo, o se documenta.
 6. **`safe_name`** no se reutiliza para texto visible: si T2 necesita mostrar `agentType` usa una lista permitida estrecha (sin `@`, `/`, `:`) o una lista cerrada de agentes conocidos, y nunca un hash de 16 bits.
+
+## Notas obligatorias para T3 en adelante (revisión de T2, 2026-11-20)
+
+Salen de la revisión de `auditor` sobre T2 y prevalecen donde contradigan el texto anterior.
+
+1. **Agrupar por `(agent, agent_group)`**, nunca sólo por nombre: `(otro agente)` lo comparten los agentes de usuario (`otros`) y los de plugin con prefijo no válido; los plugins válidos salen como `plugin:<prefijo>`.
+2. **Ventana y daño.** T3 llama a `read_calls(check_damage=False)` y aplica `check_damaged` sobre las llamadas de la ventana (el 5 % se mide sobre los archivos de la ventana, no sobre todo el historial). Las llamadas sin `start` usan `fallback_time` (mtime aproximado) para ubicarse en la ventana.
+3. **Qué entra en cada métrica.** Tokens y medianas: sólo llamadas con `usable` y `requests > 0`. Duración y herramientas: todas las que no estén `excluded` (`damage is None`), incluidas las `sin_usage`. Una llamada dañada conserva `tools`, `start`, `end`, `models` y `versions` pero queda fuera de las estadísticas.
+4. **Archivos con todos los ids repetidos** (`requests = 0`, tokens 0, `usable=True`) no entran en medianas ni p90; el arreglo previo a T3 es `usable = has_usage and damage is None and requests > 0` (o un campo `repeated_requests` para que T3 decida). La deduplicación entre archivos atribuye el id al archivo que se recorre primero (orden alfabético), no al de inicio más temprano: documentarlo y, si es barato, atribuir al más temprano.
+4b. **Hardlinks dentro de `projects/`.** Si dos nombres del mismo inodo aparecen dentro de `projects/` cuentan hoy como dos llamadas: recordar `(st_dev, st_ino)` de los archivos con `nlink > 1` y contar el duplicado aparte, sin crear llamada.
+5. **Avisos del reporte** (T5): si `usage sin message.id` > 0 o `message.id repetido entre archivos` > 0 o se superó `MAX_IDS_GLOBAL`, el reporte lo muestra como aviso en la cabecera. Si en la corrida real (C4) `message.id repetido entre archivos` sale mayor que 0, esto sube a Important.
+6. **Privacidad del prefijo de plugin.** `plugin:<prefijo>` sólo valida el alfabeto, no el contenido: revela nombres de plugins privados en un global compartible. Riesgo aceptado y documentado en 3.7, el README y el pie del reporte global; T6 valora una opción que agrupe plugins como `plugin:<4 bytes de hash>`.
+7. **Desglose por versión** de Claude Code (decisión G1 2): tres rangos (anterior a 2.1.310, 2.1.310–2.1.327, desde 2.1.328).
+8. **Liberar `ReadResult._seen_ids`** al terminar `read_calls` (`res._seen_ids = None`).
+9. **Prueba de claves (`keys_used_by`):** que también falle ante `.items()`, `.values()`, `.keys()` y subíndices o `.get` con un argumento `Name` fuera de una lista de nombres permitidos.
+10. **`read_calls(project_dir=...)` sin carpeta coincidente** devuelve vacío: T7 debe convertirlo en exit 1 con la pista de `--transcripts-dir` (§3.3).
+11. **`CHK_TS`** (exit 3 si una línea `user`/`assistant` no trae `timestamp`) no está confirmado con datos reales: verificarlo en C4; si falla con datos sanos, relajarlo.

@@ -2,6 +2,15 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 2, T2)
+
+- `tools/usage_report.py`: lector defensivo de subagentes (`read_calls`, `CallRecord`): deduplicación
+  por `message.id` dentro y entre archivos, hardlinks de Claude Code aceptados con contador aparte,
+  conteos por archivo (un archivo omitido a mitad de lectura no deja líneas contadas), tipo de agente
+  por lista cerrada y conjuntos `SyncLayer`, `integrado`, `plugin:<prefijo>`, `otros` y `sin-meta`,
+  exit 3 ante esquema desconocido o más del 5 % de archivos dañados.
+- `docs/plans/2026-11-19-fase2-reporte-de-uso.md`: notas obligatorias para T3 en adelante.
+
 ### Añadido (compuerta G1 de la Fase 2)
 
 - `docs/plans/2026-11-20-fase2-g1-resultado.md`: resultado de correr `inspect` sobre las

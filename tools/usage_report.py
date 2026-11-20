@@ -42,6 +42,7 @@ herramienta solo lee y nunca ejecuta lo que lee.
 
 import argparse
 import collections
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -65,6 +66,12 @@ MAX_FILE_BYTES = 512 * 1024 * 1024
 # Tope de elementos de cada conjunto de ids por archivo (message.id, tool_use, Agent/Task).
 # Pasado el tope el archivo se omite igual que arriba: la memoria queda acotada.
 MAX_IDS_PER_FILE = 500_000
+# Tope del conjunto GLOBAL de message.id (digests de 8 bytes) del lector de subagentes, para
+# detectar un mismo id en dos archivos. Pasado el tope se deja de recordar ids nuevos (no se
+# omite nada): lo que ya no se puede comparar se cuenta aparte y avisa. ~2 M ids son ~150 MB.
+MAX_IDS_GLOBAL = 2_000_000
+# Versiones de Claude Code que el mensaje de exit 3 enumera por lista (las mas recientes).
+MAX_SHOWN_VERSIONS = 8
 # Mas de este porcentaje de archivos de subagente danados o ilegibles da exit 3.
 MAX_DAMAGED_PERCENT = 5
 # Tope de valores distintos por histograma (memoria) y de valores mostrados.
@@ -78,10 +85,11 @@ NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/\-]{0,63}\Z")
 SYNTHETIC_MODEL = "<synthetic>"
 
 # Filtros de los histogramas, uno por campo (lista cerrada o patron estrecho).
-# Version: x.y.z numerico acotado y sufijo opcional corto (-beta.1, -rc1): letras (hasta 8),
-# hasta 3 digitos y hasta dos bloques .n. Un sufijo largo (clave, hash) no pasa.
+# Version: x.y.z numerico acotado y sufijo opcional de lista cerrada (-alpha, -beta, -rc), hasta
+# 3 digitos y hasta dos bloques .n (-beta.1, -rc1). Las versiones reales vistas no llevan sufijo:
+# cualquier otra palabra (clave, hash, texto) no pasa.
 VERSION_RE = re.compile(
-    r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}(-[A-Za-z]{1,8}[0-9]{0,3}(\.[0-9]{1,3}){0,2})?\Z")
+    r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}(-(alpha|beta|rc)[0-9]{0,3}(\.[0-9]{1,3}){0,2})?\Z")
 # Modelo: familia conocida (o version numerica, p. ej. claude-3-5-sonnet-...) y luego tramos
 # separados por '-'. Un tramo es: palabra en minuscula de hasta 12 caracteres, numero de 1-2
 # digitos (con '.' solo entre numeros cortos, p. ej. 4.5) o fecha de 8 digitos. Un '.' nunca
@@ -266,19 +274,21 @@ def _list_dir(path: str):
 
 
 class LinkRefused(OSError):
-    """Archivo con mas de un enlace duro: podria apuntar fuera de projects/. Se cuenta aparte."""
+    """Archivo con mas de un enlace duro: podria apuntar fuera de projects/. Se cuenta aparte
+    ("hardlinks (nlink > 1)" en inspect)."""
 
 
 class _TooBig(Exception):
     """Archivo o conjunto de ids por encima de los topes: se omite el archivo."""
 
 
-def _open_regular(path: str):
+def _open_regular(path: str, allow_hardlink: bool = False):
     """Abre en binario un archivo regular sin seguir enlaces. Lanza OSError si no lo es.
 
-    Rechaza enlaces simbolicos, puntos de reanalisis, no regulares y archivos con mas de un
-    enlace duro (LinkRefused). O_NONBLOCK (donde existe) evita que un FIFO cambiado en la
-    carrera bloquee la apertura."""
+    Rechaza enlaces simbolicos, puntos de reanalisis, no regulares y, salvo allow_hardlink,
+    archivos con mas de un enlace duro (LinkRefused). Solo el lector de transcripciones de
+    subagentes acepta enlaces duros (decision G1: Claude Code los crea). O_NONBLOCK (donde
+    existe) evita que un FIFO cambiado en la carrera bloquee la apertura."""
     st = os.lstat(path)
     if _kind(st) != "file":
         raise OSError("no es un archivo regular")
@@ -291,7 +301,7 @@ def _open_regular(path: str):
             raise OSError("cambio de tipo")
         if _identity_changed(st, st2):
             raise OSError("cambio de archivo")
-        if st2.st_nlink != 1:
+        if st2.st_nlink != 1 and not allow_hardlink:
             raise LinkRefused("mas de un enlace duro")
         return os.fdopen(fd, "rb")
     except BaseException:
@@ -357,6 +367,20 @@ class _Stats:
         self.keys = collections.defaultdict(collections.Counter)
         self.hist = collections.defaultdict(collections.Counter)
         self.hist_overflow = collections.Counter()
+
+    def merge(self, other: "_Stats") -> None:
+        """Suma los conteos de otro _Stats. Se usa para fusionar un archivo SOLO si termino bien."""
+        self.c.update(other.c)
+        for scope, counter in other.keys.items():
+            self.keys[scope].update(counter)
+        for scope, counter in other.hist.items():
+            mine = self.hist[scope]
+            for name, count in counter.items():
+                if name in mine or len(mine) < HIST_STORE_LIMIT:
+                    mine[name] += count
+                else:
+                    self.hist_overflow[scope] += count
+        self.hist_overflow.update(other.hist_overflow)
 
     def add_hist(self, scope: str, value) -> None:
         name = hist_label(scope.rsplit(".", 1)[1], value)
@@ -497,28 +521,33 @@ def _scan_jsonl(path: str, scope: str, st: _Stats):
     """Lee un JSONL y acumula estructura.
 
     Devuelve (ctx, info); None si no se pudo leer u omitido por tope de tamano; _SKIPPED si es
-    un archivo con varios enlaces duros (ya contado en "enlaces omitidos")."""
+    un archivo con varios enlaces duros (ya contado en "hardlinks (nlink > 1)").
+
+    Se acumula en un _Stats propio del archivo y se fusiona en `st` solo si la lectura termina
+    bien: un archivo omitido a mitad (tope, error de E/S) no deja lineas contadas."""
     try:
         f = _open_regular(path)
     except LinkRefused:
-        st.c["enlaces omitidos"] += 1
+        st.c["hardlinks (nlink > 1)"] += 1
         return _SKIPPED
     except OSError:
         return None
     ctx = _FileCtx(scope)
     info = _LineInfo()
+    local = _Stats()
     try:
         with f:
             if os.fstat(f.fileno()).st_size > MAX_FILE_BYTES:
                 raise _TooBig()
             for obj in _iter_objects(f, info):
-                _scan_line(obj, st, ctx)
+                _scan_line(obj, local, ctx)
     except _TooBig:
         st.c["archivos omitidos por tope de tamano"] += 1
         return None
     except OSError:
         return None
-    _finish_file(info, ctx, st)
+    _finish_file(info, ctx, local)
+    st.merge(local)
     return ctx, info
 
 
@@ -528,7 +557,7 @@ def _scan_meta(path: str, st: _Stats, agent_ids, main_present: bool) -> None:
         with f:
             data = f.read(MAX_META_BYTES + 1)
     except LinkRefused:
-        st.c["enlaces omitidos"] += 1
+        st.c["hardlinks (nlink > 1)"] += 1
         return
     except OSError:
         st.c["meta ilegible"] += 1
@@ -558,7 +587,15 @@ def _scan_meta(path: str, st: _Stats, agent_ids, main_present: bool) -> None:
 
 
 def _scan_session(folder: str, sid: str, has_main: bool, has_dir: bool, st: _Stats) -> None:
-    st.c["sesiones"] += 1
+    # Una sesion cuenta como leida solo si se leyo algun archivo suyo: una sesion cuyo unico
+    # archivo es un hardlink (no se lee) o es ilegible no cuenta.
+    if _scan_session_files(folder, sid, has_main, has_dir, st):
+        st.c["sesiones"] += 1
+
+
+def _scan_session_files(folder: str, sid: str, has_main: bool, has_dir: bool, st: _Stats) -> bool:
+    """Lee los archivos de una sesion. Devuelve True si leyo al menos uno."""
+    read_any = False
     agent_ids = set()
     if has_main:
         done = _scan_jsonl(os.path.join(folder, sid + ".jsonl"), "sesion", st)
@@ -567,14 +604,15 @@ def _scan_session(folder: str, sid: str, has_main: bool, has_dir: bool, st: _Sta
             if done is None:
                 st.c["archivos ilegibles"] += 1
             else:
+                read_any = True
                 agent_ids = done[0].agent_ids
     if not has_dir:
-        return
+        return read_any
     sub_dir = os.path.join(folder, sid, "subagents")
     listing = _list_dir(sub_dir)
     if listing is None:
         st.c["carpetas ilegibles"] += 1
-        return
+        return read_any
     kinds = dict(listing)
     for name, kind in listing:
         if kind == "link":
@@ -589,16 +627,19 @@ def _scan_session(folder: str, sid: str, has_main: bool, has_dir: bool, st: _Sta
             continue
         if name.endswith(".jsonl"):
             stem = name[:-len(".jsonl")]
-            _scan_subagent(sub_dir, name, stem + ".meta.json", kinds, agent_ids, has_main, st)
+            if _scan_subagent(sub_dir, name, stem + ".meta.json", kinds, agent_ids, has_main, st):
+                read_any = True
         else:
             if kinds.get(name[:-len(".meta.json")] + ".jsonl") != "file":
                 st.c["metas sin transcripcion"] += 1
+    return read_any
 
 
-def _scan_subagent(sub_dir, name, meta_name, kinds, agent_ids, main_present, st: _Stats) -> None:
+def _scan_subagent(sub_dir, name, meta_name, kinds, agent_ids, main_present, st: _Stats) -> bool:
+    """True si la transcripcion se leyo."""
     done = _scan_jsonl(os.path.join(sub_dir, name), "subagente", st)
     if done is _SKIPPED:
-        return
+        return False
     st.c["archivos de subagente"] += 1
     if done is None:
         st.c["archivos ilegibles"] += 1
@@ -614,26 +655,31 @@ def _scan_subagent(sub_dir, name, meta_name, kinds, agent_ids, main_present, st:
         _scan_meta(os.path.join(sub_dir, meta_name), st, agent_ids, main_present)
     else:
         st.c["subagentes sin meta"] += 1
+    return done is not None
 
 
-def _scan_project_folder(folder: str, st: _Stats) -> None:
+def _enum_sessions(folder: str, counts):
+    """Sesiones de una carpeta de proyecto: lista ordenada de (sid, tiene .jsonl, tiene
+    subagents/), o None si la carpeta no se puede listar. UNICO enumerador: lo usan `inspect` y el
+    lector de subagentes, asi cuentan igual las carpetas, los enlaces y los nombres no validos
+    (`counts` es el Counter donde se anotan)."""
     listing = _list_dir(folder)
     if listing is None:
-        st.c["carpetas ilegibles"] += 1
-        return
-    st.c["carpetas de proyecto leidas"] += 1
+        counts["carpetas ilegibles"] += 1
+        return None
+    counts["carpetas de proyecto leidas"] += 1
     sessions = {}
     for name, kind in listing:
         if kind == "link":
-            st.c["enlaces omitidos"] += 1
+            counts["enlaces omitidos"] += 1
         elif kind == "file" and name.endswith(".jsonl"):
             if valid_session_file(name):
                 sessions.setdefault(name[:-len(".jsonl")], [False, False])[0] = True
             else:
-                st.c["nombres no validos omitidos"] += 1
+                counts["nombres no validos omitidos"] += 1
         elif kind == "dir":
             if not valid_dir_name(name):
-                st.c["nombres no validos omitidos"] += 1
+                counts["nombres no validos omitidos"] += 1
                 continue
             sub = _list_dir(os.path.join(folder, name))
             if sub is None:
@@ -641,10 +687,591 @@ def _scan_project_folder(folder: str, st: _Stats) -> None:
             if ("subagents", "dir") in sub:
                 sessions.setdefault(name, [False, False])[1] = True
             elif ("subagents", "link") in sub:
-                st.c["enlaces omitidos"] += 1
-    for sid in sorted(sessions):
-        has_main, has_dir = sessions[sid]
+                counts["enlaces omitidos"] += 1
+    return [(sid, flags[0], flags[1]) for sid, flags in sorted(sessions.items())]
+
+
+def _scan_project_folder(folder: str, st: _Stats) -> None:
+    for sid, has_main, has_dir in _enum_sessions(folder, st.c) or ():
         _scan_session(folder, sid, has_main, has_dir, st)
+
+
+# --- Lector de subagentes (T2) ---
+#
+# Convierte cada `agent-<id>.jsonl` en un CallRecord (una llamada). Solo lee las claves de la
+# tabla 3.3 del plan: en las lineas `type`, `timestamp`, `version`, `message`; en `message`
+# `id`, `model`, `usage` (cuatro campos numericos) y `content`; en cada bloque `type` e `id`;
+# en el meta `agentType` y `model`. Nada mas.
+
+# Ultima version de Claude Code contra la que se verifico el formato (G1: 2.1.287 a 2.1.326).
+VERIFIED_MAX = "2.1.326"
+
+# Los nueve agentes de SyncLayer (los comprueba una prueba contra agents/*.md) y los
+# integrados mas comunes. El tipo de agente visible sale SOLO de estas listas cerradas:
+# cualquier otro nombre (usuario, plugin) se muestra como "(otro agente)". No se muestra
+# ningun texto libre del meta.
+SYNCLAYER_AGENTS = frozenset((
+    "oracle", "scout", "atlas", "forge", "sentinel", "auditor", "shield", "debugger", "scribe",
+))
+BUILTIN_AGENTS = frozenset((
+    "general-purpose", "Explore", "Plan", "statusline-setup", "output-style-setup",
+    "claude-code-guide",
+))
+DEFAULT_AGENT = "general-purpose"
+OTHER_AGENT = "(otro agente)"
+NO_META_AGENT = "(sin-meta)"
+# Alias de modelo que el meta puede traer en lugar de un id completo (lista cerrada).
+# "inherit" NO esta: no es un modelo (el subagente hereda el del padre), se trata como ausente.
+MODEL_ALIASES = frozenset(("opus", "sonnet", "haiku", "fable"))
+NOT_A_MODEL = frozenset(("inherit",))
+_DATE_SUFFIX_RE = re.compile(r"[-@][0-9]{8}\Z")
+
+# Avisos de texto fijo para el reporte (T5): salen de ReadResult.warnings. ASCII, sin datos.
+WARN_NO_MESSAGE_ID = ("hay lineas con usage sin message.id: cada linea se cuenta como una peticion "
+                      "y no se puede deduplicar")
+WARN_ID_REPEATED = ("hay message.id repetidos entre archivos (p. ej. agentes reanudados): el "
+                    "segundo archivo no suma esas peticiones")
+WARN_ID_CAP = ("se alcanzo el tope de ids para deduplicar entre archivos: puede haber peticiones "
+               "repetidas sin detectar")
+
+# Comprobaciones de esquema (exit 3). Los nombres salen en el mensaje: texto fijo.
+CHK_USAGE_OBJ = "usage presente y no es objeto"
+CHK_TOKENS = "campo de tokens que no es entero no negativo"
+CHK_TS = "timestamp ausente o no interpretable"
+CHK_META = "meta que no es objeto JSON o sin agentType cadena"
+CHK_NO_TYPE = "archivo con lineas validas y ninguna con type"
+
+_VERSION_PARTS_RE = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)")
+# Prefijo de un agente de plugin (lo que va antes del primer ":"): minusculas, digitos y '-'.
+PLUGIN_PREFIX_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}\Z")
+
+
+class SchemaError(Exception):
+    """Esquema desconocido o demasiados archivos danados (exit 3). El mensaje es texto fijo,
+    numeros y versiones filtradas: nunca contenido ni rutas."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+class EnvError(Exception):
+    """Entorno o datos (exit 1). Mensaje de texto fijo, sin rutas."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+def version_key(label: str):
+    """(x, y, z) de una version ya filtrada; (0, 0, 0) si no es numerica."""
+    m = _VERSION_PARTS_RE.match(label)
+    return tuple(int(g) for g in m.groups()) if m else (0, 0, 0)
+
+
+def is_unverified(label: str) -> bool:
+    """True si la version es mayor que VERIFIED_MAX (una etiqueta no valida no cuenta)."""
+    return version_key(label) > version_key(VERIFIED_MAX)
+
+
+def classify_agent(raw):
+    """(nombre visible, conjunto) de un agentType.
+
+    SyncLayer, integrado y otros salen de listas cerradas. Un nombre con ":" es de un plugin: el
+    unico texto libre que se muestra es el PREFIJO, validado con PLUGIN_PREFIX_RE, como
+    `plugin:<prefijo>` (nombre visible y conjunto, para comparar plugins entre si, 3.5). Lo que hay
+    tras el primer ":" nunca se muestra. Un prefijo no valido da ("(otro agente)",
+    "plugin:(no-valido)")."""
+    if isinstance(raw, str):
+        if raw == "":
+            return DEFAULT_AGENT, "integrado"
+        if raw in SYNCLAYER_AGENTS:
+            return raw, "SyncLayer"
+        if raw in BUILTIN_AGENTS:
+            return raw, "integrado"
+        if ":" in raw:
+            prefix = raw.split(":", 1)[0]
+            if PLUGIN_PREFIX_RE.match(prefix):
+                label = "plugin:" + prefix
+                return label, label
+            return OTHER_AGENT, "plugin:(no-valido)"
+    return OTHER_AGENT, "otros"
+
+
+@dataclasses.dataclass(frozen=True)
+class CallRecord:
+    """Una llamada a un subagente (un agent-<id>.jsonl). Sin contenido: solo numeros y
+    etiquetas de listas cerradas. Los identificadores son resumenes (blake2b de 64 bits) para
+    agrupar en memoria; no se escriben en ningun reporte.
+
+    `damage` (None | "linea intermedia corrupta" | "ilegible" | "tope") marca una llamada EXCLUIDA
+    de las estadisticas de tokens (propiedad `excluded`). Con "linea intermedia corrupta" la
+    llamada conserva `tools`, `start`, `end`, `models`, `versions` y `has_usage`: solo se vacian
+    los tokens y `requests`. Con "ilegible" o "tope" el archivo se descarta entero y no queda nada
+    (tampoco start/end/versions): para ubicarla en una ventana esta `fallback_time`.
+
+    `excluded` y `usable` no son opuestos: una llamada `sin_usage` no esta excluida (cuenta para
+    duracion y herramientas) pero tampoco es `usable` (no tiene tokens que sumar).
+
+    `fallback_time`: mtime del archivo (del fstat del descriptor ya abierto), en UTC. Es una
+    hora APROXIMADA (la ultima escritura, no el inicio de la llamada) y solo sirve para ubicar en
+    una ventana las llamadas con `start=None`. None si no se pudo abrir el archivo."""
+    call_id: str
+    project: str            # alias p-<8 hex> (3.7)
+    session: str            # resumen de la sesion, solo para agrupar
+    agent: str              # nombre visible (lista cerrada) o "(otro agente)" / "(sin-meta)"
+    agent_group: str        # SyncLayer | integrado | plugin:<prefijo> | plugin:(no-valido) | otros | sin-meta
+    status: str             # correcta | sin_usage | sin_meta | danada
+    damage: object          # None | "linea intermedia corrupta" | "ilegible" | "tope"
+    has_meta: bool
+    has_usage: bool
+    models: tuple
+    model: str              # el modelo, "mixto" o "(desconocido)"
+    model_source: object    # "lineas" | "meta" | None
+    model_mismatch: bool    # el meta trae un id completo distinto de los de las lineas
+    input_tokens: int
+    output_tokens: int
+    cache_creation_tokens: int
+    cache_read_tokens: int
+    requests: int           # message.id distintos con usage
+    tools: int              # bloques tool_use con id distinto
+    start: object           # datetime UTC o None
+    end: object
+    fallback_time: object   # datetime UTC (mtime del archivo, aproximado) o None
+    versions: tuple         # versiones de Claude Code de sus lineas (ya filtradas)
+    hardlink: bool
+    oversize_lines: int
+    background: object      # None: el dato vive en la sesion principal (T4), no aqui
+
+    @property
+    def total_tokens(self) -> int:
+        return (self.input_tokens + self.output_tokens + self.cache_creation_tokens
+                + self.cache_read_tokens)
+
+    @property
+    def usable(self) -> bool:
+        """Entra en las estadisticas de tokens: tiene usage y el archivo no esta danado."""
+        return self.has_usage and self.damage is None
+
+    @property
+    def excluded(self) -> bool:
+        """Llamada danada (damage no es None): fuera de las estadisticas de tokens. Distinto de
+        `usable`: una llamada `sin_usage` no esta excluida."""
+        return self.damage is not None
+
+    @property
+    def unverified(self) -> bool:
+        return any(is_unverified(v) for v in self.versions)
+
+
+class ReadResult:
+    def __init__(self):
+        self.calls = []
+        self.quality = collections.Counter()
+        self.schema = collections.Counter()    # comprobacion -> archivos
+        self.versions = collections.Counter()  # version filtrada -> archivos
+        self.schema_versions = collections.Counter()  # version -> archivos que fallan una comprobacion
+        self._seen_ids = set()                 # digests de message.id ya sumados (entre archivos)
+
+    @property
+    def usage_without_message_id(self) -> bool:
+        """True si alguna linea con usage no traia message.id (cada una cuenta como peticion)."""
+        return self.quality["usage sin message.id"] > 0
+
+    @property
+    def warnings(self) -> list:
+        """Avisos de texto fijo para el reporte (sin datos leidos)."""
+        out = []
+        if self.usage_without_message_id:
+            out.append(WARN_NO_MESSAGE_ID)
+        if self.quality["message.id repetido entre archivos"] > 0:
+            out.append(WARN_ID_REPEATED)
+        if self.quality["message.id sin deduplicar entre archivos (tope)"] > 0:
+            out.append(WARN_ID_CAP)
+        return out
+
+
+class _CallAcc:
+    """Acumulador de UN archivo: solo se fusiona en el resultado si termina bien."""
+
+    def __init__(self):
+        self.lines = 0
+        self.typed = 0
+        self.schema = set()
+        self.versions = set()
+        self.first = None
+        self.last = None
+        self.models = set()
+        self.usage_by_id = {}
+        self.usage_no_id = []
+        self.tools = set()
+        self.synthetic = 0
+
+
+def _parse_ts(value):
+    """datetime UTC de un ISO 8601 (sin zona se toma como UTC); None si no se interpreta."""
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.astimezone(datetime.timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _token_tuple(usage: dict):
+    """Los cuatro campos en orden, o None si alguno no es entero no negativo (bool no vale)."""
+    out = []
+    for name in TOKEN_FIELDS:
+        value = usage.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        out.append(value)
+    return tuple(out)
+
+
+def _acc_line(obj: dict, acc: _CallAcc) -> None:
+    acc.lines += 1
+    kind = obj.get("type")
+    if isinstance(kind, str):
+        acc.typed += 1
+    version = obj.get("version")
+    if isinstance(version, str):
+        acc.versions.add(hist_label("version", version))
+    ts = _parse_ts(obj.get("timestamp"))
+    if ts is None:
+        if kind in ("user", "assistant"):
+            acc.schema.add(CHK_TS)
+    else:
+        if acc.first is None or ts < acc.first:
+            acc.first = ts
+        if acc.last is None or ts > acc.last:
+            acc.last = ts
+    if kind != "assistant":
+        return
+    message = obj.get("message")
+    if not isinstance(message, dict):
+        return
+    model = message.get("model")
+    if model == SYNTHETIC_MODEL:
+        acc.synthetic += 1   # sin peticion real: fuera de modelos, tokens y herramientas
+        return
+    if isinstance(model, str):
+        acc.models.add(hist_label("model", model))
+    if "usage" in message:
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            acc.schema.add(CHK_USAGE_OBJ)
+        else:
+            tokens = _token_tuple(usage)
+            if tokens is None:
+                acc.schema.add(CHK_TOKENS)
+            else:
+                msg_id = message.get("id")
+                if isinstance(msg_id, str):
+                    key = _digest(msg_id)
+                    if key not in acc.usage_by_id and len(acc.usage_by_id) >= MAX_IDS_PER_FILE:
+                        raise _TooBig()
+                    acc.usage_by_id[key] = tokens   # la ultima linea de cada id manda
+                else:
+                    if len(acc.usage_no_id) >= MAX_IDS_PER_FILE:
+                        raise _TooBig()
+                    acc.usage_no_id.append(tokens)  # sin id no se puede deduplicar
+    content = message.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                block_id = block.get("id")
+                if isinstance(block_id, str):
+                    key = _digest(block_id)
+                    if key not in acc.tools and len(acc.tools) >= MAX_IDS_PER_FILE:
+                        raise _TooBig()
+                    acc.tools.add(key)
+
+
+def _model_label(raw, allow_alias: bool):
+    if allow_alias and isinstance(raw, str) and raw in MODEL_ALIASES:
+        return raw
+    return hist_label("model", raw)
+
+
+def _model_base(label: str) -> str:
+    """Familia y version sin el sufijo de fecha (-YYYYMMDD o @YYYYMMDD)."""
+    return _DATE_SUFFIX_RE.sub("", label)
+
+
+def _read_meta(sub_dir: str, meta_name: str, kinds: dict, quality):
+    """(presente, agentType, model, malo). `presente` False: se trata como llamada sin meta."""
+    if kinds.get(meta_name) != "file":
+        return False, None, None, False
+    try:
+        with _open_regular(os.path.join(sub_dir, meta_name)) as f:
+            data = f.read(MAX_META_BYTES + 1)
+    except LinkRefused:
+        quality["metas rechazadas por enlace duro"] += 1   # decision G1: el meta sigue rechazado
+        return False, None, None, False
+    except OSError:
+        quality["meta ilegible"] += 1
+        return False, None, None, False
+    if len(data) > MAX_META_BYTES:
+        quality["meta sobredimensionado"] += 1
+        return False, None, None, False
+    try:
+        meta = json.loads(data)
+    except (ValueError, RecursionError):
+        return True, None, None, True
+    if not isinstance(meta, dict) or not isinstance(meta.get("agentType"), str):
+        return True, None, None, True
+    model = meta.get("model")
+    return True, meta["agentType"], (model if isinstance(model, str) else None), False
+
+
+def _drop_repeated_ids(acc: _CallAcc, res: ReadResult) -> list:
+    """Entradas de tokens de un archivo NO danado, sin los message.id que otro archivo ya sumo.
+
+    Decision: el segundo archivo (orden del recorrido) NO suma una peticion cuyo message.id ya
+    conto otro archivo (agentes reanudados repiten el historial), pero se cuenta en
+    "message.id repetido entre archivos" y avisa. Un archivo danado no registra sus ids (sus
+    tokens no cuentan). Pasado MAX_IDS_GLOBAL no se recuerdan ids nuevos."""
+    entries = list(acc.usage_no_id)
+    seen = res._seen_ids
+    for key, tokens in acc.usage_by_id.items():
+        if key in seen:
+            res.quality["message.id repetido entre archivos"] += 1
+            continue
+        if len(seen) < MAX_IDS_GLOBAL:
+            seen.add(key)
+        else:
+            res.quality["message.id sin deduplicar entre archivos (tope)"] += 1
+        entries.append(tokens)
+    return entries
+
+
+def _read_call(sub_dir, name, kinds, folder_name, sid, res: ReadResult) -> None:
+    stem = name[:-len(".jsonl")]
+    meta_name = stem + ".meta.json"
+    acc = _CallAcc()
+    info = _LineInfo()
+    hardlink = False
+    fallback_time = None
+    failure = None
+    try:
+        with _open_regular(os.path.join(sub_dir, name), allow_hardlink=True) as f:
+            st = os.fstat(f.fileno())
+            # se anotan antes de leer: valen aunque la lectura falle despues
+            hardlink = st.st_nlink > 1
+            try:
+                fallback_time = datetime.datetime.fromtimestamp(st.st_mtime, tz=datetime.timezone.utc)
+            except (OSError, OverflowError, ValueError):
+                fallback_time = None
+            if st.st_size > MAX_FILE_BYTES:
+                raise _TooBig()
+            for obj in _iter_objects(f, info):
+                _acc_line(obj, acc)
+    except _TooBig:
+        failure = "tope"
+    except OSError:
+        failure = "ilegible"
+    q = res.quality
+    present, agent_raw, meta_model, meta_bad = _read_meta(sub_dir, meta_name, kinds, q)
+    if meta_bad:
+        res.schema[CHK_META] += 1
+    q["llamadas leidas"] += 1
+    if hardlink:
+        q["hardlinks aceptados"] += 1   # tambien si la lectura falla
+    if meta_model in NOT_A_MODEL:
+        meta_model = None   # "inherit" no es un modelo
+    if failure is not None:
+        # archivo omitido a mitad de lectura: no deja ninguna linea contada
+        q["archivos omitidos por tope de tamano" if failure == "tope" else "archivos ilegibles"] += 1
+        acc = _CallAcc()
+        info = _LineInfo()
+        damage = failure
+    else:
+        if acc.lines and not acc.typed:
+            acc.schema.add(CHK_NO_TYPE)
+        for check in acc.schema:
+            res.schema[check] += 1
+        for label in acc.versions:
+            res.versions[label] += 1
+            if acc.schema or meta_bad:
+                res.schema_versions[label] += 1   # versiones de los archivos que fallan
+        q["lineas corruptas"] += info.corrupt
+        q["lineas oversize descartadas"] += info.oversize
+        q["lineas que no son objeto"] += info.not_object
+        q["lineas synthetic excluidas"] += acc.synthetic
+        if info.truncated_tail:
+            q["archivos con ultima linea truncada"] += 1
+        damage = "linea intermedia corrupta" if info.corrupt else None
+    entries = list(acc.usage_by_id.values()) + acc.usage_no_id
+    has_usage = bool(entries)
+    if damage is not None:
+        entries = []   # un archivo danado queda fuera de las estadisticas de tokens
+        q["llamadas danadas"] += 1
+    else:
+        q["usage sin message.id"] += len(acc.usage_no_id)
+        entries = _drop_repeated_ids(acc, res)
+    sums = [sum(e[i] for e in entries) for i in range(4)]
+    line_models = acc.models
+    meta_label = _model_label(meta_model, True) if meta_model is not None else None
+    if line_models:
+        models, source = tuple(sorted(line_models)), "lineas"
+    elif meta_label is not None:
+        models, source = (meta_label,), "meta"
+    else:
+        models, source = (), None
+    # el sufijo de fecha no cuenta: el meta suele traer el id sin fecha y las lineas con fecha
+    mismatch = bool(meta_label is not None and MODEL_RE.match(meta_model) and line_models
+                    and "(otro modelo)" not in line_models
+                    and _model_base(meta_label) not in {_model_base(m) for m in line_models})
+    if mismatch:
+        q["llamadas con modelo distinto del meta"] += 1
+    if present and not meta_bad:
+        agent, group = classify_agent(agent_raw)
+    else:
+        agent, group = NO_META_AGENT, "sin-meta"
+    if damage is not None:
+        status = "danada"
+    elif not has_usage:
+        status = "sin_usage"
+    elif not present or meta_bad:
+        status = "sin_meta"
+    else:
+        status = "correcta"
+    if not has_usage and damage is None:
+        q["llamadas sin usage"] += 1
+    if group == "sin-meta":
+        q["llamadas sin meta"] += 1
+    res.calls.append(CallRecord(
+        call_id=_digest(folder_name + "\0" + sid + "\0" + stem).hex(),
+        project="p-" + hashlib.sha256(folder_name.lower().encode("utf-8", "surrogatepass")).hexdigest()[:8],
+        session=_digest(folder_name + "\0" + sid).hex(),
+        agent=agent, agent_group=group, status=status, damage=damage,
+        has_meta=present and not meta_bad, has_usage=has_usage,
+        models=models,
+        model=("mixto" if len(models) > 1 else models[0]) if models else "(desconocido)",
+        model_source=source, model_mismatch=mismatch,
+        input_tokens=sums[0], output_tokens=sums[1], cache_creation_tokens=sums[2],
+        cache_read_tokens=sums[3],
+        requests=len(entries), tools=len(acc.tools), start=acc.first, end=acc.last,
+        fallback_time=fallback_time,
+        versions=tuple(sorted(acc.versions, key=lambda v: (version_key(v), v))),
+        hardlink=hardlink, oversize_lines=info.oversize, background=None,
+    ))
+
+
+def _read_session(folder_path, folder_name, sid, res: ReadResult) -> None:
+    sub_dir = os.path.join(folder_path, sid, "subagents")
+    listing = _list_dir(sub_dir)
+    if listing is None:
+        res.quality["carpetas ilegibles"] += 1
+        return
+    kinds = dict(listing)
+    for name, kind in listing:
+        if kind == "link":
+            res.quality["enlaces omitidos"] += 1
+            continue
+        if kind != "file" or not name.startswith("agent-") or not name.endswith(".jsonl"):
+            continue
+        if not valid_agent_file(name):
+            res.quality["nombres no validos omitidos"] += 1
+            continue
+        _read_call(sub_dir, name, kinds, folder_name, sid, res)
+
+
+def _read_project_folder(folder_path, folder_name, res: ReadResult) -> None:
+    for sid, _has_main, has_dir in _enum_sessions(folder_path, res.quality) or ():
+        if has_dir:   # el lector solo abre transcripciones de subagentes
+            _read_session(folder_path, folder_name, sid, res)
+
+
+def _recent_first(labels) -> str:
+    """Hasta MAX_SHOWN_VERSIONS versiones, las mas recientes primero, y cuantas quedan fuera."""
+    ordered = sorted(labels, key=lambda v: (version_key(v), v), reverse=True)
+    text = ", ".join(ordered[:MAX_SHOWN_VERSIONS])
+    if len(ordered) > MAX_SHOWN_VERSIONS:
+        text += " (+%d mas)" % (len(ordered) - MAX_SHOWN_VERSIONS)
+    return text
+
+
+def _versions_text(seen, failing=None) -> str:
+    """Resumen acotado de versiones: rango y cantidad de las vistas (el rango no oculta la
+    version nueva), las posteriores a VERIFIED_MAX y las de los archivos que fallan."""
+    numeric = sorted((v for v in seen if _VERSION_PARTS_RE.match(v)), key=lambda v: (version_key(v), v))
+    if not seen:
+        return "(ninguna)"
+    if not numeric:
+        text = "(ninguna reconocida)"
+    elif len(numeric) == 1:
+        text = "%s (1 version)" % numeric[0]
+    else:
+        text = "%s a %s (%d versiones)" % (numeric[0], numeric[-1], len(numeric))
+    later = [v for v in numeric if is_unverified(v)]
+    if later:
+        text += ". Posteriores a la ultima verificada: " + _recent_first(later)
+    bad = [v for v in (failing or ()) if _VERSION_PARTS_RE.match(v)]
+    if bad:
+        text += ". En archivos que fallan: " + _recent_first(bad)
+    return text
+
+
+def _schema_message(headline: str, versions, failing=None) -> str:
+    return ("esquema desconocido: " + headline + ". Versiones de Claude Code vistas: "
+            + _versions_text(versions, failing) + ". Ultima version verificada: " + VERIFIED_MAX
+            + ". Ejecute el subcomando inspect para diagnosticar.")
+
+
+def check_schema(res: ReadResult) -> None:
+    """Lanza SchemaError si alguna comprobacion de esquema fallo en algun archivo."""
+    if res.schema:
+        parts = ["%s: %d archivos" % (name, res.schema[name]) for name in sorted(res.schema)]
+        raise SchemaError(_schema_message("; ".join(parts), res.versions, res.schema_versions))
+
+
+def check_damaged(calls) -> None:
+    """Lanza SchemaError si mas del MAX_DAMAGED_PERCENT % de las llamadas esta danado."""
+    total = len(calls)
+    damaged = sum(1 for c in calls if c.damage is not None)
+    if total and damaged * 100 > total * MAX_DAMAGED_PERCENT:
+        versions = collections.Counter(v for c in calls for v in c.versions)
+        failing = collections.Counter(v for c in calls if c.damage is not None for v in c.versions)
+        raise SchemaError(_schema_message(
+            "demasiados archivos de subagente danados o ilegibles: %d de %d (limite %d %%)"
+            % (damaged, total, MAX_DAMAGED_PERCENT), versions, failing))
+
+
+def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True) -> ReadResult:
+    """Lee todas las llamadas de subagentes bajo <claude_dir>/projects (o solo las del proyecto).
+
+    Lanza EnvError (entorno) o SchemaError (esquema desconocido, o danados sobre el umbral si
+    check_damage). No escribe nada. Las llamadas salen en el orden del recorrido (carpetas,
+    sesiones y archivos por nombre): la salida es determinista. Una sesion sin transcripciones
+    de subagentes no produce llamadas; el reporte de sesiones sale de las llamadas."""
+    projects = os.path.join(claude_dir, "projects")
+    reason = _projects_dir_state(projects)
+    if reason is not None:
+        raise EnvError(reason)
+    listing = _list_dir(projects)
+    if listing is None:
+        raise EnvError("no se puede leer projects/")
+    wanted = None
+    if project_dir is not None:
+        wanted = derive_folder_name(os.path.abspath(project_dir)).lower()
+    res = ReadResult()
+    for name, kind in listing:
+        if kind == "link":
+            res.quality["enlaces omitidos"] += 1
+        elif kind == "dir":
+            if not valid_dir_name(name):
+                res.quality["nombres no validos omitidos"] += 1
+            elif wanted is None or name.lower() == wanted:
+                _read_project_folder(os.path.join(projects, name), name, res)
+    check_schema(res)
+    if check_damage:
+        check_damaged(res.calls)
+    return res
 
 
 # Orden fijo de las lineas del resumen: la salida siempre lleva todas, con ceros.
@@ -657,6 +1284,7 @@ SUMMARY_LABELS = (
     "metas sin transcripcion",
     "subagentes sin ninguna linea assistant con usage",
     "enlaces omitidos",
+    "hardlinks (nlink > 1)",
     "nombres no validos omitidos",
     "archivos omitidos por tope de tamano",
     "archivos ilegibles",
@@ -845,6 +1473,9 @@ def main(argv=None) -> int:
         if code is None:
             return 0
         return code if isinstance(code, int) else 2
+    except (SchemaError, EnvError) as exc:  # mensajes de texto fijo, sin contenido ni rutas
+        print("error: " + exc.message, file=sys.stderr)
+        return EXIT_SCHEMA if isinstance(exc, SchemaError) else EXIT_ENV
     except Exception as exc:  # noqa: BLE001 - nunca un traceback: podria arrastrar contenido
         print("error: error no previsto (" + type(exc).__name__ + ")", file=sys.stderr)
         return EXIT_ENV

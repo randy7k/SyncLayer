@@ -138,6 +138,14 @@ def assistant(msg_id, ts, usage_value="default", model=DEFAULT_MODEL, version=DE
     return line
 
 
+def stream(msg_id, ts, usages, **kw):
+    """Una respuesta repartida en varias lineas (streaming): mismo message.id, un usage por linea.
+
+    Replica la forma real confirmada en G1 (~1,9 lineas por id): cada linea repite el id y el
+    usage crece hasta el valor final. `usages` es una lista de dict (ver usage())."""
+    return [assistant(msg_id, ts, usage_value=u, **kw) for u in usages]
+
+
 def user(ts, text=M_PROMPT, version=DEFAULT_VERSION, sidechain=True, **extra):
     line = {
         "type": "user",
