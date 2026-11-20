@@ -5625,6 +5625,9 @@ class ReportSourceHygiene(unittest.TestCase):
         with open(SCRIPT, "rb") as f:
             raw = f.read()
         raw.decode("ascii")
+        # Con core.autocrlf git deja CRLF en el arbol de trabajo (el indice guarda LF):
+        # se normaliza antes de comprobar que no queda ningun \r suelto.
+        raw = raw.replace(b"\r\n", b"\n")
         self.assertNotIn(b"\r", raw)
         self.assertEqual(ur.BAR_FULL, "\u2588")
         self.assertEqual(ur.BAR_EMPTY, "\u2591")
