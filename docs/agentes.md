@@ -13,6 +13,7 @@ Instalado el 2026-11-19 con Claude Code 2.1.310.
 | `~/.claude/docs/agentes.md` | Esta guía |
 | Copias previas | `install.ps1` respalda lo que sobrescribe en `<Target>-backup-<fecha-hora>` (o en el `-BackupDir` que pases; por defecto `~/.claude-backup-<fecha-hora>`); no toca `CLAUDE.md` ni `settings.json`, así que respaldalos vos si los vas a editar |
 | `~/.claude/synclayer-manifest.json` | Estado que deja `install.ps1`: copia del manifiesto de la última instalación correcta |
+| `~/.claude/synclayer-usage.md` | Reporte global de uso de subagentes. No lo instala `install.ps1`: lo genera `tools/usage_report.py global` (ver «Reporte de uso») |
 
 Cómo instalar y actualizar: `install.ps1`, con `-DryRun` primero. Uso y límites en la sección
 «Instalación» del `README.md` del repositorio.
@@ -65,6 +66,26 @@ la lista `tools` de cada uno es explícita.
 5. SHIELD revisa permisos de la vista e inyección de fórmulas en el CSV.
 6. SCRIBE actualiza `README.md`, `CLAUDE.md` y `HISTORY.md`.
 7. AUDITOR revisa el cambio completo. Claude cierra con la evidencia de pruebas.
+
+## Reporte de uso
+
+Para ver cuánto se usa cada agente hay un reporte generado a partir de las transcripciones
+locales. La herramienta (`tools/usage_report.py`) no se instala en `~/.claude`: se corre desde el
+clon del repositorio, a mano.
+
+```
+python -B tools/usage_report.py project --project-dir <carpeta-del-proyecto>
+python -B tools/usage_report.py global
+```
+
+- `project` escribe `<carpeta-del-proyecto>/.synclayer/usage-report.md` (la carpeta se ignora sola
+  en git). `global` escribe `~/.claude/synclayer-usage.md`, privado por defecto: revisalo antes de
+  compartirlo. Con `--stdout` imprimen el reporte y no escriben nada.
+- Por defecto cubre los últimos 30 días (UTC); `--since`, `--until` y `--all` cambian la ventana.
+- Compara llamadas, tokens por llamada, duración y herramientas. No mide la calidad del resultado,
+  ni el costo real, ni afirma ahorro de tokens.
+- Parámetros, códigos de salida y límites: `README.md` del repositorio («Reporte de uso» y
+  «Límites del reporte de uso»).
 
 ## Mantenimiento
 

@@ -2,6 +2,100 @@
 
 ## [Sin publicar]
 
+### Cambiado (reporte de uso, rendimiento C4)
+
+- Lector de transcripciones más rápido sin cambiar la salida (bytes idénticos): buffer de lectura
+  de 256 KiB, etiquetas de versión y modelo con caché LRU acotada en entradas (256) y con claves de hasta 64 caracteres, `_parse_ts` y `_token_tuple` sin
+  trabajo redundante. En un árbol sintético de 558 MB, `global --all` baja de 18,8 s a 15,1 s (promedio de tres corridas alternadas, 19,7 % menos).
+  Pruebas de equivalencia contra la implementación anterior y de tope de trabajo en
+  `tests/test_usage_report_perf.py`. El resto del tiempo es lectura y `json.loads`, por byte.
+
+### Añadido (reporte de uso, Fase 2)
+
+- `tools/usage_report.py`: reporte de uso de subagentes a partir de las transcripciones locales
+  (`python -B tools/usage_report.py <inspect|project|global>`). Se ejecuta desde el clon; no se
+  instala ni lo toca el instalador. Compara llamadas, sesiones, tokens por llamada (mediana y p90),
+  duración aproximada, herramientas, modelo real, versión de Claude Code y skills; no mide calidad
+  ni costo ni afirma ahorro.
+- Subcomandos `project` y `global`: escriben sólo en destinos fijos
+  (`<project-dir>/.synclayer/usage-report.md` con `.synclayer/.gitignore` exactamente `*`, y
+  `<claude-dir>/synclayer-usage.md`); no existe `--out`. Escritura por temporal aleatorio
+  `O_EXCL` en la misma carpeta y `os.replace`, con `lstat` repetido antes del reemplazo, marcador
+  leído de forma acotada, modo `0600`, UTF-8 sin BOM con LF y limpieza si algo falla; enlaces,
+  junctions y destinos ajenos se rechazan. `--stdout` imprime bytes UTF-8. `--transcripts-dir`
+  (repetible) sólo admite nombres de carpeta de `projects/`. Ventana de 30 días UTC, o
+  `--since`/`--until`/`--all`. Códigos de salida 0, 1, 2 y 3 (130 con Ctrl+C); el 3 por esquema
+  desconocido sale del lector sobre todos los archivos leídos, el 3 por más del 5 % de archivos
+  dañados, de la agregación sobre la ventana.
+- Privacidad: no copia mensajes, prompts, argumentos, rutas, nombres de carpeta ni
+  identificadores de sesión; sí copia nombres de skill escritos por el modelo e ids de modelo que
+  pasan listas cerradas o patrones (hasta 64 caracteres por celda). El global numera `proyecto 1..N` (sin hash) y es privado por defecto;
+  el de proyecto muestra su alias, recalculable por quien conozca la ruta.
+- Avisos de git por stderr (sin llamar a git): el global, si existe `.git` en `<claude-dir>` o una
+  carpeta padre; el de proyecto, si el reporte ya está versionado (lee `.git/index`; no detecta el
+  índice v4, sparse ni split). El mensaje final no imprime rutas salvo con `--show-paths`.
+- Reporte de proyecto con «Carpetas de transcripciones leídas: N».
+- `README.md`: secciones «Reporte de uso» y «Límites del reporte de uso» (Windows ACL y OneDrive,
+  rama POSIX sin verificar, TOCTOU residual). `docs/agentes.md`: cómo usar el reporte.
+- Siguientes: comprobaciones restantes de C4 del propietario y merge a `main`. El hook registrador
+  `usage_logger.py` (T9) se retiró de la fase: `SubagentStop` no documenta tokens ni duración
+  (consulta de `scout`, decisión en el plan).
+
+### Añadido (Fase 2, T6)
+
+- `tools/usage_report.py`: `render_global_report`, generador puro del reporte global comparativo:
+  comparación por conjunto de agentes (SyncLayer, integrado, `plugin:<prefijo>`, otros) con las
+  mismas columnas, skills, rangos de versión de Claude Code y sección fija «Qué compara y qué no».
+  Los proyectos se numeran `proyecto 1..N` por volumen, sin hash ni alias (un alias sin sal se
+  recalcula por diccionario); el prefijo de plugin de una skill sólo sale si coincide con un agente
+  visto; los modelos se limitan a tramos de lista cerrada.
+- El lector avisa si dos carpetas de proyecto dan el mismo alias.
+- `docs/plans/2026-11-19-fase2-reporte-de-uso.md`: decisiones de T6 y los riesgos que T7 debe cubrir.
+
+### Añadido (Fase 2, T5)
+
+- `tools/usage_report.py`: `render_project_report`, generador puro (sin E/S ni reloj) del reporte de
+  uso de un proyecto en Markdown: resumen, tablas por agente con columna `Conjunto`, tokens (suma,
+  mediana y p90), duración y herramientas, modelo real, conjuntos, skills y versiones de Claude Code
+  con el rango 2.1.310 a 2.1.327 marcado como dudoso, calidad de los datos, «Cómo leer estos
+  números» y pie de privacidad. Barras de texto, texto en español con tildes, UTF-8 sin BOM.
+- `docs/plans/2026-11-19-fase2-reporte-de-uso.md`: notas de la revisión de T5 para T6 y T7.
+
+### Añadido (Fase 2, T4)
+
+- `tools/usage_report.py`: conteo de uso de skills desde la sesión principal y los subagentes (sólo
+  `name`, `id` e `input.skill`; nunca `input.args`), con nombres filtrados, conjuntos y agregación pura.
+- Identificadores de llamada, sesión y agente con blake2b y clave aleatoria por ejecución; el orden y
+  los desempates usan un ordinal de recorrido determinista (`seq`) para que el reporte sea idéntico
+  entre ejecuciones.
+- `docs/plans/2026-11-19-fase2-reporte-de-uso.md`: `CHK_TS` verificado con datos reales y notas para T5 a T7.
+
+### Añadido (Fase 2, T3)
+
+- `tools/usage_report.py`: agregación pura sin E/S (`aggregate_calls`, `make_window`, `distribution`):
+  ventana UTC inclusiva de 30 fechas, mediana y p90 por rango más cercano, desglose de tokens por rango
+  de versión de Claude Code (anterior a 2.1.310, 2.1.310 a 2.1.327, desde 2.1.328), repeticiones
+  consecutivas inferidas con clave interna por agente, calidad de datos y avisos.
+- El lector ya no cuenta como `usable` una llamada con todos sus ids repetidos, deduplica hardlinks
+  por inodo dentro de `projects/` y libera los conjuntos de ids al terminar.
+
+### Añadido (Fase 2, T2)
+
+- `tools/usage_report.py`: lector defensivo de subagentes (`read_calls`, `CallRecord`): deduplicación
+  por `message.id` dentro y entre archivos, hardlinks de Claude Code aceptados con contador aparte,
+  conteos por archivo (un archivo omitido a mitad de lectura no deja líneas contadas), tipo de agente
+  por lista cerrada y conjuntos `SyncLayer`, `integrado`, `plugin:<prefijo>`, `otros` y `sin-meta`,
+  exit 3 ante esquema desconocido o más del 5 % de archivos dañados.
+- `docs/plans/2026-11-19-fase2-reporte-de-uso.md`: notas obligatorias para T3 en adelante.
+
+### Añadido (compuerta G1 de la Fase 2)
+
+- `docs/plans/2026-11-20-fase2-g1-resultado.md`: resultado de correr `inspect` sobre las
+  transcripciones reales (sólo conteos): `message.id` repetido (la deduplicación es obligatoria),
+  `input.skill` confirmado, enlace `toolUseId` confirmado, totales del resultado presentes en
+  sólo 399 de 2 866 llamadas, 122 transcripciones de subagentes con hardlink creados por Claude
+  Code y 60 % de las líneas en la ventana de versiones con posible conteo inflado.
+
 ### Añadido (exploración de la Fase 2)
 
 - `docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md`: qué datos de uso de subagentes

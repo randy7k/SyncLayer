@@ -9,7 +9,8 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 464 pruebas, 109 saltadas (no hay pwsh), unos 4 minutos. No la
+`__pycache__`. La suite: 1064 pruebas, 112 saltadas (109 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
 
@@ -37,6 +38,18 @@ python -B -c "import json; print(json.dumps({'tool_name': 'Bash', 'tool_input': 
 
 En Windows con Git Bash, las barras invertidas dentro de un JSON escrito a mano se
 rompen con facilidad al citar; por eso conviene generarlo con `json.dumps`.
+
+Reporte de uso de subagentes (se ejecuta desde el clon, no se instala). Pasa siempre
+`--claude-dir` a una carpeta temporal en las pruebas, nunca el `~/.claude` real:
+
+```
+python -B tools/usage_report.py inspect [--claude-dir DIR] [--project-dir DIR] [--show-paths]
+python -B tools/usage_report.py project [--project-dir DIR] [--claude-dir DIR] [--transcripts-dir NOMBRE]... [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths]
+python -B tools/usage_report.py global  [--claude-dir DIR] [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths]
+```
+
+Exit 0 correcto, 1 entorno o datos, 2 uso incorrecto, 3 esquema desconocido o demasiados
+archivos dañados. Detalle de parámetros y destinos en `README.md` («Reporte de uso»).
 
 Regenerar los assets de marca (necesita `fontTools` y `uharfbuzz`):
 
@@ -76,6 +89,14 @@ Cuatro piezas, de la más abstracta a la más concreta (la cuarta, el instalador
    manifiesto instalado. Ni el instalador, ni `tools/`, ni el manifiesto del repo se instalan
    en `~/.claude`.
 
+Fuera de las cuatro piezas, `tools/usage_report.py` es el reporte de uso (Fase 2): un solo
+archivo, sólo biblioteca estándar, que se ejecuta desde el clon. Capas: lector defensivo de
+transcripciones (`read_calls`), agregación pura (`aggregate_calls`, `make_window`),
+generadores puros de Markdown (`render_project_report`, `render_global_report`) y la CLI con
+escritura (`project`, `global`) más `inspect` de diagnóstico. Pruebas:
+`tests/test_usage_report.py`, `tests/test_usage_report_cli.py` y `tests/test_usage_report_edges.py`
+(bordes de punta a punta: ventana, exit 1/2/3/130, nombres raros, mensajes sin fuga).
+
 `docs/agentes.md` es la guía humana. `docs/brand/` define la marca (estrategia, voz, identidad
 visual); el copy oficial va en inglés y no declara capacidades que el repositorio no tenga.
 
@@ -97,6 +118,11 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Todo cambio en `hooks/agent_guard.py` empieza con una prueba que falla en
   `tests/test_agent_guard.py`.
 - Todo cambio en `install.ps1` empieza con una prueba que falla en `tests/test_install.py`.
+- Todo cambio en `tools/usage_report.py` empieza con una prueba que falla en
+  `tests/test_usage_report.py` (lector, métricas, generadores) `tests/test_usage_report_cli.py`
+  (subcomandos y escritura) o `tests/test_usage_report_edges.py` (bordes de punta a punta). Ningún agente ejecuta la herramienta contra el `~/.claude` real.
+- El código de `tools/usage_report.py` es ASCII (las tildes del reporte van como escapes
+  `\u00xx`); el texto de los reportes va en español con tildes.
 - `install.ps1` va en ASCII puro y sin BOM: Windows PowerShell 5.1 lee como ANSI un archivo
   sin BOM. Los mensajes van en español sin acentos. Hay una prueba. Con `core.autocrlf` git
   deja el archivo en CRLF al hacer checkout o merge: las pruebas que leen su texto deben
@@ -176,7 +202,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (109 en la última corrida).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (109 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los
@@ -184,6 +210,41 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   autenticidad; los riesgos residuales están en `README.md` («Límites del instalador»).
 - Copia `~/.claude` -> repo sólo por archivo (`git ls-files`), nunca con comodines:
   `~/.claude/hooks/` y otras carpetas tienen archivos ajenos y el repo es público.
+- Reporte de uso (`tools/usage_report.py`):
+  - Destinos fijos, sin `--out`: `<project-dir>/.synclayer/usage-report.md` (con
+    `.synclayer/.gitignore` exactamente `*\n`; otro contenido da exit 1 y no se edita) y
+    `<claude-dir>/synclayer-usage.md`. Primera línea: marcador `<!-- synclayer-usage-report v1 -->`;
+    un destino sin marcador, enlace, junction o con más de un enlace duro da exit 1 (no se pisa).
+  - Escritura: temporal aleatorio `O_EXCL` en la misma carpeta, `0600`, bytes UTF-8 sin BOM con LF,
+    `lstat` repetido antes de `os.replace`. Lectura y agregación van ANTES de tocar el disco: exit 1
+    o 3 no dejan `.synclayer/` ni temporales. No se crean `<claude-dir>` ni `<project-dir>`.
+  - `--claude-dir` por defecto `~/.claude`; no se honra `CLAUDE_CONFIG_DIR`. `--stdout` escribe bytes
+    UTF-8 en `sys.stdout.buffer` (la consola de Windows, cp1252, rompería con `print`) y no escribe
+    archivos. Sin `--show-paths` ningún mensaje imprime rutas; un error no previsto imprime sólo el
+    nombre de la clase de la excepción (exit 1). Ctrl+C sale con 130.
+  - Ventana: 30 fechas UTC que terminan hoy (inclusive); `--all` la quita. Fechas inválidas o
+    `--all` con `--since/--until` dan exit 2. Hay dos exit 3: el de esquema desconocido sale del
+    lector (`read_calls` -> `check_schema`, sobre TODOS los archivos leídos, aunque estén fuera de
+    la ventana); el de más del 5 % de archivos dañados sale de `aggregate_calls`, sobre la ventana.
+  - Deduplicación por `message.id` (dentro y entre archivos): una respuesta repartida en varias
+    líneas no se cuenta dos veces. No se usa `totalTokens` de ningún resultado. Tokens desglosados
+    por rango de versión (anterior a 2.1.310, 2.1.310 a 2.1.327 dudoso, desde 2.1.328).
+  - Los ids con clave (`call_id`, `session`, `agent_key`) llevan blake2b con clave aleatoria por
+    ejecución: ningún orden ni desempate puede depender de ellos (se usa `seq`), y
+    `ReadResult.release_key()` se invoca al agregar. Nunca se serializa `ReadResult`, `CallRecord`,
+    `SkillUse` ni `UsageMetrics`.
+  - Privacidad: el global numera `proyecto 1..N` (sin hash); el de proyecto muestra su alias
+    `p-<8 hex>` (recalculable, no es anonimización). El global es privado por defecto.
+  - Avisos de git por stderr, sin llamar a git, y se escribe igual. Global: `.git` en `<claude-dir>`
+    o una carpeta padre. Proyecto: reporte ya versionado, leyendo `.git/index` (v2 y v3; el v4,
+    sparse y split no se detectan; falso positivo posible; en Windows depende de las mayúsculas de
+    `--project-dir`). Es una ayuda, no una garantía; `git add -f` lo versiona igual.
+  - Límites aceptados (README, «Límites del reporte de uso»): TOCTOU residual entre la última
+    comprobación y `os.replace` en Windows; todo reparse point cuenta como enlace (los marcadores de
+    OneDrive podrían dar exit 1); ACL heredada en Windows; rama POSIX sin verificar en este equipo.
+  - Las pruebas «sin aviso de git» suben carpetas padre reales: fallarían en una máquina con `.git`
+    en el home o en `%TEMP%`. Las pruebas pasan siempre `--claude-dir` a una carpeta temporal.
+  - El instalador no instala la herramienta ni toca `synclayer-usage.md` ni `settings.json`.
 
 ## Cierre de un cambio
 
