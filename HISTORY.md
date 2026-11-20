@@ -2,6 +2,14 @@
 
 ## [Sin publicar]
 
+### Añadido (compuerta G1 de la Fase 2)
+
+- `docs/plans/2026-11-20-fase2-g1-resultado.md`: resultado de correr `inspect` sobre las
+  transcripciones reales (sólo conteos): `message.id` repetido (la deduplicación es obligatoria),
+  `input.skill` confirmado, enlace `toolUseId` confirmado, totales del resultado presentes en
+  sólo 399 de 2 866 llamadas, 122 transcripciones de subagentes con hardlink creados por Claude
+  Code y 60 % de las líneas en la ventana de versiones con posible conteo inflado.
+
 ### Añadido (exploración de la Fase 2)
 
 - `docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md`: qué datos de uso de subagentes
