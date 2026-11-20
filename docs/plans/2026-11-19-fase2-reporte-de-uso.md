@@ -658,3 +658,14 @@ Cada una tiene un valor por defecto, que es lo que el plan implementa si no hay 
 - **P6. Hook registrador (T9).** Por defecto: se hace tras el cierre, con el script en
   `tools/` y el bloque de `settings.json` añadido a mano por el usuario (opción A de 3.10).
   Alternativas: archivo gestionado número trece (opción B) o retirar T9 de la fase.
+
+## Decisiones tras la compuerta G1 (2026-11-20, aprobadas por el propietario)
+
+Detalle y cifras en [`2026-11-20-fase2-g1-resultado.md`](2026-11-20-fase2-g1-resultado.md). Estas decisiones **prevalecen** sobre el texto anterior de este plan donde se contradigan.
+
+1. **Hardlinks (T2).** El lector de subagentes **acepta** archivos con `nlink > 1` cuando el nombre pasa la lista permitida (`agent-<id>.jsonl` bajo `subagents/` de una sesión válida) y la firma estructural; los cuenta aparte como «hardlinks aceptados: N» (Claude Code los crea: 122 de 2 868 transcripciones de subagentes en el equipo del propietario, con el otro enlace fuera de `projects/`). Se siguen rechazando enlaces simbólicos y puntos de reanálisis. `inspect` sigue sin leerlos pero los cuenta como «hardlinks (nlink > 1)» separados de «enlaces omitidos», para que el diagnóstico los distinga. El riesgo residual (un proceso del mismo usuario que planta un hardlink a otro archivo) queda como Low documentado: el lector sólo toma claves numéricas y nombres de lista cerrada y exige la firma estructural.
+2. **Versiones (T3).** Las métricas de tokens se **desglosan por rango de versión** de Claude Code: anterior a 2.1.310, de 2.1.310 a 2.1.327 y desde 2.1.328, con la advertencia de que comparar entre rangos es indicativo (el 60 % de las líneas de subagentes cae en el rango dudoso). La versión de cada llamada sale del campo `version` de sus líneas.
+3. **Agente sin `subagent_type`** (220 de 2 866 llamadas): se clasifica como agente por defecto, no es un error. La fuente del tipo de agente es `meta.agentType` (2 746 de 2 746).
+4. **Líneas sobredimensionadas descartadas:** no aportan tokens y se cuentan aparte.
+5. **Pendientes de `shield` que entran en T2:** un archivo omitido a mitad de lectura no deja líneas contadas (acumular por archivo y fusionar sólo si termina bien); una sesión cuyo único archivo es un hardlink de la sesión principal no cuenta como sesión leída si no se leyó ningún archivo, o se documenta.
+6. **`safe_name`** no se reutiliza para texto visible: si T2 necesita mostrar `agentType` usa una lista permitida estrecha (sin `@`, `/`, `:`) o una lista cerrada de agentes conocidos, y nunca un hash de 16 bits.
