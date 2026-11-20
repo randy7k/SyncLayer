@@ -1,4 +1,5 @@
-"""Pruebas de install.ps1 (T3: validacion, plan y -DryRun; T4: respaldo, copia, verificacion y estado).
+"""Pruebas de install.ps1 (T3: validacion, plan y -DryRun; T4: respaldo, copia, verificacion y estado;
+T5: cambios locales, -Force, estado ilegible y puntos de reanalisis).
 
 Lanzan el script con subprocess (sin shell, con timeout) sobre powershell.exe y/o pwsh.
 Nunca usan el destino por defecto: todas pasan -Target a una carpeta temporal.
@@ -165,7 +166,7 @@ class InstallCases:
         with open(os.path.join(self.src, "install-manifest.json"), "wb") as f:
             f.write(manifest_for(self.src, sorted(files)).encode("ascii"))
 
-    def run_install(self, *args, target=True):
+    def run_install(self, *args, target=True, env_extra=None):
         cmd = [self.exe, "-NoProfile", "-NonInteractive"]
         if os.name == "nt":
             cmd += ["-ExecutionPolicy", "Bypass"]
@@ -177,6 +178,8 @@ class InstallCases:
         drive, tail = os.path.splitdrive(self.home)
         env.update({"USERPROFILE": self.home, "HOME": self.home,
                     "HOMEDRIVE": drive, "HOMEPATH": tail or self.home})
+        if env_extra:
+            env.update(env_extra)
         proc = subprocess.run(cmd, cwd=self.tmp, env=env, timeout=TIMEOUT,
                               stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -220,6 +223,7 @@ class InstallCases:
         self.assertEqual(set(st.values()), {"IGUAL"})
         self.assertEqual(set(st), set(SAMPLE))
         self.assertIn("Resumen:", out)
+        self.assert_quiet_when_nothing_written(out)
 
     def test_case2_dryrun_missing_target_all_new(self):
         self.make_source()
@@ -238,6 +242,12 @@ class InstallCases:
         self.assertEqual(code, 2, out + err)
         self.assertIn("agents/beta.md", err)
         self.assertEqual(snapshot(self.target), before)
+        # primero revisar y restaurar; regenerar solo para un mantenedor con un cambio intencional
+        self.assertIn("git diff", err)
+        self.assertIn("vuelve a clonar", err)
+        self.assertIn("mantenedor", err)
+        self.assertLess(err.index("git diff"), err.index("build_manifest"))
+        self.assertLess(err.index("mantenedor"), err.index("build_manifest"))
 
     def test_case6_missing_source_file_exit2(self):
         self.make_source()
@@ -431,13 +441,18 @@ class InstallCases:
 
     # --- validacion del destino: -DryRun y la real dan el mismo codigo ---
 
-    def assert_same_exit(self, expected, *args, **kw):
+    def assert_same_exit(self, expected, *args, expect_err=None, with_backup=False, **kw):
+        """-DryRun y la real dan el mismo codigo. La variante con -BackupDir (2 lanzamientos mas) es
+        opcional: las validaciones del destino no dependen del respaldo."""
         respaldo = os.path.join(self.tmp, "respaldo")
-        for extra in ([], ["-BackupDir", respaldo]):
+        variants = [[], ["-BackupDir", respaldo]] if with_backup else [[]]
+        for extra in variants:
             for mode in (["-DryRun"], []):
                 with self.subTest(mode=mode, extra=extra):
                     code, out, err = self.run_install(*(mode + extra + list(args)), **kw)
                     self.assertEqual(code, expected, out + err)
+                    if expect_err:
+                        self.assertIn(expect_err, err)
         self.assertFalse(os.path.exists(respaldo))
 
     def test_target_that_is_a_file_exit1(self):
@@ -449,10 +464,7 @@ class InstallCases:
     def test_intermediate_folder_that_is_a_file_exit1(self):
         self.make_source()
         write(self.target, "agents", b"soy un archivo")
-        code, out, err = self.run_install("-DryRun")
-        self.assertEqual(code, 1, out + err)
-        self.assertIn("agents", err)
-        self.assert_same_exit(1)
+        self.assert_same_exit(1, expect_err="agents")
 
     def test_target_below_a_file_exit1(self):
         self.make_source()
@@ -463,10 +475,7 @@ class InstallCases:
     def test_destination_that_is_a_folder_exit1(self):
         self.make_source()
         os.makedirs(os.path.join(self.target, "agents", "alfa.md"))
-        code, out, err = self.run_install("-DryRun")
-        self.assertEqual(code, 1, out + err)
-        self.assertIn("es una carpeta", err)
-        self.assert_same_exit(1)
+        self.assert_same_exit(1, expect_err="es una carpeta")
 
     @unittest.skipUnless(os.name == "nt", "los proveedores del registro solo existen en Windows")
     def test_non_filesystem_provider_exit1(self):
@@ -476,6 +485,8 @@ class InstallCases:
 
     def test_default_backup_is_absolute_sibling_of_target(self):
         self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 0, out + err)
         m = re.search(r"^Respaldo: (.*)$", out, re.M)
@@ -486,6 +497,8 @@ class InstallCases:
 
     def test_relative_backup_dir_is_resolved_to_absolute(self):
         self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
         code, out, err = self.run_install("-DryRun", "-BackupDir", "rel respaldo")
         self.assertEqual(code, 0, out + err)
         self.assertIn("Respaldo: " + os.path.join(self.tmp, "rel respaldo"), out)
@@ -610,6 +623,13 @@ class InstallCases:
 
     # --- T4: copia real ---
 
+    def preinstall(self):
+        """Deja el destino como lo deja una instalacion limpia (los archivos canonicos y el estado), sin
+        lanzar PowerShell: solo para pruebas que necesitan ese punto de partida y no prueban la instalacion."""
+        for rel, data in SAMPLE.items():
+            write(self.target, rel, data)
+        write(self.target, "synclayer-manifest.json", read(self.src, "install-manifest.json"))
+
     def install_ok(self, *args):
         code, out, err = self.run_install(*args)
         self.assertEqual(code, 0, out + err)
@@ -621,14 +641,15 @@ class InstallCases:
             found += [os.path.join(dirpath, f) for f in files if f.endswith(".tmp")]
         return found
 
-    def patch_script(self, after_line, code):
-        """Inserta codigo PowerShell en la COPIA del script de prueba, tras la linea que empieza igual."""
+    def patch_script(self, after_line, code, before=False):
+        """Inserta codigo PowerShell en la COPIA del script de prueba, tras la linea que empieza igual
+        (o justo antes de ella con before=True)."""
         path = os.path.join(self.src, "install.ps1")
         with open(path, "rb") as f:
             lines = f.read().decode("ascii").split("\n")
         idx = [i for i, l in enumerate(lines) if l.strip().startswith(after_line)]
         self.assertEqual(len(idx), 1, after_line)
-        lines.insert(idx[0] + 1, code)
+        lines.insert(idx[0] if before else idx[0] + 1, code)
         with open(path, "wb") as f:
             f.write("\n".join(lines).encode("ascii"))
 
@@ -670,7 +691,7 @@ class InstallCases:
 
     def test_hook_first_also_on_update(self):
         self.make_source()
-        self.install_ok()
+        self.preinstall()
         files = dict(SAMPLE)
         files["agents/alfa.md"] = b"alfa 2\n"
         files["hooks/agent_guard.py"] = b"print('guard 2')\n"
@@ -681,7 +702,7 @@ class InstallCases:
 
     def test_case4_update_creates_verifiable_backup(self):
         self.make_source()
-        self.install_ok()
+        self.preinstall()
         old_state = read(self.target, "synclayer-manifest.json")
         self.update_source("agents/alfa.md", b"alfa nueva\n")
         backup = os.path.join(self.tmp, "mi respaldo")
@@ -701,7 +722,7 @@ class InstallCases:
 
     def test_case4_default_backup_dir_is_created_next_to_target(self):
         self.make_source()
-        self.install_ok()
+        self.preinstall()
         self.update_source("agents/alfa.md", b"alfa nueva\n")
         self.install_ok()
         backups = [n for n in os.listdir(self.tmp) if n.startswith("destino-backup-")]
@@ -715,8 +736,8 @@ class InstallCases:
                    "settings.json": b"{}", "CLAUDE.md": b"mio"}
         for rel, data in foreign.items():
             write(self.target, rel, data)
-        self.install_ok()
         before = {rel: os.stat(os.path.join(self.target, *rel.split("/"))).st_mtime_ns for rel in foreign}
+        self.install_ok()
         self.update_source("agents/alfa.md", b"alfa nueva\n")
         backup = os.path.join(self.tmp, "respaldo")
         self.install_ok("-BackupDir", backup)
@@ -725,6 +746,10 @@ class InstallCases:
             self.assertEqual(read(self.target, rel), data)
             self.assertEqual(os.stat(p).st_mtime_ns, before[rel])
             self.assertFalse(os.path.exists(os.path.join(backup, *rel.split("/"))))
+
+    def assert_quiet_when_nothing_written(self, out):
+        for text in ("Respaldo", "Verificado", "Recordatorio", "reinicia"):
+            self.assertNotIn(text, out)
 
     def test_case7_rerun_is_idempotent(self):
         self.make_source()
@@ -736,6 +761,7 @@ class InstallCases:
         self.assertEqual(snapshot(self.target), snap)
         self.assertEqual(sorted(os.listdir(self.tmp)), listing)
         self.assertIn("escritos=0", out)
+        self.assert_quiet_when_nothing_written(out)
 
     def test_case8_paths_with_spaces_real_run(self):
         self.make_source()
@@ -755,6 +781,7 @@ class InstallCases:
         for rel in SAMPLE:
             self.assertEqual(os.stat(os.path.join(self.target, *rel.split("/"))).st_mtime_ns, before[rel])
         self.assertEqual(sorted(os.listdir(self.tmp)), ["destino", "home", "origen"])
+        self.assert_quiet_when_nothing_written(out)
 
     def test_case13_crlf_source_writes_lf_bytes(self):
         self.make_source(crlf=True)
@@ -773,7 +800,7 @@ class InstallCases:
 
     def test_case17_existing_backup_is_not_overwritten_exit1(self):
         self.make_source()
-        self.install_ok()
+        self.preinstall()
         self.update_source("agents/alfa.md", b"alfa nueva\n")
         backup = os.path.join(self.tmp, "respaldo")
         write(backup, "agents/alfa.md", b"respaldo anterior")
@@ -783,12 +810,13 @@ class InstallCases:
                 code, out, err = self.run_install(*(mode + ["-BackupDir", backup]))
                 self.assertEqual(code, 1, out + err)
                 self.assertIn("ya existe el respaldo", err)
+                self.assertIn("-BackupDir", err)
                 self.assertEqual(snapshot(backup), before_b)
                 self.assertEqual(snapshot(self.target), before_t)
 
     def test_backup_dir_that_is_a_file_exit1_in_both_modes(self):
         self.make_source()
-        self.install_ok()
+        self.preinstall()
         self.update_source("agents/alfa.md", b"alfa nueva\n")
         backup = os.path.join(self.tmp, "respaldo")
         write(self.tmp, "respaldo", b"soy un archivo")
@@ -825,7 +853,7 @@ class InstallCases:
 
     def test_real_run_modified_without_force_exit3_writes_nothing(self):
         self.make_source()
-        self.install_ok()
+        self.preinstall()
         self.update_source("agents/alfa.md", b"alfa nueva\n")
         write(self.target, "agents/beta.md", b"editado a mano\n")
         before = snapshot(self.target)
@@ -834,14 +862,6 @@ class InstallCases:
         self.assertEqual(code, 3, out + err)
         self.assertEqual(snapshot(self.target), before)
         self.assertFalse(os.path.exists(backup))
-
-    def test_real_run_target_validation_same_exit_as_dryrun(self):
-        self.make_source()
-        write(self.tmp, "destino", b"soy un archivo")
-        for mode in (["-DryRun"], []):
-            with self.subTest(mode=mode):
-                code, out, err = self.run_install(*mode)
-                self.assertEqual(code, 1, out + err)
 
     def test_written_bytes_are_the_verified_ones_not_a_reread(self):
         # Tras verificar el origen se cambia el archivo en disco; el destino debe tener lo verificado.
@@ -869,20 +889,28 @@ class InstallCases:
         os.chmod(path, stat.S_IREAD)
         self.addCleanup(os.chmod, path, stat.S_IWRITE | stat.S_IREAD)
 
+    def inject_readonly_at_step7(self, rel):
+        """Simula un destino que se vuelve de solo lectura DESPUES de clasificar (fallo solo al escribir)."""
+        path = os.path.join(self.target, *rel.split("/"))
+        self.addCleanup(lambda: os.path.exists(path) and os.chmod(path, stat.S_IWRITE | stat.S_IREAD))
+        self.patch_script("# Paso 7:", "[System.IO.File]::SetAttributes('%s', [System.IO.FileAttributes]::ReadOnly)"
+                          % path.replace("'", "''"))
+
     @unittest.skipUnless(os.name == "nt", "el atributo de solo lectura bloquea el reemplazo solo en Windows")
     def test_copy_failure_mid_run_exit4_keeps_backup_and_hook_intact(self):
         self.make_source()
-        self.install_ok()
+        self.preinstall()
         files = dict(SAMPLE)
         files["agents/alfa.md"] = b"alfa 2\n"
         files["agents/beta.md"] = b"beta 2\n"
         files["hooks/agent_guard.py"] = b"print('guard 2')\n"
         self.make_source(files)
-        self.make_readonly("agents/beta.md")           # bloquea el reemplazo de beta
+        self.inject_readonly_at_step7("agents/beta.md")   # bloquea el reemplazo de beta
         backup = os.path.join(self.tmp, "respaldo")
         old_state = read(self.target, "synclayer-manifest.json")
         code, out, err = self.run_install("-BackupDir", backup)
         self.assertEqual(code, 4, out + err)
+        self.assertNotIn("\\u000d", err)
         self.assertIn("agents/beta.md", err)
         self.assertIn(backup, err)
         # el hook va primero y quedo completo y verificado
@@ -902,12 +930,12 @@ class InstallCases:
     @unittest.skipUnless(os.name == "nt", "el atributo de solo lectura bloquea el reemplazo solo en Windows")
     def test_hook_copy_failure_writes_no_agent(self):
         self.make_source()
-        self.install_ok()
+        self.preinstall()
         files = dict(SAMPLE)
         files["agents/alfa.md"] = b"alfa 2\n"
         files["hooks/agent_guard.py"] = b"print('guard 2')\n"
         self.make_source(files)
-        self.make_readonly("hooks/agent_guard.py")
+        self.inject_readonly_at_step7("hooks/agent_guard.py")
         code, out, err = self.run_install("-BackupDir", os.path.join(self.tmp, "respaldo"))
         self.assertEqual(code, 4, out + err)
         self.assertIn("No se escribio ningun archivo del destino", err)
@@ -916,7 +944,6 @@ class InstallCases:
         self.assertEqual(self.leftover_temps(), [])
 
     def test_force_overwrites_modified_with_backup(self):
-        # Minimo de -Force en T4: la copia real respalda y sobrescribe (el resto de la semantica es T5).
         self.make_source()
         write(self.target, "agents/beta.md", b"editado a mano\n")
         backup = os.path.join(self.tmp, "respaldo")
@@ -934,6 +961,771 @@ class InstallCases:
         out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
         self.assertEqual(self.states(out)["agents/viejo.md"], "HUERFANO")
         self.assertEqual(read(self.target, "agents/viejo.md"), b"de una version anterior\n")
+
+    # --- T5: cambios locales y -Force ---
+
+    def test_t5_mixed_modified_and_update_without_force_writes_neither(self):
+        self.make_source()
+        self.preinstall()
+        files = dict(SAMPLE)
+        files["agents/alfa.md"] = b"alfa 2\n"          # ACTUALIZAR
+        files["agents/beta.md"] = b"beta 2\n"          # el destino se edita a mano: MODIFICADO
+        self.make_source(files)
+        write(self.target, "agents/beta.md", b"editado a mano\n")
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-BackupDir", backup)
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out)["agents/alfa.md"], "ACTUALIZAR")
+        self.assertEqual(self.states(out)["agents/beta.md"], "MODIFICADO")
+        self.assertIn("agents/beta.md", err)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertFalse(os.path.exists(backup))
+        self.assertEqual(self.leftover_temps(), [])
+
+    def test_t5_force_backs_up_local_version_and_overwrites(self):
+        self.make_source()
+        self.preinstall()
+        files = dict(SAMPLE)
+        files["agents/alfa.md"] = b"alfa 2\n"
+        self.make_source(files)
+        write(self.target, "agents/beta.md", b"editado a mano\r\ncon CR\r\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(self.states(out)["agents/beta.md"], "MODIFICADO")
+        # la version local queda tal cual en el respaldo (bytes originales)
+        self.assertEqual(read(backup, "agents/beta.md"), b"editado a mano\r\ncon CR\r\n")
+        for rel, data in files.items():
+            self.assertEqual(read(self.target, rel), data)
+        self.assertEqual(read(self.target, "synclayer-manifest.json"), read(self.src, "install-manifest.json"))
+        self.assertIn("Recordatorio", out)
+        self.assertEqual(self.leftover_temps(), [])
+
+    def test_t5_case11_real_run_existing_without_state_modified_exit3(self):
+        self.make_source()
+        write(self.target, "agents/alfa.md", b"distinto\n")
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-BackupDir", backup)
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertFalse(os.path.exists(backup))
+
+    def test_t5_case16_orphan_real_run_kept_and_reported(self):
+        self.make_source()
+        old = dict(SAMPLE)
+        old["agents/viejo.md"] = b"de una version anterior\n"
+        self.write_state(old)
+        for rel, data in old.items():
+            write(self.target, rel, data)
+        out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(self.states(out)["agents/viejo.md"], "HUERFANO")
+        self.assertEqual(read(self.target, "agents/viejo.md"), b"de una version anterior\n")
+        self.assertEqual(read(self.target, "synclayer-manifest.json"), read(self.src, "install-manifest.json"))
+
+    # --- T5: estado previo ilegible: tratado como ausente, sin hash ni respaldo, con aviso por stderr ---
+
+    def assert_clean_unreadable_warning(self, err):
+        self.assertIn("aviso", err)
+        self.assertIn("Se trata como ausente", err)
+        self.assertNotIn("Exception", err)
+        self.assertNotIn("At line", err)
+        self.assertTrue(err.isascii(), repr(err))
+        self.assertNotIn("\\u000d", err)
+
+    def test_t5_corrupt_state_all_equal_real_run_replaces_state_no_backup(self):
+        for extra in ([], ["-Force"]):
+            with self.subTest(extra=extra):
+                shutil.rmtree(self.target, ignore_errors=True)
+                self.make_source()
+                for rel, data in SAMPLE.items():
+                    write(self.target, rel, data)
+                write(self.target, "synclayer-manifest.json", b"{no es json")
+                backup = os.path.join(self.tmp, "respaldo")
+                code, out, err = self.run_install(*(extra + ["-BackupDir", backup]))
+                self.assertEqual(code, 0, out + err)
+                self.assert_clean_unreadable_warning(err)
+                self.assertEqual(read(self.target, "synclayer-manifest.json"), read(self.src, "install-manifest.json"))
+                self.assertFalse(os.path.exists(backup))      # un estado invalido no se respalda
+                self.assertNotIn("Respaldo", out)
+
+    def test_t5_corrupt_state_with_modified_needs_force_and_state_not_in_backup(self):
+        self.make_source()
+        write(self.target, "synclayer-manifest.json", b"{no es json")
+        write(self.target, "agents/alfa.md", b"editado\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-BackupDir", backup)
+        self.assertEqual(code, 3, out + err)
+        self.assert_clean_unreadable_warning(err)
+        self.assertEqual(read(self.target, "synclayer-manifest.json"), b"{no es json")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(read(backup, "agents/alfa.md"), b"editado\n")
+        self.assertFalse(os.path.exists(os.path.join(backup, "synclayer-manifest.json")))
+
+    def lock_file(self, path, access, share):
+        """Abre el archivo con acceso/uso compartido dados (Win32) y lo mantiene abierto hasta el final de la prueba."""
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                    wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = k32.CreateFileW(path, access, share, None, 3, 0x80, None)
+        if handle in (None, ctypes.c_void_p(-1).value):
+            self.skipTest("no se pudo abrir %s con el bloqueo pedido" % path)
+        self.addCleanup(k32.CloseHandle, handle)
+
+    GENERIC_READ = 0x80000000
+    GENERIC_WRITE = 0x40000000
+
+    @unittest.skipUnless(os.name == "nt", "el bloqueo con FileShare 0 es de Windows")
+    def test_t5_locked_state_exit1_before_writing_in_both_modes(self):
+        # Un estado bloqueado se ve antes de escribir: se trata como ilegible (aviso) y, como hay que
+        # reescribirlo, exit 1 en -DryRun y en la real, sin tocar nada. El exit 4 queda para fallos al escribir.
+        self.make_source()
+        for rel, data in SAMPLE.items():
+            write(self.target, rel, data)
+        state = write(self.target, "synclayer-manifest.json", read(self.src, "install-manifest.json"))
+        self.lock_file(state, self.GENERIC_READ | self.GENERIC_WRITE, 0)
+        backup = os.path.join(self.tmp, "respaldo")
+        for extra in ([], ["-DryRun"], ["-Force"]):
+            with self.subTest(extra=extra):
+                code, out, err = self.run_install(*(extra + ["-BackupDir", backup]))
+                self.assertEqual(code, 1, out + err)
+                self.assert_clean_unreadable_warning(err)
+                self.assertIn("bloqueado", err)
+                self.assertIn("synclayer-manifest.json", err)
+                self.assertIn("No se escribio nada", err)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(self.leftover_temps(), [])
+                self.assertFalse(os.path.exists(backup))
+
+    @unittest.skipUnless(os.name == "nt", "el bloqueo con FileShare 0 es de Windows")
+    def test_t5_destination_file_open_without_sharing_exit1_with_context(self):
+        # No se puede ni leer para clasificar: mensaje con contexto, no texto crudo de .NET.
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        self.lock_file(os.path.join(self.target, "agents", "alfa.md"), self.GENERIC_READ, 0)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("no se pudo leer el destino", err)
+                self.assertIn("No se escribio nada en el destino", err)
+                self.assertTrue(err.isascii(), repr(err))
+                self.assertNotIn("Exception", err)
+        self.assertEqual(self.leftover_temps(), [])
+
+    @unittest.skipUnless(os.name == "nt", "el bloqueo de uso compartido es de Windows")
+    def test_t5_destination_file_readable_but_not_writable_by_sharing_exit1_in_both_modes(self):
+        # Se puede leer (clasifica) pero otro proceso lo tiene abierto sin permitir escritura: se detecta
+        # antes de escribir, exit 1 en ambos modos (no exit 4 a mitad de la copia).
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        self.lock_file(os.path.join(self.target, "agents", "alfa.md"), self.GENERIC_READ, 1)
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("bloqueado", err)
+                self.assertIn("alfa.md", err)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertNotIn("Copiado", out)
+
+    @unittest.skipUnless(os.name == "nt", "icacls es de Windows")
+    def test_t5_destination_file_with_deny_write_acl_exit1_in_both_modes(self):
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        path = os.path.join(self.target, "agents", "alfa.md")
+        deny = subprocess.run(["icacls", path, "/deny", "*S-1-1-0:(WD,AD)"], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if deny.returncode != 0:
+            self.skipTest("icacls no pudo negar la escritura")
+        self.addCleanup(subprocess.run, ["icacls", path, "/remove:d", "*S-1-1-0"],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("no se puede escribir", err)
+                self.assertNotIn("Copiado", out)
+        self.assertEqual(read(self.target, "agents/alfa.md"), SAMPLE["agents/alfa.md"])
+
+    def test_t5_backup_read_failure_has_context(self):
+        # ReadAllBytes del original al respaldar falla (otro proceso lo abre sin compartir tras clasificar).
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        victim = os.path.join(self.target, "agents", "alfa.md").replace("'", "''")
+        self.patch_script("# Paso 6:", "$lockfs = [System.IO.File]::Open('%s', 'Open', 'Read', 'None')" % victim)
+        code, out, err = self.run_install("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("para respaldarlo", err)
+        self.assertIn("No se escribio nada en el destino", err)
+        self.assertTrue(err.isascii(), repr(err))
+        self.assertNotIn("Exception", err)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "respaldo")))
+
+    # --- T5: minor de T4 ---
+
+    def test_t5_state_that_is_a_folder_exit1_in_both_modes(self):
+        self.make_source()
+        os.makedirs(os.path.join(self.target, "synclayer-manifest.json"))
+        self.assert_same_exit(1, expect_err="synclayer-manifest.json")
+
+    def test_t5_readonly_destination_exit1_in_both_modes(self):
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        self.make_readonly("agents/alfa.md")
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*(mode + ["-BackupDir", backup]))
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("solo lectura", err)
+                self.assertIn("alfa.md", err)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertFalse(os.path.exists(backup))
+
+    def test_t5_readonly_destination_with_force_exit1(self):
+        self.make_source()
+        write(self.target, "agents/alfa.md", b"editado\n")
+        self.make_readonly("agents/alfa.md")
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*(mode + ["-Force"]))
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("solo lectura", err)
+        self.assertEqual(read(self.target, "agents/alfa.md"), b"editado\n")
+
+    def test_t5_readonly_state_exit1_in_both_modes(self):
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        self.make_readonly("synclayer-manifest.json")
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("solo lectura", err)
+                self.assertEqual(snapshot(self.target), before)
+
+    def test_t5_readonly_file_that_is_igual_is_not_a_problem(self):
+        self.make_source()
+        self.preinstall()
+        self.make_readonly("agents/alfa.md")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 0, out + err)
+
+    def test_t5_temp_with_colliding_name_is_not_deleted(self):
+        # Si CreateNew falla porque el nombre ya existia, ese archivo no es nuestro: no se borra.
+        self.make_source()
+        path = os.path.join(self.src, "install.ps1")
+        with open(path, "rb") as f:
+            text = f.read().decode("ascii")
+        self.assertEqual(text.count("[guid]::NewGuid().ToString('N')"), 1)
+        with open(path, "wb") as f:
+            f.write(text.replace("[guid]::NewGuid().ToString('N')", "'fijo'").encode("ascii"))
+        foreign = write(self.target, "hooks/.synclayer-fijo.tmp", b"ajeno")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertTrue(os.path.exists(foreign))
+        self.assertEqual(read(self.target, "hooks/.synclayer-fijo.tmp"), b"ajeno")
+        self.assertNotIn("\\u000d", err)
+
+    def test_t5_error_message_with_trailing_crlf_is_trimmed_before_escaping(self):
+        # Los mensajes de .NET pueden terminar en CRLF; no deben salir como \u000d\u000a.
+        self.make_source()
+        self.patch_script("# Paso 7:", "throw ('causa de prueba' + [char]13 + [char]10)")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(err.strip(), "error: causa de prueba")
+        self.assertNotIn("\\u000d", err)
+        self.assertNotIn("\\u000a", err)
+
+    def test_t5_update_replaces_the_file_instead_of_rewriting_in_place(self):
+        # Atomicidad: un enlace duro al hook conserva el contenido viejo (Replace crea un archivo nuevo;
+        # WriteAllBytes sobre el destino cambiaria tambien el enlace).
+        self.make_source()
+        self.preinstall()
+        hook = os.path.join(self.target, "hooks", "agent_guard.py")
+        link = os.path.join(self.tmp, "enlace duro")
+        try:
+            os.link(hook, link)
+        except (OSError, NotImplementedError, AttributeError) as e:
+            self.skipTest("no se pudo crear un enlace duro: %s" % e)
+        files = dict(SAMPLE)
+        files["hooks/agent_guard.py"] = b"print('guard 2')\n"
+        self.make_source(files)
+        self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(read(self.target, "hooks/agent_guard.py"), b"print('guard 2')\n")
+        with open(link, "rb") as f:
+            self.assertEqual(f.read(), SAMPLE["hooks/agent_guard.py"])
+
+    def test_t5_target_notice_goes_to_stderr_in_a_real_run(self):
+        self.make_source()
+        out, err = self.install_ok()
+        self.assertIn("aviso: -Target no es", err)
+        self.assertNotIn("aviso", out)
+
+    def test_t5_hash_check_before_backup_covers_all_items_before_the_first_backup(self):
+        self.make_source()
+        self.preinstall()
+        files = dict(SAMPLE)
+        files["hooks/agent_guard.py"] = b"print('guard 2')\n"     # primer respaldo: el hook
+        files["agents/beta.md"] = b"beta 2\n"                      # segundo respaldo: beta
+        self.make_source(files)
+        victim = os.path.join(self.target, "agents", "beta.md").replace("'", "''")
+        self.patch_script("# Paso 6:", "[System.IO.File]::WriteAllBytes('%s', [byte[]]@(66,66))" % victim)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-BackupDir", backup)
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("cambio en el destino durante la ejecucion", err)
+        self.assertFalse(os.path.exists(backup), "no debe quedar ningun respaldo parcial")
+        self.assertEqual(read(self.target, "hooks/agent_guard.py"), SAMPLE["hooks/agent_guard.py"])
+
+    def test_t5_hash_check_before_replace_detects_change_after_classification(self):
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        victim = os.path.join(self.target, "agents", "alfa.md").replace("'", "''")
+        self.patch_script("# Paso 7:", "[System.IO.File]::WriteAllBytes('%s', [byte[]]@(90,90))" % victim)
+        code, out, err = self.run_install("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("el archivo cambio en el destino despues de clasificarlo", err)
+        self.assertEqual(read(self.target, "agents/alfa.md"), b"ZZ")
+
+    def test_t5_backup_name_collision_mentions_backupdir_without_raw_dotnet_text(self):
+        self.make_source()
+        self.preinstall()
+        files = dict(SAMPLE)
+        files["hooks/agent_guard.py"] = b"print('guard 2')\n"
+        self.make_source(files)
+        backup = os.path.join(self.tmp, "respaldo")
+        mine = os.path.join(backup, "hooks", "agent_guard.py").replace("'", "''")
+        self.patch_script("# Carpeta de respaldo ya comprobada",
+                          "[void][System.IO.Directory]::CreateDirectory('%s'); [System.IO.File]::WriteAllBytes('%s', [byte[]]@(80))"
+                          % (os.path.dirname(mine), mine))
+        code, out, err = self.run_install("-BackupDir", backup)
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("-BackupDir", err)
+        self.assertTrue(err.isascii(), repr(err))
+        self.assertNotIn("\\u000d", err)
+        self.assertEqual(read(backup, "hooks/agent_guard.py"), b"P")
+        self.assertEqual(read(self.target, "hooks/agent_guard.py"), SAMPLE["hooks/agent_guard.py"])
+
+    # --- T5: puntos de reanalisis ---
+
+    def make_link_dir(self, link, target):
+        """Junction real (Windows) o enlace simbolico de carpeta; salta con motivo si no se puede."""
+        os.makedirs(target, exist_ok=True)
+        if os.name == "nt":
+            try:
+                import _winapi
+                _winapi.CreateJunction(target, link)
+                return
+            except (ImportError, AttributeError, OSError) as e:
+                self.skipTest("no se pudo crear una junction en el temporal: %s" % e)
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except (OSError, NotImplementedError) as e:
+            self.skipTest("no se pudo crear un enlace simbolico: %s" % e)
+
+    def make_tagged_reparse_file(self, path):
+        """Archivo con punto de reanalisis de etiqueta propia (FSCTL_SET_REPARSE_POINT, tag 0x80001234 + GUID).
+        No requiere privilegio, a diferencia del enlace simbolico de archivo. Windows solamente.
+        Se usa un tag con el bit 31 (Microsoft) y sin asignar: en este equipo 0x1234 da ERROR_INVALID_REPARSE_DATA (4392)."""
+        import ctypes
+        import struct
+        from ctypes import wintypes
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "wb").close()
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                    wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        k32.DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPCVOID, wintypes.DWORD,
+                                        wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+                                        wintypes.LPVOID]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = k32.CreateFileW(path, 0x40000000, 0, None, 3, 0x00200000, None)
+        if handle in (None, ctypes.c_void_p(-1).value):
+            os.remove(path)
+            self.skipTest("no se pudo abrir el archivo para fijar el punto de reanalisis")
+        guid = bytes(range(1, 17))
+        buf = struct.pack("<IHH", 0x80001234, len(guid), 0) + guid
+        returned = wintypes.DWORD(0)
+        ok = k32.DeviceIoControl(handle, 0x000900A4, buf, len(buf), None, 0, ctypes.byref(returned), None)
+        k32.CloseHandle(handle)
+        if not ok:
+            os.remove(path)
+            self.skipTest("FSCTL_SET_REPARSE_POINT fallo (error %d)" % ctypes.get_last_error())
+
+        def cleanup():
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        self.addCleanup(cleanup)
+
+    def make_link_file(self, link, target):
+        """Enlace simbolico de archivo; sin privilegio (WinError 1314), reanalisis de etiqueta propia en Windows."""
+        try:
+            os.symlink(target, link)
+        except (OSError, NotImplementedError) as e:
+            if os.name == "nt":
+                self.make_tagged_reparse_file(link)
+                return
+            self.skipTest("no se pudo crear un enlace simbolico de archivo (sin privilegio?): %s" % e)
+
+    def assert_reparse_rejected(self, *extra, expect_in_err=None, outside_before=None, modes=None):
+        for mode in (modes or (["-DryRun"], [])):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*(mode + list(extra)))
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("punto de reanalisis", err)
+                self.assertTrue(err.isascii(), repr(err))
+                if expect_in_err:
+                    self.assertIn(expect_in_err, err)
+                self.assertNotIn("Copiado", out)
+                self.assertNotIn("Respaldado", out)
+        if outside_before is not None:
+            self.assertEqual(snapshot(self.outside), outside_before)
+
+    def test_t5_reparse_point_in_intermediate_folder_exit1_in_both_modes(self):
+        self.make_source()
+        for folder in ("agents", "rules", "hooks", "docs"):
+            with self.subTest(folder=folder):
+                os.makedirs(self.target, exist_ok=True)
+                link = os.path.join(self.target, folder)
+                self.make_link_dir(link, self.outside)
+                try:
+                    before = snapshot(self.outside)
+                    # la real solo con hooks (el caso medido): la clasificacion es el mismo codigo en ambos modos
+                    modes = (["-DryRun"], []) if folder == "hooks" else (["-DryRun"],)
+                    self.assert_reparse_rejected(expect_in_err=folder, outside_before=before, modes=modes)
+                    self.assertEqual(os.listdir(self.outside), [])
+                finally:
+                    os.rmdir(link)
+
+    def test_t5_reparse_point_in_populated_folder_does_not_write_outside(self):
+        # El escenario medido: hooks es una junction a una carpeta externa que ya existe.
+        self.make_source()
+        write(self.outside, "ajeno.txt", b"ajeno")
+        link = os.path.join(self.target, "hooks")
+        os.makedirs(self.target)
+        self.make_link_dir(link, self.outside)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        before = snapshot(self.outside)
+        self.assert_reparse_rejected(outside_before=before)
+        self.assertFalse(os.path.exists(os.path.join(self.outside, "agent_guard.py")))
+
+    def test_t5_target_that_is_a_reparse_point_exit1(self):
+        self.make_source()
+        real = os.path.join(self.tmp, "real")
+        self.make_link_dir(self.target, real)
+        self.addCleanup(lambda: os.path.isdir(self.target) and os.rmdir(self.target))
+        self.assert_reparse_rejected()
+        self.assertEqual(os.listdir(real), [])
+
+    def test_t5_destination_file_that_is_a_symlink_exit1(self):
+        self.make_source()
+        victim = write(self.outside, "victima.md", b"no tocar")
+        os.makedirs(os.path.join(self.target, "agents"))
+        self.make_link_file(os.path.join(self.target, "agents", "alfa.md"), victim)
+        before = snapshot(self.outside)
+        self.assert_reparse_rejected(expect_in_err="alfa.md", outside_before=before)
+        self.assert_reparse_rejected("-Force", expect_in_err="alfa.md", outside_before=before, modes=(["-DryRun"],))
+        self.assertEqual(read(self.outside, "victima.md"), b"no tocar")
+
+    def test_t5_destination_file_path_that_is_a_reparse_point_exit1(self):
+        # Ultimo componente de la ruta (el archivo de destino): con una junction en su lugar tambien se rechaza
+        # (los symlink de archivo no se pueden crear sin privilegio en todos los equipos).
+        self.make_source()
+        os.makedirs(os.path.join(self.target, "agents"))
+        link = os.path.join(self.target, "agents", "alfa.md")
+        self.make_link_dir(link, self.outside)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        self.assert_reparse_rejected(expect_in_err="alfa.md", outside_before=snapshot(self.outside))
+        self.assertEqual(os.listdir(self.outside), [])
+
+    def test_t5_dangling_symlink_destination_exit1(self):
+        self.make_source()
+        os.makedirs(os.path.join(self.target, "agents"))
+        self.make_link_file(os.path.join(self.target, "agents", "alfa.md"), os.path.join(self.outside, "no existe.md"))
+        self.assert_reparse_rejected(expect_in_err="alfa.md")
+        self.assertFalse(os.path.exists(self.outside))
+
+    def test_t5_state_file_that_is_a_symlink_exit1(self):
+        self.make_source()
+        victim = write(self.outside, "estado.json", b"no tocar")
+        os.makedirs(self.target)
+        self.make_link_file(os.path.join(self.target, "synclayer-manifest.json"), victim)
+        self.assert_reparse_rejected(expect_in_err="synclayer-manifest.json")
+        self.assertEqual(read(self.outside, "estado.json"), b"no tocar")
+
+    def test_t5_backup_dir_that_is_a_reparse_point_exit1(self):
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        self.make_link_dir(backup, self.outside)
+        self.addCleanup(lambda: os.path.isdir(backup) and os.rmdir(backup))
+        before_t = snapshot(self.target)
+        self.assert_reparse_rejected("-BackupDir", backup, outside_before=snapshot(self.outside))
+        self.assertEqual(os.listdir(self.outside), [])
+        self.assertEqual(snapshot(self.target), before_t)
+
+    def test_t5_backup_subfolder_that_is_a_reparse_point_exit1(self):
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        os.makedirs(backup)
+        link = os.path.join(backup, "agents")
+        self.make_link_dir(link, self.outside)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        before_t = snapshot(self.target)
+        self.assert_reparse_rejected("-BackupDir", backup, outside_before=snapshot(self.outside))
+        self.assertEqual(snapshot(self.target), before_t)
+
+    @unittest.skipUnless(os.name == "nt", "New-Item -ItemType Junction solo en Windows")
+    def test_t5_backup_reparse_check_is_repeated_right_before_writing(self):
+        # TOCTOU: tras clasificar, la carpeta de respaldo pasa a ser un enlace.
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        os.makedirs(self.outside)
+        backup = os.path.join(self.tmp, "respaldo")
+        link = os.path.join(backup, "agents")
+        self.patch_script("# Paso 6:",
+                          "[void][System.IO.Directory]::CreateDirectory('%s'); New-Item -ItemType Junction -Path '%s' -Value '%s' | Out-Null"
+                          % (backup.replace("'", "''"), link.replace("'", "''"), self.outside.replace("'", "''")))
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        code, out, err = self.run_install("-BackupDir", backup)
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("punto de reanalisis", err)
+        self.assertEqual(os.listdir(self.outside), [])
+        self.assertEqual(read(self.target, "agents/alfa.md"), SAMPLE["agents/alfa.md"])
+
+    @unittest.skipUnless(os.name == "nt", "New-Item -ItemType Junction solo en Windows")
+    def test_t5_destination_reparse_check_is_repeated_right_before_writing(self):
+        # TOCTOU: tras clasificar (todo NUEVO) y respaldar, hooks pasa a ser una junction a una carpeta externa.
+        self.make_source()
+        os.makedirs(self.outside)
+        link = os.path.join(self.target, "hooks")
+        self.patch_script("# Paso 7:",
+                          "[void][System.IO.Directory]::CreateDirectory('%s'); New-Item -ItemType Junction -Path '%s' -Value '%s' | Out-Null"
+                          % (self.target.replace("'", "''"), link.replace("'", "''"), self.outside.replace("'", "''")))
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("punto de reanalisis", err)
+        self.assertEqual(os.listdir(self.outside), [])
+        self.assertFalse(os.path.exists(os.path.join(self.target, "synclayer-manifest.json")))
+        self.assertNotIn("Copiado: hooks/agent_guard.py", out)
+
+    # --- T5, ronda de correcciones ---
+
+    def test_t5_force_with_reparse_folder_exit1_in_both_modes(self):
+        self.make_source()
+        link = os.path.join(self.target, "agents")
+        os.makedirs(self.target)
+        self.make_link_dir(link, self.outside)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        self.assert_reparse_rejected("-Force", expect_in_err="agents", outside_before=snapshot(self.outside))
+        self.assertEqual(os.listdir(self.outside), [])
+
+    def test_t5_state_that_is_a_reparse_point_exit1_with_reparse_message(self):
+        # Un estado que es junction se rechaza como reanalisis, no como "es una carpeta".
+        self.make_source()
+        link = os.path.join(self.target, "synclayer-manifest.json")
+        os.makedirs(self.target)
+        self.make_link_dir(link, self.outside)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        self.assert_reparse_rejected(expect_in_err="synclayer-manifest.json", outside_before=snapshot(self.outside))
+        self.assertEqual(os.listdir(self.outside), [])
+
+    def test_backup_dir_inside_target_exit1_in_both_modes(self):
+        self.make_source()
+        for name, backup in (("subcarpeta", os.path.join(self.target, "agents", "old")),
+                             ("el propio destino", self.target)):
+            for mode in (["-DryRun"], []):
+                with self.subTest(case=name, mode=mode):
+                    code, out, err = self.run_install(*(mode + ["-BackupDir", backup]))
+                    self.assertEqual(code, 1, out + err)
+                    self.assertIn("dentro de -Target", err)
+        self.assertFalse(os.path.exists(self.target))
+
+    def test_backup_dir_sibling_with_same_prefix_is_not_inside_target(self):
+        self.make_source()
+        code, out, err = self.run_install("-DryRun", "-BackupDir", self.target + "-x")
+        self.assertEqual(code, 0, out + err)
+
+    def test_existing_empty_backup_dir_exit1_in_both_modes(self):
+        # Un respaldo va en una carpeta nueva: una existente (aunque vacia) se rechaza.
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa 2\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        os.makedirs(backup)
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*(mode + ["-BackupDir", backup]))
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("ya existe el respaldo", err)
+                self.assertEqual(os.listdir(backup), [])
+                self.assertEqual(snapshot(self.target), before)
+
+    def test_home_env_differs_from_powershell_home_warns_which_copy_runs(self):
+        self.make_source()
+        other = os.path.join(self.tmp, "otro home")
+        code, out, err = self.run_install(env_extra={"HOME": other})
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("aviso: la variable de entorno HOME", err)
+        self.assertIn(other, err)
+        self.assertIn(self.home, err)
+        self.assertIn(other + "/.claude/hooks/agent_guard.py", err)
+        self.assertIn(self.home + "/.claude/hooks/agent_guard.py", err)
+        self.assertNotIn("aviso", out)
+
+    def test_home_env_equal_to_powershell_home_does_not_warn(self):
+        self.make_source()
+        out, err = self.install_ok()
+        self.assertNotIn("difiere", err)
+
+    @unittest.skipUnless(os.name == "nt", "icacls es de Windows")
+    def test_hook_with_explicit_write_ace_for_other_account_warns(self):
+        self.make_source()
+        self.preinstall()
+        hook = os.path.join(self.target, "hooks", "agent_guard.py")
+        grant = subprocess.run(["icacls", hook, "/grant", "*S-1-1-0:(W)"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if grant.returncode != 0:
+            self.skipTest("icacls no pudo conceder la escritura")
+        self.addCleanup(subprocess.run, ["icacls", hook, "/remove:g", "*S-1-1-0"],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = self.install_ok()
+        self.assertIn("permisos de escritura explicitos", err)
+        self.assertIn("S-1-1-0", err)
+        self.assertNotIn("S-1-5-18", err)
+
+    def test_hook_without_foreign_write_ace_does_not_warn(self):
+        self.make_source()
+        out, err = self.install_ok()
+        self.assertNotIn("permisos de escritura", err)
+
+    def test_replace_failure_1177_keeps_the_only_new_copy_and_reports_its_path(self):
+        # ERROR_UNABLE_TO_MOVE_REPLACEMENT_2 inyectado en lugar de File.Replace: el temporal no se borra.
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        path = os.path.join(self.src, "install.ps1")
+        with open(path, "rb") as f:
+            text = f.read().decode("ascii")
+        call = "[System.IO.File]::Replace($tmp, $Dest, [NullString]::Value)"
+        self.assertEqual(text.count(call), 1)
+        with open(path, "wb") as f:
+            f.write(text.replace(call, "throw (New-Object System.IO.IOException('prueba', -2147023719))").encode("ascii"))
+        code, out, err = self.run_install("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(code, 4, out + err)
+        temps = self.leftover_temps()
+        self.assertEqual(len(temps), 1, err)
+        self.assertIn(os.path.basename(temps[0]), err)
+        self.assertIn("no se borra", err)
+        with open(temps[0], "rb") as f:
+            self.assertEqual(f.read(), b"alfa nueva\n")
+
+    def test_replace_failure_other_code_still_deletes_own_temp(self):
+        self.make_source()
+        self.preinstall()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        path = os.path.join(self.src, "install.ps1")
+        with open(path, "rb") as f:
+            text = f.read().decode("ascii")
+        call = "[System.IO.File]::Replace($tmp, $Dest, [NullString]::Value)"
+        with open(path, "wb") as f:
+            f.write(text.replace(call, "throw (New-Object System.IO.IOException('prueba', -2147024864))").encode("ascii"))
+        code, out, err = self.run_install("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(code, 4, out + err)
+        self.assertEqual(self.leftover_temps(), [])
+        self.assertNotIn("no se borra", err)
+
+    @unittest.skipUnless(os.name == "nt", "New-Item -ItemType Junction solo en Windows")
+    def test_junction_injected_just_before_writing_is_detected_after_exit4(self):
+        # La carrera no se cierra (el archivo llega a la carpeta externa), pero ya no termina en exit 0.
+        self.make_source()
+        os.makedirs(self.outside)
+        link = os.path.join(self.target, "hooks")
+        self.patch_script("Write-Atomic $dest $canonSrc[$rel] $existing",
+                          "[void][System.IO.Directory]::CreateDirectory('%s'); New-Item -ItemType Junction -Path '%s' -Value '%s' | Out-Null"
+                          % (self.target.replace("'", "''"), link.replace("'", "''"), self.outside.replace("'", "''")),
+                          before=True)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("punto de reanalisis", err)
+        self.assertIn("Aparecio mientras se escribia", err)
+        self.assertIn("fallo la copia de hooks/agent_guard.py", err)
+        self.assertEqual(os.listdir(self.outside), ["agent_guard.py"])
+        self.assertNotIn("Copiado: hooks/agent_guard.py", out)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "synclayer-manifest.json")))
+
+    @unittest.skipUnless(os.name == "nt", "New-Item -ItemType Junction solo en Windows")
+    def test_junction_injected_at_verification_is_exit4_with_reparse_message(self):
+        self.make_source()
+        os.makedirs(self.outside)
+        hooks = os.path.join(self.target, "hooks")
+        self.patch_script("# Paso 8:",
+                          "[System.IO.Directory]::Move('%s', '%s'); New-Item -ItemType Junction -Path '%s' -Value '%s' | Out-Null"
+                          % (hooks.replace("'", "''"), (hooks + ".real").replace("'", "''"),
+                             hooks.replace("'", "''"), self.outside.replace("'", "''")))
+        self.addCleanup(lambda: os.path.isdir(hooks) and os.rmdir(hooks))
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("la verificacion posterior fallo", err)
+        self.assertIn("punto de reanalisis", err)
+        self.assertEqual(os.listdir(self.outside), [])
+        self.assertFalse(os.path.exists(os.path.join(self.target, "synclayer-manifest.json")))
+
+    @unittest.skipUnless(os.name == "nt", "New-Item -ItemType Junction solo en Windows")
+    def test_junction_at_state_path_injected_at_step9_exit4_nothing_outside(self):
+        self.make_source()
+        os.makedirs(self.outside)
+        link = os.path.join(self.target, "synclayer-manifest.json")
+        self.patch_script("# Paso 9:", "New-Item -ItemType Junction -Path '%s' -Value '%s' | Out-Null"
+                          % (link.replace("'", "''"), self.outside.replace("'", "''")))
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("no se pudo escribir synclayer-manifest.json", err)
+        self.assertIn("punto de reanalisis", err)
+        self.assertEqual(os.listdir(self.outside), [])
+
+    @unittest.skipUnless(os.name == "nt", "New-Item -ItemType Junction solo en Windows")
+    def test_target_turned_into_junction_during_state_write_is_exit4(self):
+        # Repeticion tras escribir el estado: -Target pasa a ser un enlace justo antes de Write-Atomic.
+        self.make_source()
+        real = self.target + ".real"
+        self.patch_script("Write-Atomic $statePath $stateBytes $stateExists",
+                          "[System.IO.Directory]::Move('%s', '%s'); New-Item -ItemType Junction -Path '%s' -Value '%s' | Out-Null"
+                          % (self.target.replace("'", "''"), real.replace("'", "''"),
+                             self.target.replace("'", "''"), real.replace("'", "''")),
+                          before=True)
+        self.addCleanup(lambda: os.path.isdir(self.target) and os.rmdir(self.target))
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("Aparecio mientras se escribia", err)
+        self.assertTrue(os.path.exists(os.path.join(real, "synclayer-manifest.json")))
 
 
 def _make_class(label, exe, reason):

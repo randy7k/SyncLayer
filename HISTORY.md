@@ -2,6 +2,14 @@
 
 ## [Sin publicar]
 
+### Añadido (plan y línea de tiempo)
+
+- `README.md`: sección «Línea de tiempo y avance» (avance global, la Fase 1 por frentes, línea
+  de tiempo y reglas de mantenimiento) y regla de cierre en `CLAUDE.md`.
+- `docs/plans/2026-11-19-backlog-configuracion-y-reportes.md`: backlog sin desglosar de cuatro
+  fases (reporte de uso de agentes, esfuerzo configurable de 5 niveles, nombres de agentes
+  configurables, otras configuraciones dinámicas), cada una con una exploración previa.
+
 ### Añadido (assets de marca)
 
 - `assets/brand/`: símbolo (`symbol-*`, capas `block-top-left`, `block-sync`,

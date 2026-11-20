@@ -39,9 +39,17 @@ param(
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
 
-# Lista permitida: los doce archivos que SyncLayer instala. Misma lista que ALLOWED de
-# tools/build_manifest.py, pero con \z: en .NET \Z y $ aceptan un salto de linea final. El
-# lookahead excluye los nombres reservados de Windows (con, prn, aux, nul, com1-9, lpt1-9).
+# Lista permitida: tres rutas fijas (rules/agentes.md, hooks/agent_guard.py, docs/agentes.md) y
+# cualquier agents/<nombre>.md con nombre [a-z0-9_-]+. NO es una lista cerrada de doce nombres:
+# hoy el repositorio instala doce archivos, pero el patron acepta cualquier agente nuevo. Misma
+# regex que ALLOWED de tools/build_manifest.py, pero con \z: en .NET \Z y $ aceptan un salto de
+# linea final. El lookahead excluye los nombres reservados de Windows (con, prn, aux, nul,
+# com1-9, lpt1-9).
+#
+# Codigos de salida por fase (inconsistencia documentada, T6 la recoge en el README): un punto de
+# reanalisis hallado al clasificar o al respaldar (antes de escribir en el destino) da exit 1; uno
+# hallado al copiar, al verificar o al escribir el estado (ya se escribio algo, o se pudo escribir
+# fuera) da exit 4. Igual con un archivo bloqueado: antes de escribir es exit 1; al escribir, 4.
 $AllowedPattern = '^(agents/(?!(con|prn|aux|nul|com[1-9]|lpt[1-9])\.)[a-z0-9_-]+\.md|rules/agentes\.md|hooks/agent_guard\.py|docs/agentes\.md)\z'
 $StateName = 'synclayer-manifest.json'
 $ManifestName = 'install-manifest.json'
@@ -80,7 +88,7 @@ function Format-Safe([string]$Text) {
 function Get-ErrorText($ErrorRecord) {
     $ex = $ErrorRecord.Exception
     while ($null -ne $ex.InnerException) { $ex = $ex.InnerException }
-    return Format-Safe $ex.Message
+    return Format-Safe $ex.Message.Trim()
 }
 
 # Busca la propiedad distinguiendo mayusculas (PSObject.Properties[nombre] no las distingue).
@@ -134,9 +142,12 @@ function Get-CanonicalHash([string]$FilePath) {
     return Get-Sha256Hex $canon
 }
 
-# Crea un archivo nuevo (CreateNew: nunca pisa uno existente) y lo vuelca a disco.
-function Write-NewFile([string]$Path, [byte[]]$Bytes) {
+# Crea un archivo nuevo (CreateNew: nunca pisa uno existente) y lo vuelca a disco. Si se pasa Flag,
+# Flag.Created pasa a $true justo al abrir el archivo: asi el llamador sabe que el archivo es suyo
+# (si CreateNew falla porque el nombre ya existia, no es suyo y no debe borrarlo).
+function Write-NewFile([string]$Path, [byte[]]$Bytes, [hashtable]$Flag = $null) {
     $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    if ($null -ne $Flag) { $Flag.Created = $true }
     try {
         $fs.Write($Bytes, 0, $Bytes.Length)
         $fs.Flush($true)
@@ -148,23 +159,113 @@ function Write-NewFile([string]$Path, [byte[]]$Bytes) {
 
 # Escritura atomica: temporal en la misma carpeta y movimiento sobre el destino. Un archivo
 # existente se reemplaza con File.Replace; uno nuevo se mueve (Move falla si ya aparecio otro).
-# El temporal propio se borra si algo falla; nunca queda un destino a medias.
+# El temporal propio se borra si algo falla (y solo si lo creamos nosotros); nunca queda un
+# destino a medias. Excepcion: si File.Replace falla con ERROR_UNABLE_TO_MOVE_REPLACEMENT_2 (1177,
+# el reemplazado pudo quedar con otro nombre) el temporal es la unica copia nueva: no se borra y su
+# ruta va en el mensaje.
 function Write-Atomic([string]$Dest, [byte[]]$Bytes, [bool]$Existing) {
     $dir = [System.IO.Path]::GetDirectoryName($Dest)
     [void][System.IO.Directory]::CreateDirectory($dir)
     $tmp = Join-Path $dir ('.synclayer-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    $flag = @{ Created = $false }
+    $keepTmp = $false
     try {
-        Write-NewFile $tmp $Bytes
+        Write-NewFile $tmp $Bytes $flag
         if ($Existing) {
-            [System.IO.File]::Replace($tmp, $Dest, [NullString]::Value)
+            try {
+                [System.IO.File]::Replace($tmp, $Dest, [NullString]::Value)
+            }
+            catch {
+                $ex = $_.Exception
+                while ($null -ne $ex.InnerException) { $ex = $ex.InnerException }
+                if (($ex.HResult -band 0xFFFF) -eq 1177) {
+                    $keepTmp = $true
+                    throw ('no se pudo completar el reemplazo (' + (Get-ErrorText $_) + '). El archivo a reemplazar pudo quedar con otro nombre; la copia nueva esta en ' + (Format-Safe $tmp) + ' y no se borra.')
+                }
+                throw
+            }
         }
         else {
             [System.IO.File]::Move($tmp, $Dest)
         }
     }
     finally {
-        if ([System.IO.File]::Exists($tmp)) { [System.IO.File]::Delete($tmp) }
+        if ($flag.Created -and -not $keepTmp -and [System.IO.File]::Exists($tmp)) { [System.IO.File]::Delete($tmp) }
     }
+}
+
+# Punto de reanalisis (junction, enlace simbolico, punto de montaje): atributo ReparsePoint del
+# elemento mismo, sin seguir el enlace. Lo que no existe no lo es. Cualquier otro error se propaga.
+function Test-IsReparse([string]$Path) {
+    try {
+        $attr = [System.IO.File]::GetAttributes($Path)
+    }
+    catch {
+        $ex = $_.Exception
+        while ($null -ne $ex.InnerException) { $ex = $ex.InnerException }
+        if (@('FileNotFoundException', 'DirectoryNotFoundException') -contains $ex.GetType().Name) { return $false }
+        throw
+    }
+    return (($attr -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+}
+
+# Primer punto de reanalisis en Root, en cada carpeta intermedia de Rel o en Rel mismo; $null si no hay.
+function Find-Reparse([string]$Root, [string]$Rel) {
+    $cur = $Root
+    if (Test-IsReparse $cur) { return $cur }
+    foreach ($part in $Rel.Split('/')) {
+        $cur = Join-Path $cur $part
+        if (Test-IsReparse $cur) { return $cur }
+    }
+    return $null
+}
+
+function Get-ReparseText([string]$Path) {
+    return ((Format-Safe $Path) + ' es un punto de reanalisis (enlace simbolico, junction o punto de montaje). No se escribe a traves de enlaces.')
+}
+
+function Get-ReparseMessage([string]$Path) {
+    return ('error: ' + (Get-ReparseText $Path))
+}
+
+# Problema para abrir un archivo existente con acceso de escritura sin bloquear a nadie (uso
+# compartido o ACL); $null si se puede.
+function Get-OpenProblem([string]$Path) {
+    try {
+        $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+        $fs.Dispose()
+        return $null
+    }
+    catch {
+        return (Get-ErrorText $_)
+    }
+}
+
+# Entradas ACE explicitas (no heredadas) que permiten escribir, cambiar permisos o borrar a alguien que
+# no sea el usuario actual, SYSTEM, Administradores ni CREATOR OWNER. Devuelve los SID. Es un aviso de
+# mejor esfuerzo: si no se puede leer la ACL no se dice nada.
+function Get-ForeignWriteAces([string]$Path) {
+    $found = New-Object System.Collections.Generic.List[string]
+    try {
+        if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) { return , $found }
+        $acl = Get-Acl -LiteralPath $Path
+        $ok = @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-0')
+        $mask = [System.Security.AccessControl.FileSystemRights]'WriteData, AppendData, Delete, ChangePermissions, TakeOwnership'
+        foreach ($rule in $acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier])) {
+            if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
+                (($rule.FileSystemRights -band $mask) -ne 0) -and ($ok -notcontains $rule.IdentityReference.Value)) {
+                $found.Add($rule.IdentityReference.Value)
+            }
+        }
+    }
+    catch {
+        return , (New-Object System.Collections.Generic.List[string])
+    }
+    return , $found
+}
+
+function Test-IsReadOnly([string]$Path) {
+    return (([System.IO.File]::GetAttributes($Path) -band [System.IO.FileAttributes]::ReadOnly) -ne 0)
 }
 
 function ConvertTo-LocalPath([string]$Root, [string]$Relative) {
@@ -248,6 +349,14 @@ try {
         $BackupFull = Resolve-FsPath $BackupDir '-BackupDir'
     }
 
+    # El respaldo no puede estar dentro del destino (ni ser el destino): Claude Code podria cargar
+    # agentes de subcarpetas de ~/.claude. Prefijo con separador: destino-x no esta dentro de destino.
+    $targetPrefix = $TargetFull.TrimEnd('\', '/') + '\'
+    $backupPrefix = $BackupFull.TrimEnd('\', '/') + '\'
+    if ($backupPrefix.StartsWith($targetPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Stop-Install 1 ('error: -BackupDir no puede estar dentro de -Target (ni ser -Target): ' + (Format-Safe $BackupFull))
+    }
+
     # Paso 1: cargar y validar el manifiesto.
     $manifestPath = Join-Path $Source $ManifestName
     if (-not [System.IO.File]::Exists($manifestPath)) {
@@ -282,20 +391,32 @@ try {
     }
     if ($bad.Count -gt 0) {
         Stop-Install 2 ("error: el origen no coincide con " + $ManifestName + ":`n  " + ($bad -join "`n  ") +
-            "`nRegenera el manifiesto con: python -B tools/build_manifest.py")
+            "`nRevisa con git status / git diff que cambio y restaura el archivo o vuelve a clonar el commit revisado." +
+            "`nSi eres mantenedor y el cambio es intencional, regenera el manifiesto con: python -B tools/build_manifest.py")
     }
 
-    # Paso 3: estado previo del destino.
-    $prev = $null
+    # Paso 3: estado previo del destino (las pruebas inyectan codigo justo despues de esta linea).
+    # Ni -Target ni el estado pueden ser puntos de reanalisis. Un estado ilegible o invalido se trata
+    # como ausente: aviso a stderr, no se hace hash de el ni se respalda, y se reescribe al final.
     $statePath = Join-Path $TargetFull $StateName
-    if ([System.IO.File]::Exists($statePath)) {
+    $badLink = Find-Reparse $TargetFull $StateName
+    if ($null -ne $badLink) { Stop-Install 1 (Get-ReparseMessage $badLink) }
+    if ([System.IO.Directory]::Exists($statePath)) {
+        Stop-Install 1 ('error: el estado ' + (Format-Safe $statePath) + ' es una carpeta, no un archivo.')
+    }
+    $prev = $null
+    $stateExists = [System.IO.File]::Exists($statePath)
+    $stateDestHash = $null
+    if ($stateExists) {
         try {
             $prev = Read-Manifest $statePath
+            $stateDestHash = Get-Sha256Hex (ConvertTo-CanonicalBytes $prev.Bytes)
         }
         catch {
             $prev = $null
+            $stateDestHash = $null
             Write-Err ('aviso: ' + (Format-Safe $statePath) + ' no se pudo leer o no es valido (' +
-                (Get-ErrorText $_) + '). Se trata como ausente.')
+                (Get-ErrorText $_) + '). Se trata como ausente: no se respalda.')
         }
     }
 
@@ -304,6 +425,8 @@ try {
     $counts = @{ NUEVO = 0; IGUAL = 0; ACTUALIZAR = 0; MODIFICADO = 0; HUERFANO = 0 }
     foreach ($rel in $manifest.Order) {
         $dest = ConvertTo-LocalPath $TargetFull $rel
+        $badLink = Find-Reparse $TargetFull $rel
+        if ($null -ne $badLink) { Stop-Install 1 (Get-ReparseMessage $badLink) }
         $parts = $rel.Split('/')
         $cur = $TargetFull
         for ($i = 0; $i -lt $parts.Length - 1; $i++) {
@@ -320,7 +443,12 @@ try {
             $state = 'NUEVO'
         }
         else {
-            $destHash = Get-CanonicalHash $dest
+            try {
+                $destHash = Get-CanonicalHash $dest
+            }
+            catch {
+                Stop-Install 1 ('error: no se pudo leer el destino ' + (Format-Safe $dest) + ' (' + (Get-ErrorText $_) + '). No se escribio nada en el destino.')
+            }
             if ($destHash -ceq $manifest.Hashes[$rel]) {
                 $state = 'IGUAL'
             }
@@ -343,9 +471,37 @@ try {
         }
     }
 
+    # Que hay que escribir y respaldar. Primero el hook: ningun agente con hooks: puede quedar
+    # instalado sin su guarda.
+    $hookPath = 'hooks/agent_guard.py'
+    $writeRows = New-Object System.Collections.Generic.List[object]
+    foreach ($row in $rows) {
+        if ($row.Path -ceq $hookPath -and ($row.State -ceq 'NUEVO' -or $row.State -ceq 'ACTUALIZAR' -or $row.State -ceq 'MODIFICADO')) {
+            $writeRows.Add($row)
+        }
+    }
+    foreach ($row in $rows) {
+        if ($row.Path -cne $hookPath -and ($row.State -ceq 'NUEVO' -or $row.State -ceq 'ACTUALIZAR' -or $row.State -ceq 'MODIFICADO')) {
+            $writeRows.Add($row)
+        }
+    }
+    $stateBytes = ConvertTo-CanonicalBytes $manifest.Bytes
+    $stateHash = Get-Sha256Hex $stateBytes
+    # Un estado ilegible o invalido deja $stateDestHash en $null: se reescribe y no se respalda.
+    $stateNeedsWrite = (-not $stateExists) -or ($stateDestHash -cne $stateHash)
+
+    $backupItems = New-Object System.Collections.Generic.List[object]
+    foreach ($row in $writeRows) {
+        if ($row.State -ceq 'ACTUALIZAR' -or $row.State -ceq 'MODIFICADO') {
+            $backupItems.Add(@{ Rel = $row.Path; From = (ConvertTo-LocalPath $TargetFull $row.Path); Hash = $row.DestHash })
+        }
+    }
+    if ($stateExists -and $null -ne $stateDestHash -and $stateNeedsWrite) {
+        $backupItems.Add(@{ Rel = $StateName; From = $statePath; Hash = $stateDestHash })
+    }
     # Paso 5: mostrar el plan.
     Write-Out ('Destino: ' + (Format-Safe $TargetFull))
-    Write-Out ('Respaldo: ' + (Format-Safe $BackupFull))
+    if ($backupItems.Count -gt 0) { Write-Out ('Respaldo: ' + (Format-Safe $BackupFull)) }
     if ($DryRun) { Write-Out 'Modo: -DryRun (no se escribe nada)' }
     foreach ($row in $rows) {
         Write-Out ($row.State.PadRight(10) + '  ' + $row.Path)
@@ -364,36 +520,37 @@ try {
             " o repite con -Force (se respalda lo que se sobrescribe).")
     }
 
-    # Que hay que escribir y respaldar. Primero el hook: ningun agente con hooks: puede quedar
-    # instalado sin su guarda.
-    $hookPath = 'hooks/agent_guard.py'
-    $writeRows = New-Object System.Collections.Generic.List[object]
-    foreach ($row in $rows) {
-        if ($row.Path -ceq $hookPath -and ($row.State -ceq 'NUEVO' -or $row.State -ceq 'ACTUALIZAR' -or $row.State -ceq 'MODIFICADO')) {
-            $writeRows.Add($row)
-        }
-    }
-    foreach ($row in $rows) {
-        if ($row.Path -cne $hookPath -and ($row.State -ceq 'NUEVO' -or $row.State -ceq 'ACTUALIZAR' -or $row.State -ceq 'MODIFICADO')) {
-            $writeRows.Add($row)
-        }
-    }
-    $stateBytes = ConvertTo-CanonicalBytes $manifest.Bytes
-    $stateHash = Get-Sha256Hex $stateBytes
-    $stateExists = [System.IO.File]::Exists($statePath)
-    $stateDestHash = $null
-    if ($stateExists) { $stateDestHash = Get-CanonicalHash $statePath }
-    $stateNeedsWrite = (-not $stateExists) -or ($stateDestHash -cne $stateHash)
-
-    $backupItems = New-Object System.Collections.Generic.List[object]
+    # Destino no escribible: archivo de solo lectura que hay que reemplazar (o el estado). Exit 1 en ambos modos.
     foreach ($row in $writeRows) {
-        if ($row.State -ceq 'ACTUALIZAR' -or $row.State -ceq 'MODIFICADO') {
-            $backupItems.Add(@{ Rel = $row.Path; From = (ConvertTo-LocalPath $TargetFull $row.Path); Hash = $row.DestHash })
+        if ($row.State -cne 'NUEVO') {
+            $d = ConvertTo-LocalPath $TargetFull $row.Path
+            if (Test-IsReadOnly $d) {
+                Stop-Install 1 ('error: el destino ' + (Format-Safe $d) + ' es de solo lectura (no escribible). No se escribio nada.')
+            }
+        }
+    }
+    if ($stateExists -and $stateNeedsWrite -and (Test-IsReadOnly $statePath)) {
+        Stop-Install 1 ('error: el estado ' + (Format-Safe $statePath) + ' es de solo lectura (no escribible). No se escribio nada.')
+    }
+
+    # Archivo o estado a reemplazar bloqueado por otro proceso o sin permiso de escritura (ACL): se
+    # detecta ahora, antes de escribir. Exit 1 en ambos modos; el exit 4 queda para fallos al escribir.
+    foreach ($row in $writeRows) {
+        if ($row.State -cne 'NUEVO') {
+            $d = ConvertTo-LocalPath $TargetFull $row.Path
+            $problem = Get-OpenProblem $d
+            if ($null -ne $problem) {
+                Stop-Install 1 ('error: el destino ' + (Format-Safe $d) + ' esta bloqueado o no se puede escribir (' + $problem + '). No se escribio nada.')
+            }
         }
     }
     if ($stateExists -and $stateNeedsWrite) {
-        $backupItems.Add(@{ Rel = $StateName; From = $statePath; Hash = $stateDestHash })
+        $problem = Get-OpenProblem $statePath
+        if ($null -ne $problem) {
+            Stop-Install 1 ('error: el estado ' + (Format-Safe $statePath) + ' esta bloqueado o no se puede escribir (' + $problem + '). No se escribio nada.')
+        }
     }
+
     # Un respaldo nunca se pisa: si algo ya existe en la ruta de respaldo, exit 1 (tambien en -DryRun).
     if ($backupItems.Count -gt 0) {
         $walkB = $BackupFull
@@ -404,10 +561,17 @@ try {
             $walkB = [System.IO.Path]::GetDirectoryName($walkB)
         }
         foreach ($item in $backupItems) {
+            $badLink = Find-Reparse $BackupFull $item.Rel
+            if ($null -ne $badLink) { Stop-Install 1 (Get-ReparseMessage $badLink) }
             $bpath = ConvertTo-LocalPath $BackupFull $item.Rel
             if ([System.IO.File]::Exists($bpath) -or [System.IO.Directory]::Exists($bpath)) {
                 Stop-Install 1 ('error: ya existe el respaldo ' + (Format-Safe $bpath) + '. No se pisa; usa otro -BackupDir.')
             }
+        }
+        # Un respaldo va siempre en una carpeta NUEVA, aunque este vacia: el nombre por defecto lleva
+        # fecha y hora y es predecible, y una carpeta ya existente pudo crearla otro con permisos propios.
+        if ([System.IO.Directory]::Exists($BackupFull)) {
+            Stop-Install 1 ('error: ya existe el respaldo ' + (Format-Safe $BackupFull) + '. El respaldo debe ir en una carpeta nueva; usa otro -BackupDir.')
         }
     }
 
@@ -434,33 +598,70 @@ try {
         Stop-Install 4 $lines
     }
 
-    # Paso 6: respaldar y verificar cada respaldo antes de tocar el destino.
+    # Paso 6: respaldar y verificar (las pruebas inyectan codigo justo despues de esta linea).
+    # Primero se leen y verifican TODOS los originales; el primer respaldo se crea despues.
+    $backupData = New-Object System.Collections.Generic.List[object]
     foreach ($item in $backupItems) {
-        $orig = [System.IO.File]::ReadAllBytes($item.From)
+        try {
+            $orig = [System.IO.File]::ReadAllBytes($item.From)
+        }
+        catch {
+            Stop-Install 1 ('error: no se pudo leer ' + (Format-Safe $item.From) + ' para respaldarlo (' + (Get-ErrorText $_) + '). No se escribio nada en el destino.')
+        }
         if ((Get-Sha256Hex (ConvertTo-CanonicalBytes $orig)) -cne $item.Hash) {
             Stop-Install 1 ('error: ' + (Format-Safe $item.Rel) + ' cambio en el destino durante la ejecucion. No se escribio nada en el destino; repite.')
         }
+        $backupData.Add(@{ Item = $item; Bytes = $orig })
+    }
+    foreach ($bd in $backupData) {
+        $item = $bd.Item
+        $orig = $bd.Bytes
+        # Se vuelve a comprobar justo antes de escribir: algo pudo convertirse en enlace tras clasificar.
+        $badLink = Find-Reparse $BackupFull $item.Rel
+        if ($null -ne $badLink) { Stop-Install 1 (Get-ReparseMessage $badLink) }
+        # El primer respaldo exige una carpeta nueva (se vuelve a comprobar justo antes de crearla). Un
+        # mkdir exclusivo no existe sin P/Invoke: queda una ventana minima, pero CreateNew por archivo
+        # impide pisar un respaldo existente.
+        if (-not $backupMade -and [System.IO.Directory]::Exists($BackupFull)) {
+            Stop-Install 1 ('error: ya existe el respaldo ' + (Format-Safe $BackupFull) + '. El respaldo debe ir en una carpeta nueva; usa otro -BackupDir.')
+        }
+        # Carpeta de respaldo ya comprobada (las pruebas inyectan una carrera justo despues de esta linea).
         $bpath = ConvertTo-LocalPath $BackupFull $item.Rel
-        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($bpath))
-        $backupMade = $true
-        Write-NewFile $bpath $orig
+        try {
+            [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($bpath))
+            $backupMade = $true
+            Write-NewFile $bpath $orig
+        }
+        catch {
+            Stop-Install 1 ('error: no se pudo crear el respaldo ' + (Format-Safe $bpath) + ' (' + (Get-ErrorText $_) +
+                '). Si ya existia, no se pisa: usa otro -BackupDir. No se escribio nada en el destino.')
+        }
         if ((Get-Sha256Hex ([System.IO.File]::ReadAllBytes($bpath))) -cne (Get-Sha256Hex $orig)) {
             Stop-Install 1 ('error: el respaldo de ' + (Format-Safe $item.Rel) + ' no coincide con el original. No se escribio nada en el destino.')
         }
         Write-Out ('Respaldado: ' + $item.Rel)
     }
 
-    # Paso 7: copiar los bytes canonicos ya verificados en memoria; cada uno se verifica al instante.
+    # Paso 7: copiar los bytes canonicos (las pruebas inyectan codigo justo despues de esta linea).
+    # Son los ya verificados en memoria; cada uno se verifica al instante.
     foreach ($row in $writeRows) {
         $rel = $row.Path
         $dest = ConvertTo-LocalPath $TargetFull $rel
         $existing = ($row.State -cne 'NUEVO')
         try {
+            # TOCTOU basico: el punto de reanalisis se vuelve a comprobar justo antes de escribir cada archivo.
+            $badLink = Find-Reparse $TargetFull $rel
+            if ($null -ne $badLink) { throw (Get-ReparseText $badLink) }
             if ($existing -and ((Get-CanonicalHash $dest) -cne $row.DestHash)) {
                 throw 'el archivo cambio en el destino despues de clasificarlo'
             }
+            # Ultimo punto de escritura (las pruebas inyectan una carrera justo antes de esta linea).
             Write-Atomic $dest $canonSrc[$rel] $existing
             $written.Add($rel)
+            # La carrera no se cierra: si un enlace aparecio tras la comprobacion, el archivo ya pudo ir
+            # fuera. Se detecta y se informa (exit 4); no se deshace.
+            $badLink = Find-Reparse $TargetFull $rel
+            if ($null -ne $badLink) { throw ((Get-ReparseText $badLink) + ' Aparecio mientras se escribia: el archivo pudo escribirse fuera del destino; revisalo.') }
             Write-Out ('Copiado: ' + $rel)
             if ((Get-CanonicalHash $dest) -cne $manifest.Hashes[$rel]) {
                 throw 'el hash del archivo escrito no coincide con el manifiesto'
@@ -476,7 +677,11 @@ try {
     foreach ($rel in $written) {
         $dest = ConvertTo-LocalPath $TargetFull $rel
         try {
-            if ((Get-CanonicalHash $dest) -cne $manifest.Hashes[$rel]) { $badDest.Add($rel) }
+            $badLink = Find-Reparse $TargetFull $rel
+            if ($null -ne $badLink) {
+                $badDest.Add($rel + ' (' + (Get-ReparseText $badLink) + ')')
+            }
+            elseif ((Get-CanonicalHash $dest) -cne $manifest.Hashes[$rel]) { $badDest.Add($rel) }
         }
         catch {
             $badDest.Add($rel + ' (no se pudo leer)')
@@ -485,12 +690,19 @@ try {
     if ($badDest.Count -gt 0) {
         Stop-CopyFailed ("la verificacion posterior fallo:`n  " + ($badDest -join "`n  "))
     }
-    Write-Out ('Verificado: ' + $written.Count + ' archivo(s) escritos coinciden con el manifiesto.')
+    if ($written.Count -gt 0) {
+        Write-Out ('Verificado: ' + $written.Count + ' archivo(s) escritos coinciden con el manifiesto.')
+    }
 
     # Paso 9: estado, solo si todo lo anterior paso.
     if ($stateNeedsWrite) {
         try {
+            $badLink = Find-Reparse $TargetFull $StateName
+            if ($null -ne $badLink) { throw (Get-ReparseText $badLink) }
+            # Ultimo punto de escritura del estado (las pruebas inyectan una carrera justo antes de esta linea).
             Write-Atomic $statePath $stateBytes $stateExists
+            $badLink = Find-Reparse $TargetFull $StateName
+            if ($null -ne $badLink) { throw ((Get-ReparseText $badLink) + ' Aparecio mientras se escribia: el estado pudo escribirse fuera del destino; revisalo.') }
             if ((Get-CanonicalHash $statePath) -cne $stateHash) { throw 'el estado escrito no coincide' }
         }
         catch {
@@ -504,12 +716,35 @@ try {
     if ($backupMade) {
         Write-Out ('Respaldo de lo sobrescrito: ' + (Format-Safe $BackupFull))
     }
-    Write-Out 'Recordatorio: reinicia las sesiones de Claude Code abiertas; no ven agentes nuevos o modificados.'
-    Write-Out 'Recordatorio: este instalador no toca settings.json ni CLAUDE.md; ~/.claude/CLAUDE.md debe apuntar a ~/.claude/rules/agentes.md.'
-    Write-Out 'Recordatorio: no hay sincronizacion automatica; repite la instalacion cuando cambien los archivos del repositorio.'
+    if ($written.Count -gt 0) {
+        Write-Out 'Recordatorio: reinicia las sesiones de Claude Code abiertas; no ven agentes nuevos o modificados.'
+        Write-Out 'Recordatorio: este instalador no toca settings.json ni CLAUDE.md; ~/.claude/CLAUDE.md debe apuntar a ~/.claude/rules/agentes.md.'
+        Write-Out 'Recordatorio: no hay sincronizacion automatica; repite la instalacion cuando cambien los archivos del repositorio.'
+    }
     $defaultTarget = (Join-Path $HOME '.claude').TrimEnd('\', '/')
     if ($TargetFull.TrimEnd('\', '/') -ine $defaultTarget) {
-        Write-Out 'aviso: -Target no es ~/.claude y los hooks: de los agentes apuntan a $HOME/.claude/hooks/agent_guard.py.'
+        Write-Err 'aviso: -Target no es ~/.claude y los hooks: de los agentes apuntan a $HOME/.claude/hooks/agent_guard.py.'
+    }
+    # $HOME del shell que lance el hook: el aviso dice que copia de agent_guard.py correra en cada caso.
+    $envHome = [System.Environment]::GetEnvironmentVariable('HOME')
+    if (-not [string]::IsNullOrEmpty($envHome)) {
+        $envHomeNorm = $envHome.Replace('/', '\').TrimEnd('\')
+        $psHomeNorm = ([string]$HOME).Replace('/', '\').TrimEnd('\')
+        if ($envHomeNorm -ine $psHomeNorm) {
+            Write-Err ('aviso: la variable de entorno HOME (' + (Format-Safe $envHome) + ') difiere de $HOME de PowerShell (' + (Format-Safe ([string]$HOME)) +
+                '). Los hooks: de los agentes usan $HOME del shell que los lanza: un shell con HOME=' + (Format-Safe $envHome) +
+                ' correra ' + (Format-Safe $envHome) + '/.claude/hooks/agent_guard.py y uno con $HOME=' + (Format-Safe ([string]$HOME)) +
+                ' correra ' + (Format-Safe ([string]$HOME)) + '/.claude/hooks/agent_guard.py. Esta instalacion escribio en ' + (Format-Safe $TargetFull) + '.')
+        }
+    }
+    # Quien pueda escribir agent_guard.py cambia lo que corre antes de cada llamada de herramienta.
+    $hookDest = ConvertTo-LocalPath $TargetFull $hookPath
+    if ([System.IO.File]::Exists($hookDest)) {
+        $foreign = Get-ForeignWriteAces $hookDest
+        if ($foreign.Count -gt 0) {
+            Write-Err ('aviso: ' + (Format-Safe $hookDest) + ' tiene permisos de escritura explicitos para otras cuentas (SID: ' + ($foreign -join ', ') +
+                '). Quien lo pueda escribir cambia lo que se ejecuta antes de cada llamada de herramienta. Revisa los permisos con icacls.')
+        }
     }
     exit 0
 }

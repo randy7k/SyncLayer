@@ -183,7 +183,9 @@ Secuencia. Los pasos 1 a 4 no escriben nada.
 
    Si un archivo de destino, o una de las carpetas `agents`, `rules`, `hooks`, `docs` del
    destino, es un punto de reanálisis (enlace simbólico o junction): exit 1. `-Target` en sí
-   puede ser un enlace.
+   también se rechaza si es un punto de reanálisis (decisión del propietario: exit 1). Los
+   ancestros de `-Target` (p. ej. `~` o `~/.claude` bajo un enlace) no se comprueban: riesgo
+   residual documentado.
 5. **Mostrar el plan**: una línea por archivo, `ESTADO  ruta`, y un resumen con los conteos.
    Con `-DryRun` termina aquí: exit 0, o el 1, 2 o 3 que habría dado la ejecución real. Con
    `-DryRun` no se crea `Target`, ni `BackupDir`, ni ningún archivo.

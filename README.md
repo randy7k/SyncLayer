@@ -278,3 +278,60 @@ Resumen; la guía completa está en [`docs/agentes.md`](docs/agentes.md).
 ## Licencia
 
 Sin licencia definida todavía.
+
+## Línea de tiempo y avance
+
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-19** (T5 del instalador cerrada; T6 en curso).
+
+### Avance global
+
+**El proyecto completo va en 14%.** Cuenta las cinco fases con el mismo peso; las fases 2 a 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)), así que el número sube cuando se desglosen en sub-fases.
+
+| Fase | Avance | % | Unidades | Estado |
+|:--|:--|--:|:--|:--|
+| **Proyecto completo** | 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **14%** | 5 fases, mismo peso | |
+| **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | **71%** | 5 de 7 | En curso ([plan](docs/plans/2026-11-19-instalador.md)) |
+| **2. Reporte de uso de agentes** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog: empieza con una exploración |
+| **3. Esfuerzo configurable (5 niveles)** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
+| **4. Nombres de agentes configurables** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
+| **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
+
+Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unidades planeadas. «Cerrada» = commiteada en la rama de la fase con su suite verde y la revisión de `auditor` sin hallazgos Critical ni Important; la integración a `main` se hace al cerrar la fase. Lo que falta probar en un entorno real (la instalación sobre el `~/.claude` verdadero) se lista aparte y no resta.
+
+### La Fase 1 por frentes
+
+| Frente | Avance | % | Unidades |
+|:--|:--|--:|:--|
+| Manifiesto y su prueba de sincronía | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T1, T2) |
+| `install.ps1` | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 3 de 3 (T3, T4, T5) |
+| Documentación y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 2 (T6, cierre) |
+
+- **Manifiesto y su prueba de sincronía**
+  - ✅ Hecho: T1 generador con hash canónico (`tools/build_manifest.py`); T2 `install-manifest.json` y prueba de sincronía.
+  - ⬜ Falta: Nada.
+- **`install.ps1`**
+  - ✅ Hecho: T3 validación, clasificación y `-DryRun`; T4 respaldo verificado, copia atómica con el hook primero, verificación posterior y archivo de estado; T5 cambios locales, `-Force`, estado ilegible, rechazo de puntos de reanálisis y bloqueos detectados antes de escribir.
+  - ⬜ Falta: Nada. Los hallazgos Minor que quedaron de la revisión de T5 (mensajes de `-Force` con estado bloqueado, avisos también en `-DryRun`, normalización de `-BackupDir`) se recogen en T6 o en el cierre y no restan.
+- **Documentación y cierre**
+  - ✅ Hecho: Nada todavía.
+  - ⬜ Falta: T6 (README, CLAUDE.md, HISTORY.md, `docs/agentes.md`, regenerar el manifiesto); cierre: `sentinel` en ambos shells, `shield`, `auditor` sobre el cambio completo. Fuera del conteo y del propietario: `-DryRun` e instalación real sobre `~/.claude`.
+
+### Línea de tiempo
+
+| Fecha | Hito | |
+|:--|:--|:-:|
+| 2026-11-19 | Nace SyncLayer: nueve agentes, reglas de orquestación y hook `agent_guard.py` | ✅ |
+| 2026-11-19 | Límites de la guarda documentados; Bash guardado para `sentinel` (`tests-only` estricto) | ✅ |
+| 2026-11-19 | Marca «Modular Grid System»: símbolo, wordmark, lockups, favicon, banner, social preview, catálogo, estrella, slides y hoja de marca | ✅ |
+| 2026-11-19 | Plan del instalador aprobado; T1 y T2 (manifiesto) y T3 a T5 (`install.ps1`) cerradas | ✅ |
+| **Ahora** | **T6 del instalador** (documentación y regenerar el manifiesto) | 🔄 |
+| Luego | Cierre del instalador (`sentinel`, `shield`, `auditor`, `-DryRun` real) → desglosar y ejecutar las fases 2 a 5 | ⬜ |
+
+Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
+
+### Cómo se mantiene
+
+1. **Se cierra una sub-fase:** sumar su unidad a «Hecho», recalcular los porcentajes del frente, de la fase y del proyecto completo, y actualizar la tabla «Avance global» y los cuadros 🟩 (un cuadro = 10 %, redondeando al más cercano). Pasar el hito a ✅ y mover el 🔄 al siguiente.
+2. **Se agregan fases o sub-fases al plan general:** sumarlas a «Unidades» y a «Falta» (o crear el frente) y recalcular; el porcentaje baja, y es lo esperado.
+3. **Se desglosa una fase del backlog:** pasar «sin desglosar» a sus unidades reales.
+4. Actualizar la fecha de «Última actualización».
