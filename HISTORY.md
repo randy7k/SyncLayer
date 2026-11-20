@@ -2,6 +2,12 @@
 
 ## [Sin publicar]
 
+### Corregido (instalador)
+
+- `test_allowed_pattern_matches_generator` fallaba tras el merge a `main`: git (con
+  `core.autocrlf`) deja `install.ps1` en CRLF y la regex anclada a fin de línea no lo toleraba.
+  La prueba normaliza CRLF a LF. El instalador no cambió (su hash canónico ya es inmune a CRLF).
+
 ### Añadido (instalador)
 
 - `install.ps1` (Windows PowerShell 5.1) con `-Target`, `-BackupDir`, `-DryRun` y `-Force`.
