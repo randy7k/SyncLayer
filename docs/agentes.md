@@ -11,7 +11,11 @@ Instalado el 2026-11-19 con Claude Code 2.1.310.
 | `~/.claude/hooks/agent_guard.py` | Hook de seguridad `PreToolUse` que usan `sentinel`, `auditor`, `shield` y `debugger` (ver «Límites conocidos») |
 | `~/.claude/CLAUDE.md` | Instrucciones globales del usuario: deben apuntar a `~/.claude/rules/agentes.md` |
 | `~/.claude/docs/agentes.md` | Esta guía |
-| Copias previas | Respaldo de `CLAUDE.md` y `settings.json` antes de instalar, en la carpeta que elijas |
+| Copias previas | `install.ps1` respalda lo que sobrescribe en `<Target>-backup-<fecha-hora>` (o en el `-BackupDir` que pases; por defecto `~/.claude-backup-<fecha-hora>`); no toca `CLAUDE.md` ni `settings.json`, así que respaldalos vos si los vas a editar |
+| `~/.claude/synclayer-manifest.json` | Estado que deja `install.ps1`: copia del manifiesto de la última instalación correcta |
+
+Cómo instalar y actualizar: `install.ps1`, con `-DryRun` primero. Uso y límites en la sección
+«Instalación» del `README.md` del repositorio.
 
 Si el plugin `superpowers` está habilitado, puede solaparse con este ecosistema en la
 ejecución de planes. Deshabilitarlo es opcional.
@@ -123,9 +127,18 @@ Si un agente no usa el modelo esperado, revisá estas variables primero.
 
 ## Cómo revertir
 
-1. Borrar `~/.claude/agents/`, `~/.claude/rules/agentes.md` y
-   `~/.claude/hooks/agent_guard.py`. Si se conservan los agentes, quitar antes el
-   bloque `hooks:` del frontmatter de `sentinel`, `auditor`, `shield` y `debugger`.
+1. Tocá sólo los doce archivos que lista `~/.claude/synclayer-manifest.json`:
+   `agents/<los nueve>.md`, `rules/agentes.md`, `hooks/agent_guard.py` y
+   `docs/agentes.md`. No borres `~/.claude/agents/` entero: es la carpeta estándar de
+   todos los agentes de usuario y puede tener archivos que no son de SyncLayer y que no
+   están en ningún respaldo (`install.ps1` sólo respalda lo que sobrescribe).
+   - Los que el instalador creó como `NUEVO` (salen en su salida como `NUEVO  ruta`): borralos. Lo que está en la lista y no está en el respaldo fue `NUEVO` o `IGUAL`: si no guardaste la salida, comparalo con tu copia antes de borrar.
+   - Los que sobrescribió: restauralos desde la carpeta de respaldo (`-BackupDir`). Si hubo un exit 4 y repetiste la instalación, hay dos carpetas de respaldo: para cada archivo usá el respaldo más antiguo, que tiene el original.
+   - `~/.claude/synclayer-manifest.json`: si el instalador reescribió un estado previo,
+     restaurá ese estado desde el respaldo. Borralo sólo si no existía antes (primera
+     instalación): si no, lo restaurado saldría `MODIFICADO` y exigiría `-Force`. Si había un estado ilegible o inválido (no se respalda) o no hay estado porque la primera instalación terminó en exit 4, borralo también: los archivos restaurados saldrán `MODIFICADO` de todos modos y se reinstalan con `-Force`.
+   - Si conservás los agentes, quitá antes el bloque `hooks:` del frontmatter de
+     `sentinel`, `auditor`, `shield` y `debugger`.
 2. Restaurar la copia previa de `CLAUDE.md` sobre `~/.claude/CLAUDE.md`, o quitar de
    él la referencia a `~/.claude/rules/agentes.md`.
 3. Restaurar la copia previa de `settings.json` sobre `~/.claude/settings.json`, si
