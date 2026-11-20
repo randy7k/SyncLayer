@@ -718,3 +718,25 @@ Minor aprobados por `auditor` que se cierran junto con T4 (en el lector o su pru
    - Invocar `ReadResult.release_key()` al terminar y no serializar `ReadResult`, `CallRecord` ni `SkillUse`.
 5. **Para T6.** El global hereda la columna `Conjunto`, las barras, el escapado (`_code`) y las leyendas; construye los alias de proyecto aparte (`p-<8 hex>`, que `render_project_report` nunca imprime para otros proyectos); valora `(otra skill)` salvo lista cerrada y `plugin:<hash>` para el global compartible.
 6. **Pendiente de C4.** Medir con datos reales qué contadores de `READ_INCIDENT_LABELS` salen siempre distintos de cero y revisar la clasificación `READ_INFO_LABELS`.
+
+## Notas de la revisión de T6 (2026-11-20, decisiones del propietario)
+
+1. **Alias en el reporte global: ordinales.** El global numera los proyectos `proyecto 1..N` por volumen de llamadas (desempate por sesiones y luego por suma de tokens, todo visible) y NO imprime ningún `p-<8 hex>`. Motivo (revisión de `shield`): el alias es un hash sin sal de un nombre de carpeta predecible y es recalculable por diccionario (1 millón de candidatos en 2 s). La numeración puede cambiar entre ejecuciones y no se puede cruzar con el alias del reporte de proyecto. El reporte de proyecto sí muestra su propio alias (con la advertencia de que quien conozca o adivine el nombre de la carpeta puede recalcularlo). Límite: dos carpetas con el mismo alias siguen siendo un solo proyecto en el agregado (se avisa en calidad); no se quitó esa agrupación porque el nombre de carpeta no llega al agregado.
+2. **Prefijo `plugin:` de las skills en el global.** El prefijo de una skill sale de `input.skill`, que escribe el modelo, no Claude Code. El global lo muestra sólo si coincide con un prefijo de agente visto en un meta; el resto se agrupa como `plugin:(otro)`. El reporte de proyecto (local) lo muestra validado por regex con la advertencia en el pie. «Visto como agente» se calcula sobre la ventana (es lo que expone `UsageMetrics`).
+3. **Modelo en el global:** sólo tramos de lista cerrada (familias, números, fecha, `latest`); el resto `(otro modelo)`.
+4. **Privacidad de conteos:** en el global, las columnas `Agentes` y `Skills` muestran `-` en `otros`, `plugin:(no-valido)` y `(otro conjunto)` (no revelan cuántos agentes o skills de usuario distintos hay). `sin-meta` no es un conjunto de agentes: no cuenta para «conjuntos con llamadas» ni para el aviso de volúmenes.
+5. **El global es privado por defecto**; se puede compartir sólo después de revisarlo (la cabecera lo dice).
+6. **Desvíos de §3.6 aceptados** (global): tres bloques en «Por conjunto» (tabla de 8 columnas, «Detalle por conjunto» y «Tokens por llamada, por conjunto y rango de versión»), sección «Resumen», columna `Conjunto` en toda tabla por agente.
+
+### Riesgos que T7 DEBE cubrir (de la revisión de `shield`)
+
+1. **Repositorio manipulado.** Rechazar `.synclayer` si es enlace simbólico o junction/reparse point (`lstat`). Exigir que `<proyecto>/.synclayer/.gitignore` tenga EXACTAMENTE el contenido `*` más salto de línea (una línea `*` más `!usage-report.md` volvería a incluir el reporte). Si `usage-report.md` ya está versionado por git (`.gitignore` no afecta a archivos ya versionados), avisar y documentarlo.
+2. **TOCTOU y enlaces.** Nunca abrir el destino para escribir: temporal con nombre aleatorio, `O_CREAT|O_EXCL`, en la misma carpeta, y luego `os.replace`; repetir `lstat` de `.synclayer`, `<claude-dir>` y `<project-dir>` justo antes del reemplazo; leer el marcador con lectura acotada y sin seguir enlaces; borrar el temporal si algo falla; en Windows, `os.replace` falla si otro proceso tiene el destino abierto: exit 1 sin restos.
+3. **Permisos.** POSIX: `os.open(..., 0o600)` y `fchmod` antes de escribir; Windows: se hereda la ACL de la carpeta (puede ser compartida u OneDrive): documentarlo.
+4. **UTF-8 y saltos.** Escribir `text.encode("utf-8")` en modo binario (el modo texto en Windows convierte LF en CRLF); sin BOM; `--stdout` por `sys.stdout.buffer`.
+5. **Filtrado del reporte de proyecto** por carpeta (`read_calls(project_dir=...)`), nunca por alias (con una colisión, filtrar por alias mete el volumen de otro proyecto).
+6. **`--transcripts-dir`:** sólo nombres que pasen `valid_dir_name` dentro de `projects/`; ni rutas, ni `..`, ni absolutas.
+7. **Global en `~/.claude`:** muchos versionan `~/.claude` como dotfiles: detectar `<claude-dir>/.git` y avisar, o documentarlo.
+8. **Objetos e identificadores:** `release_key()` tras agregar; no serializar ni registrar `ReadResult`, `CallRecord`, `SkillUse` ni `UsageMetrics`; errores sólo con texto fijo o el nombre de clase; ninguna ruta salvo con `--show-paths` (si el mensaje final imprime la ruta escrita contiene el usuario: valorar ponerla detrás de `--show-paths`).
+9. **Fallos:** exit 1 o 3 no dejan `.synclayer/` ni temporales; no crear `<claude-dir>` ni `<project-dir>`.
+10. **Cabecera del reporte de proyecto:** añadir «Carpetas de transcripciones leídas: N» (hoy `UsageMetrics` no lo expone) y comprobar que sin `--transcripts-dir` hay un solo alias igual al pasado.

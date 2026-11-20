@@ -793,6 +793,9 @@ WARN_MAIN_HARDLINK = ("hay sesiones principales omitidas por ser enlaces duros: 
 WARN_MAIN_CAP = ("hay sesiones principales omitidas por superar el tope de tama\u00f1o: sus invocaciones de "
                  "Skill no se cuentan")
 WARN_MAIN_UNREADABLE = "hay sesiones principales ilegibles: sus invocaciones de Skill no se cuentan"
+# T6: el alias de proyecto son 32 bits de un hash sin sal: dos carpetas distintas pueden coincidir (improbable).
+WARN_ALIAS_COLLISION = ("hay carpetas de proyecto distintas con el mismo alias (colisi\u00f3n de 32 bits, improbable): "
+                        "sus llamadas se agrupan como un solo proyecto")
 
 # Limitaciones del conteo de skills: texto fijo para "Como leer estos numeros" (T5), como
 # REPEAT_LIMITATIONS. Las dos son subconteos SILENCIOSOS (el lector no puede saber que se perdio algo).
@@ -1018,6 +1021,7 @@ class ReadResult:
         self.schema_versions = collections.Counter()  # version -> archivos que fallan una comprobacion
         self._seen_ids = set()                 # digests de message.id ya sumados (entre archivos)
         self._seen_inodes = set()              # (st_dev, st_ino) de los hardlinks (nlink > 1) ya leidos
+        self._alias_folders = set()            # (alias, nombre de carpeta en minusculas) leidos; solo en memoria
 
     def release_key(self) -> None:
         """Olvida la clave de los resumenes (`_key = None`). T7 la invoca cuando ya no se crean mas
@@ -1050,6 +1054,8 @@ class ReadResult:
             out.append(WARN_MAIN_CAP)
         if self.quality["sesiones principales ilegibles"] > 0:
             out.append(WARN_MAIN_UNREADABLE)
+        if self.quality["alias de proyecto repetido entre carpetas"] > 0:
+            out.append(WARN_ALIAS_COLLISION)
         return out
 
 
@@ -1489,7 +1495,21 @@ def _read_session(folder_path, folder_name, sid, res: ReadResult) -> None:
         _read_call(sub_dir, name, kinds, folder_name, sid, res)
 
 
+def _count_alias_collisions(res: ReadResult) -> int:
+    """Alias compartidos por carpetas DISTINTAS (nombres en minusculas distintos). `c--x` y `C--x` son el
+    mismo proyecto y no cuentan. El alias son 32 bits de un hash sin sal: una colision es improbable, pero si
+    ocurre el agregado cuenta esas carpetas como un solo proyecto y el reporte lo avisa."""
+    count, prev, run = 0, None, 0
+    for alias in sorted(alias for alias, _ in res._alias_folders):   # un par por (alias, nombre) distinto
+        run = run + 1 if alias == prev else 1
+        if run == 2:
+            count += 1
+        prev = alias
+    return count
+
+
 def _read_project_folder(folder_path, folder_name, res: ReadResult) -> None:
+    res._alias_folders.add((_project_alias(folder_name), folder_name.lower()))
     for sid, has_main, has_dir in _enum_sessions(folder_path, res.quality) or ():
         if has_main:   # la sesion principal solo se lee para las invocaciones de Skill (T4)
             _read_main(folder_path, folder_name, sid, res)
@@ -1592,6 +1612,8 @@ def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True,
                 res.quality["nombres no validos omitidos"] += 1
             elif wanted is None or name.lower() == wanted:
                 _read_project_folder(os.path.join(projects, name), name, res)
+    res.quality["alias de proyecto repetido entre carpetas"] = _count_alias_collisions(res)
+    res._alias_folders = None   # nombres de carpeta: no deben sobrevivir a la lectura
     res._seen_ids = None      # memoria: ya no se necesitan al terminar la lectura
     res._seen_inodes = None
     res._seen_skill_ids = None
@@ -1803,6 +1825,7 @@ READ_QUALITY_LABELS = (
     "enlaces omitidos",
     "nombres no validos omitidos",
     "carpetas ilegibles",
+    "alias de proyecto repetido entre carpetas",
     # skills (T4) y lectura de las sesiones principales
     "skills: tool_use sin id",
     "skills: nombre no cadena",
@@ -2392,6 +2415,14 @@ MSG_REPORT_ALIAS = "alias de proyecto invalido: debe ser p- y 8 hexadecimales en
 MSG_REPORT_DATE = "fecha de generacion invalida: debe ser datetime.date o None"
 UNKNOWN_WARNING = "aviso no reconocido"
 LABEL_MAIN_READ = "sesiones principales leidas"
+# Conjuntos de agentes que el reporte conoce (los de classify_agent y `sin-meta`); un conjunto `plugin:<prefijo>`
+# con el prefijo validado tambien se muestra. Cualquier otra etiqueta sale como OTHER_GROUP en las tablas de los
+# dos reportes (defensa uniforme: el lector nunca la produce).
+OTHER_GROUP = "(otro conjunto)"
+NO_META_GROUP = "sin-meta"
+AGENT_GROUPS = frozenset(("SyncLayer", "integrado", "otros", "plugin:(no-valido)", NO_META_GROUP))
+# Conjuntos cuyo numero de agentes (o de skills) distintos el global no muestra: reunen nombres de usuario.
+HIDDEN_COUNT_GROUPS = frozenset(("otros", "plugin:(no-valido)", OTHER_GROUP))
 
 # "Como leer estos numeros" (texto fijo). Las limitaciones de repeticiones y de skills salen de
 # REPEAT_LIMITATIONS y SKILL_LIMITATIONS (T3, T4) y se vuelcan tal cual debajo.
@@ -2420,15 +2451,18 @@ HOW_TO_READ = (
 PRIVACY_NOTES = (
     "Este archivo no contiene contenido de conversaciones ni rutas, pero revela volumen de uso. Es local: no"
     " lo subas a git ni lo compartas sin revisarlo.",
-    "El alias `p-<8 hex>` es un hash sin sal del nombre de la carpeta del proyecto: quien conozca la ruta"
-    " puede recalcularlo. No es anonimato.",
-    "Los nombres de skills de usuario y el prefijo de un plugin (`plugin:<prefijo>`) salen tal cual: pueden"
-    " revelar nombres privados.",
+    "El alias `p-<8 hex>` es un hash sin sal del nombre de la carpeta del proyecto: quien conozca o adivine el"
+    " nombre de la carpeta puede recalcularlo. No es anonimato.",
+    "Los nombres de skills de usuario salen tal cual: pueden revelar nombres privados. El prefijo de una skill de"
+    " plugin (`plugin:<prefijo>`) sale de texto que escribe el modelo: puede ser cualquier cadena `[a-z0-9-]{1,32}`,"
+    " no solo un nombre de plugin.",
+    "Los nombres de modelo salen de las transcripciones con un patr\u00f3n amplio (`claude-` y tramos de palabra de"
+    " hasta 12 caracteres): un id de modelo personalizado puede salir tal cual.",
     "Un agente de proyecto con el mismo nombre que uno de SyncLayer cuenta como SyncLayer.",
 )
 KNOWN_WARNINGS = frozenset((
     WARN_NO_MESSAGE_ID, WARN_ID_REPEATED, WARN_ID_CAP, WARN_SKILL_ID_REPEATED, WARN_SKILL_ID_CAP,
-    WARN_MAIN_HARDLINK, WARN_MAIN_CAP, WARN_MAIN_UNREADABLE,
+    WARN_MAIN_HARDLINK, WARN_MAIN_CAP, WARN_MAIN_UNREADABLE, WARN_ALIAS_COLLISION,
 ))
 NOTE_DOUBTFUL_RANGE = "dudoso: tokens posiblemente inflados por reintentos (corregido en 2.1.328)"
 NOTE_NO_RANGE = "sin versi\u00f3n en las l\u00edneas o versi\u00f3n no reconocible"
@@ -2452,6 +2486,7 @@ READ_WARNED = {
     "sesiones principales omitidas por enlace duro": WARN_MAIN_HARDLINK,
     "sesiones principales omitidas por tope de tamano": WARN_MAIN_CAP,
     "sesiones principales ilegibles": WARN_MAIN_UNREADABLE,
+    "alias de proyecto repetido entre carpetas": WARN_ALIAS_COLLISION,
 }
 
 def _bar(value, maximum) -> str:
@@ -2656,11 +2691,13 @@ def _header_section(metrics, alias, generated) -> list:
     return lines + [""]
 
 
-def _summary_section(metrics) -> list:
+def _summary_section(metrics, extra=()) -> list:
+    """`extra`: lineas fijas que el reporte global anade tras la primera (proyectos y conjuntos)."""
     t = metrics.total
     lines = ["## Resumen", ""]
     items = ["Llamadas: %d en %s (%s llamadas por sesi\u00f3n)" % (
         t.calls, _plural(t.sessions, "sesi\u00f3n", "sesiones"), _tenths(t.calls_per_session_tenths))]
+    items.extend(extra)
     if not t.calls:
         lines += _bullets(items)
         return lines + ["", "Sin llamadas a subagentes en la ventana.", ""]
@@ -2680,7 +2717,31 @@ def _summary_section(metrics) -> list:
     return lines + _bullets(items) + [""]
 
 
-def _agent_sections(metrics) -> list:
+def _group_label(group) -> str:
+    """Conjunto de agente a mostrar: lista cerrada, `plugin:<prefijo>` con el prefijo validado u OTHER_GROUP."""
+    if isinstance(group, str):
+        if group in AGENT_GROUPS:
+            return group
+        if group.startswith("plugin:") and PLUGIN_PREFIX_RE.match(group[7:]) is not None:
+            return group
+    return OTHER_GROUP
+
+
+def _model_rows(models, label_of) -> list:
+    """Filas (modelo, llamadas) de una tabla. Con `label_of` (el global) los modelos que comparten etiqueta suman sus
+    llamadas y el orden es el de las metricas (llamadas descendente y etiqueta); sin ella, las de las metricas."""
+    if label_of is None:
+        return list(models)
+    merged = {}
+    for model, count in models:
+        label = label_of(model)
+        merged[label] = merged.get(label, 0) + count
+    return sorted(merged.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def _agent_sections(metrics, model_label=None) -> list:
+    """`model_label`: None (el reporte de proyecto muestra el modelo que el lector ya filtro) o la funcion que el
+    global usa para limitarlo a una lista cerrada (`_global_model_label`)."""
     agents = metrics.agents
     max_calls = max([a.metrics.calls for a in agents] or [0])
     max_tokens = max([a.metrics.tokens.total.total for a in agents] or [0])
@@ -2688,7 +2749,7 @@ def _agent_sections(metrics) -> list:
     for a in agents:
         m = a.metrics
         # el par (Agente, Conjunto) va en TODAS las tablas por agente (ver la regla de la cabecera de la seccion)
-        name, group = _code(a.agent), _code(a.group)
+        name, group = _code(a.agent), _code(_group_label(a.group))
         calls_rows.append([name, group, _num(m.calls), _bar(m.calls, max_calls), _num(m.sessions),
                            _tenths(m.calls_per_session_tenths), _num(m.repeats)])
         tk = m.tokens
@@ -2702,7 +2763,7 @@ def _agent_sections(metrics) -> list:
             name, group, _small(m.duration.median, m.duration.small),
             _small(m.duration.p90, m.duration.small),
             _small(m.tools.median, m.tools.small), _small(m.tools.p90, m.tools.small)])
-        for model, count in m.models:
+        for model, count in _model_rows(m.models, model_label):
             model_rows.append([name, group, _code(model), _num(count)])
     out = ["## Llamadas por agente", ""]
     out += _capped_table(["Agente", "Conjunto", "Llamadas", "Barra", "Sesiones", "Llamadas/sesi\u00f3n",
@@ -2720,20 +2781,26 @@ def _agent_sections(metrics) -> list:
     return out + [""]
 
 
-def _group_section(metrics) -> list:
+def _group_table(metrics, hide_counts=False) -> list:
+    """`hide_counts`: el global no muestra la columna `Agentes` de los conjuntos de HIDDEN_COUNT_GROUPS (el
+    numero revelaria cuantos agentes de usuario distintos hay)."""
     groups = metrics.groups
     max_calls = max([g.metrics.calls for g in groups] or [0])
     rows = []
     for g in groups:
         m = g.metrics
-        rows.append([_code(g.group), _num(g.agents), _num(m.calls), _bar(m.calls, max_calls),
+        label = _group_label(g.group)
+        agents = None if hide_counts and label in HIDDEN_COUNT_GROUPS else g.agents
+        rows.append([_code(label), _num(agents), _num(m.calls), _bar(m.calls, max_calls),
                      _small(m.tokens.total.median, m.tokens.total.small),
                      _small(m.tokens.total.p90, m.tokens.total.small),
                      _small(m.duration.median, m.duration.small), _small(m.tools.median, m.tools.small)])
-    out = ["## Por conjunto", ""]
-    out += _capped_table(["Conjunto", "Agentes", "Llamadas", "Barra", "Tokens/llamada (med.)", "p90",
+    return _capped_table(["Conjunto", "Agentes", "Llamadas", "Barra", "Tokens/llamada (med.)", "p90",
                           "Duraci\u00f3n aprox. s (med.)", "Herramientas (med.)"], "lrrlrrrr", rows)
-    return out + [""]
+
+
+def _group_section(metrics) -> list:
+    return ["## Por conjunto", ""] + _group_table(metrics) + [""]
 
 
 def _skills_section(metrics) -> list:
@@ -2856,8 +2923,10 @@ def _quality_section(metrics) -> list:
     return out + [""]
 
 
-def _guide_section() -> list:
-    out = ["## C\u00f3mo leer estos n\u00fameros", ""] + _bullets(HOW_TO_READ)
+def _guide_section(how_to_read) -> list:
+    """`how_to_read`: HOW_TO_READ (proyecto) o HOW_TO_READ_GLOBAL; las limitaciones de repeticiones y de
+    skills son las mismas."""
+    out = ["## C\u00f3mo leer estos n\u00fameros", ""] + _bullets(how_to_read)
     out += ["", "### Repeticiones (inferido)", ""] + _bullets(REPEAT_LIMITATIONS)
     out += ["", "### Skills", ""] + _bullets(SKILL_LIMITATIONS)
     return out + [""]
@@ -2896,8 +2965,424 @@ def render_project_report(metrics, project_alias, generated=None) -> str:
     if metrics.total.calls:
         lines += _version_section(metrics)
     lines += _quality_section(metrics)
-    lines += _guide_section()
+    lines += _guide_section(HOW_TO_READ)
     lines += _footer_section(metrics, project_alias)
+    return "\n".join(lines) + "\n"
+
+
+# --- Reporte global (T6) ---
+#
+# `render_global_report` es PURA, como la de proyecto: recibe el `UsageMetrics` de TODOS los proyectos leidos (el
+# llamador agrega sin filtrar por proyecto) y, opcionalmente, la fecha de generacion; devuelve el Markdown. No
+# recibe llamadas crudas, no lee el reloj, no hace E/S y no calcula alias. T7 lo escribe en
+# `<claude-dir>/synclayer-usage.md`.
+#
+# Decisiones:
+#   - Firma: `render_global_report(metrics, generated=None)`. No lleva alias ni lista de proyectos aparte: el
+#     agregado ya trae un `ProjectMetrics` por proyecto. Menos argumentos, menos formas de colar un nombre real.
+#   - Reutiliza los generadores de T5 (cabecera de avisos, resumen, tablas por agente con la columna `Conjunto`,
+#     versiones, calidad, guia, barras, `_code`, leyenda de `*`). Lo propio del global: cabecera sin alias de
+#     proyecto, "Por conjunto" ampliado (mismas columnas comparables para todos los conjuntos, tasa de repeticiones
+#     por cada 100 llamadas y desglose por rango de version), "Por proyecto", skills con nombres protegidos, "Que
+#     compara y que no", guia y pie propios.
+#   - Privacidad del global: es PRIVADO por defecto y se puede compartir solo tras revisarlo (la cabecera y el pie
+#     lo dicen). Solo numeros y etiquetas de listas cerradas. Nunca contenido, rutas, nombres de carpeta,
+#     `call_id`, `session` ni `agent_key`.
+#   - Proyectos (D1 del propietario): el global NO imprime el alias `p-<8 hex>` en ninguna parte. Numera los
+#     proyectos `proyecto 1..N` por volumen de llamadas descendente; el desempate usa los valores visibles de la fila
+#     (sesiones y luego tokens), nunca el alias ni un identificador con clave. Si dos proyectos empatan en todo lo
+#     visible, sus filas son identicas: el orden entre ellos no se nota y los bytes no dependen del alias. Un alias
+#     es un hash de 32 bits sin sal del nombre de la carpeta: imprimirlo permitiria recalcularlo a quien adivine el
+#     nombre; con ordinales no hay nada que recalcular. `ProjectMetrics.project` sigue existiendo para el reporte
+#     de proyecto, que muestra su propio alias. La numeracion puede cambiar entre ejecuciones y no se puede cruzar
+#     con el alias del reporte de proyecto (el pie lo dice).
+#   - Alias repetido (colision de 32 bits): el lector cuenta las carpetas distintas con el mismo alias (`alias de
+#     proyecto repetido entre carpetas`, con aviso WARN_ALIAS_COLLISION) y el agregado las agrupa en UN
+#     `ProjectMetrics`: con ordinales siguen siendo un solo proyecto. Se descarto quitar la agrupacion en el global:
+#     `CallRecord.project` ya es el alias (el nombre de la carpeta no llega al agregado) y separarlas exigiria
+#     conservar ese nombre. El limite se documenta en la calidad del global (GLOBAL_ALIAS_LIMIT) y en el pie.
+#   - Skills en el global: los nombres de skills de USUARIO no salen (a diferencia del reporte de proyecto): una
+#     skill de usuario puede llamarse como un proyecto privado. Solo se muestran los nombres de las listas cerradas
+#     (SYNCLAYER_SKILLS, BUILTIN_SKILLS, hoy vacias) y el prefijo de plugin que TAMBIEN aparecio como prefijo de
+#     un agente en la misma lectura (D2: el prefijo de un agente lo escribe Claude Code; el de una skill sale de texto
+#     que escribe el modelo y puede ser cualquier cadena `[a-z0-9-]{1,32}`). Los demas prefijos de plugin se agrupan
+#     como `plugin:(otro)`, y lo demas como `(otra skill)`, UNA fila por conjunto mostrado, con las sesiones del
+#     conjunto (exactas) o "-" si no se pueden contar. Limite: "visto como agente" mira solo los agentes con llamadas
+#     (o con skills invocadas) en la VENTANA, que es lo que expone `UsageMetrics`.
+#   - Cuentas que revelan nombres de usuario: la columna `Agentes` de "Por conjunto" y la columna `Skills` de "Por
+#     conjunto de skill" salen como "-" en los conjuntos que reunen nombres de usuario (HIDDEN_COUNT_GROUPS, y los
+#     conjuntos de skills con algun nombre agrupado).
+#   - Modelos: el patron del lector (MODEL_RE) admite tramos de palabra de hasta 12 caracteres. El global solo muestra
+#     ids hechos de tramos de lista cerrada (familias, numeros, fecha, `latest`; GLOBAL_MODEL_RE) o un alias; el resto
+#     sale como `(otro modelo)` y las filas que comparten etiqueta suman. El reporte de proyecto mantiene el patron
+#     amplio y lo advierte en su pie.
+#   - Conjuntos: `sin-meta` (llamadas sin archivo meta) NO es un conjunto de agentes: tiene su fila (las llamadas son
+#     reales) pero no cuenta en "Conjuntos con llamadas", ni en la comparacion ni en la razon de volumenes.
+#   - Comparacion: con un solo conjunto de agentes con llamadas dice que no hay con que comparar; con volumenes que
+#     difieren VOLUME_RATIO veces o mas lo avisa. La seccion fija "Que compara y que no" va siempre.
+#   - Filas: cada tabla se acota a MAX_TABLE_ROWS (nota con el total); "Por proyecto" anade cuantas llamadas suman
+#     las filas omitidas. `aggregate_calls` solo crea un `ProjectMetrics` para un proyecto con llamadas en la ventana:
+#     uno leido con todas sus llamadas fuera de ella, o solo con skills, no aparece (lo dice una linea fija). Si
+#     alguien pasa a mano uno con 0 llamadas, el generador lo imprime como fila de ceros con la barra vacia.
+#
+# DESVIOS respecto de 3.6 del plan (a registrar al cerrar T6): "Por conjunto" lleva dos tablas mas (detalle con
+# sesiones, llamadas por sesion, repeticiones y p90 de duracion y herramientas; y tokens por conjunto y rango de
+# version) ademas de la de las ocho columnas del plan; el global numera los proyectos en lugar de usar el alias de
+# 3.7 (decision D1 del propietario).
+
+VOLUME_RATIO = 10
+OTHER_PLUGIN_GROUP = "plugin:(otro)"
+OTHER_MODEL = OTHER_LABELS["model"]
+MSG_GLOBAL_METRICS = "render_global_report necesita un UsageMetrics"
+# Conjuntos de skills que el reporte conoce (listas cerradas del lector); cualquier otro se agrupa como OTHER_GROUP
+# (o como OTHER_PLUGIN_GROUP si es un prefijo de plugin que no se vio como agente).
+SKILL_GROUPS = frozenset(("SyncLayer", "integrado", "otros", "plugin:(no-valido)"))
+# Modelo del global: solo tramos de lista cerrada. Como MODEL_RE, pero el tramo de palabra es una familia conocida
+# o `latest` (no `[a-z][a-z0-9]{0,11}`), para que un id con palabras propias no salga.
+_GLOBAL_MODEL_WORD = r"(?:opus|sonnet|haiku|fable|instant)"
+GLOBAL_MODEL_RE = re.compile(
+    r"(?=.{8,64}\Z)claude-(?:" + _GLOBAL_MODEL_WORD + r"|" + _MODEL_NUM + r")"
+    r"(?:-(?:" + _GLOBAL_MODEL_WORD + r"|latest|" + _MODEL_NUM + r"|[0-9]{8})){0,8}(?:@[0-9]{8})?\Z")
+
+HOW_TO_READ_GLOBAL = HOW_TO_READ[:-1] + (
+    "Se leen todas las carpetas de transcripciones de `projects/`: las sesiones abiertas desde una subcarpeta o un"
+    " worktree viven en otra carpeta y salen como otro proyecto.",
+)
+GLOBAL_COMPARES = (
+    "Compara entre conjuntos de agentes solo estas cifras: llamadas y llamadas por sesi\u00f3n, tokens por llamada"
+    " (mediana y p90), duraci\u00f3n aproximada, herramientas por llamada, uso de skills (invocaciones y sesiones) y"
+    " repeticiones inferidas.",
+    "No compara la calidad del resultado de un agente, ni el costo real, ni el ahorro de nadie: esas cifras no salen"
+    " de las transcripciones.",
+    "Dos conjuntos hacen trabajos distintos: una cifra menor de tokens por llamada no dice nada sobre el resultado.",
+    "Comparar conjuntos con vol\u00famenes muy distintos (pocas llamadas frente a muchas) o con versiones de Claude"
+    " Code distintas es solo indicativo: con n < 10 la mediana y el p90 dicen poco (marca `*`), y los tokens de las"
+    " versiones 2.1.310 a 2.1.327 pueden estar inflados por reintentos.",
+    "Las skills solo se comparan por n\u00famero de invocaciones y de sesiones: corren en el contexto de la sesi\u00f3n"
+    " que las invoca y no se les atribuyen tokens.",
+    "Las repeticiones son inferidas, no un reintento confirmado: salen de las horas de inicio y fin de dos llamadas"
+    " seguidas del mismo agente en una sesi\u00f3n. Pueden ser un reintento, un paso de un plan o un encargo nuevo, y la"
+    " herramienta no puede distinguirlos; por eso se muestran como `Repeticiones (inferido)` y como porcentaje de las"
+    " llamadas.",
+    "Contenido de cada conjunto: `integrado`, los agentes integrados de Claude Code; `SyncLayer`, los agentes de este"
+    " repositorio (un agente de proyecto con el mismo nombre cuenta como SyncLayer); `plugin:<prefijo>`, todos los"
+    " agentes de ese plugin en una sola fila; `otros`, los agentes de usuario; `sin-meta`, las llamadas sin archivo"
+    " meta, que no es un conjunto de agentes y no entra en la comparaci\u00f3n. `Agentes` cuenta tipos de agente"
+    " distintos, no filas, y no se muestra (`-`) en `otros` ni en `plugin:(no-valido)`.",
+)
+GLOBAL_PROJECT_NOTES = (
+    "Los proyectos van numerados por volumen de llamadas, de m\u00e1s a menos (desempate por sesiones y luego por"
+    " tokens). La numeraci\u00f3n puede cambiar entre ejecuciones y no coincide con el alias del reporte de proyecto.",
+    "Un proyecto le\u00eddo con todas sus llamadas fuera de la ventana, o solo con skills, no aparece.",
+)
+GLOBAL_SIN_META_NOTE = (
+    "`sin-meta` re\u00fane las llamadas sin archivo meta: no es un conjunto de agentes y no entra en el recuento de"
+    " conjuntos ni en la comparaci\u00f3n.")
+GLOBAL_ALIAS_LIMIT = (
+    "Proyectos: dos carpetas distintas con el mismo alias interno (colisi\u00f3n de 32 bits, improbable) se cuentan como"
+    " un solo proyecto; la cabecera lo avisa cuando ocurre.")
+GLOBAL_SKILLS_NOTE = (
+    "Las skills de usuario se agrupan como `(otra skill)`: el nombre de una skill puede revelar contenido privado."
+    " Solo se muestran los nombres de las listas cerradas; el prefijo de plugin (`plugin:<prefijo>`) solo se muestra"
+    " si tambi\u00e9n apareci\u00f3 como agente, y el resto se agrupa como `plugin:(otro)`. En los conjuntos con nombres"
+    " agrupados la columna `Skills` no se muestra (`-`).")
+GLOBAL_PRIVACY_NOTES = (
+    "Este archivo es privado por defecto: no contiene contenido de conversaciones, rutas, nombres de carpeta ni alias"
+    " de proyecto, pero revela el volumen de uso de cada proyecto. Comp\u00e1rtelo solo despu\u00e9s de revisarlo.",
+    "Los proyectos se numeran por volumen en cada ejecuci\u00f3n: la numeraci\u00f3n puede cambiar entre ejecuciones y no se"
+    " puede cruzar con el alias del reporte de proyecto. Con un alias de 32 bits, dos carpetas distintas pueden dar el"
+    " mismo alias interno (improbable): se cuentan como un solo proyecto y la cabecera lo avisa.",
+    "El prefijo de un agente de plugin (`plugin:<prefijo>`) lo escribe Claude Code. El prefijo de una skill de plugin"
+    " sale de texto que escribe el modelo: solo se muestra si ese prefijo tambi\u00e9n apareci\u00f3 como agente en esta"
+    " lectura; el resto se agrupa como `plugin:(otro)`. Los nombres de skills de usuario no salen: se agrupan como"
+    " `(otra skill)`.",
+    "Los nombres de modelo que no son de una lista cerrada (familias conocidas, n\u00fameros y fechas) salen como"
+    " `(otro modelo)`. En los conjuntos `otros` y `plugin:(no-valido)` y en los conjuntos de skills con nombres"
+    " agrupados no se muestra cu\u00e1ntos agentes ni cu\u00e1ntas skills distintos hay (`-`).",
+    "Un agente de proyecto con el mismo nombre que uno de SyncLayer cuenta como SyncLayer.",
+)
+
+
+def _global_model_label(model) -> str:
+    """Modelo a mostrar en el global: un alias, la etiqueta cerrada `(otro modelo)` o un id hecho solo de tramos
+    de lista cerrada (GLOBAL_MODEL_RE); cualquier otra cosa, incluida `<synthetic>`, sale como OTHER_MODEL."""
+    if isinstance(model, str) and (model in MODEL_ALIASES or model == OTHER_MODEL
+                                   or GLOBAL_MODEL_RE.match(model) is not None):
+        return model
+    return OTHER_MODEL
+
+
+def _plugin_groups_seen(metrics) -> frozenset:
+    """Conjuntos `plugin:<prefijo>` (prefijo validado) de agentes vistos en la lectura: los de las llamadas de la
+    ventana y los de los agentes que invocaron skills. Su prefijo lo escribe Claude Code en el meta."""
+    labels = {g.group for g in metrics.groups}
+    labels.update(r.agent_group for r in metrics.skills.by_agent)
+    return frozenset(label for label in labels if isinstance(label, str) and label.startswith("plugin:")
+                     and PLUGIN_PREFIX_RE.match(label[7:]) is not None)
+
+
+def _skill_shown(skill, group, plugins) -> bool:
+    """True si el nombre de la skill puede salir en el global: lista cerrada de su conjunto, o el conjunto
+    `plugin:<prefijo>` de un prefijo visto como agente (el nombre de una skill de plugin ES su conjunto)."""
+    if not isinstance(skill, str) or not isinstance(group, str):
+        return False
+    if group == "SyncLayer":
+        return skill in SYNCLAYER_SKILLS
+    if group == "integrado":
+        return skill in BUILTIN_SKILLS
+    return group in plugins and skill == group
+
+
+def _skill_group_label(group, plugins) -> str:
+    """Conjunto de skill a mostrar: los conocidos, un `plugin:<prefijo>` visto como agente, OTHER_PLUGIN_GROUP para
+    un prefijo de plugin valido que no se vio como agente, u OTHER_GROUP."""
+    if isinstance(group, str):
+        if group in SKILL_GROUPS or group in plugins:
+            return group
+        if group.startswith("plugin:") and PLUGIN_PREFIX_RE.match(group[7:]) is not None:
+            return OTHER_PLUGIN_GROUP
+    return OTHER_GROUP
+
+
+def _global_skill_rows(sk, plugins) -> list:
+    """Filas (skill, conjunto, invocaciones, sesion principal, subagente, sesiones) del global: las skills de
+    lista cerrada y de plugin visto por nombre; el resto, agrupadas UNA vez por conjunto mostrado como OTHER_SKILL.
+    Las sesiones de una fila agrupada son las del conjunto si un solo conjunto del lector se agrupo en ella y no
+    se mostro ninguna skill de esa etiqueta; si no, None (no se pueden sumar)."""
+    group_sessions = {g.group: g.sessions for g in sk.groups}
+    shown, merged, shown_labels = [], {}, set()
+    for r in sk.rows:
+        if r.calls <= 0:
+            continue
+        label = _skill_group_label(r.group, plugins)
+        if _skill_shown(r.skill, r.group, plugins):
+            shown.append((r.skill, label, r.calls, r.main_calls, r.subagent_calls, r.sessions))
+            shown_labels.add(label)
+        else:
+            acc = merged.setdefault(label, [0, 0, 0, set()])
+            acc[0] += r.calls
+            acc[1] += r.main_calls
+            acc[2] += r.subagent_calls
+            acc[3].add(r.group)
+    rows = list(shown)
+    for label, acc in merged.items():
+        sessions = group_sessions.get(list(acc[3])[0]) if label not in shown_labels and len(acc[3]) == 1 else None
+        rows.append((OTHER_SKILL, label, acc[0], acc[1], acc[2], sessions))
+    rows.sort(key=lambda r: (-r[2], r[0], r[1]))
+    return rows
+
+
+def _global_skill_groups(sk, plugins) -> list:
+    """Filas (conjunto, skills, invocaciones, sesiones) de "Por conjunto de skill" con las etiquetas del global.
+    Los conjuntos que el lector separa y el global junta (OTHER_GROUP, OTHER_PLUGIN_GROUP) suman invocaciones y
+    sacan "-" en las sesiones. `Skills` solo sale si todos los nombres del conjunto se muestran: si hay alguno
+    agrupado, el numero diria cuantas skills de usuario distintas hay."""
+    shown_labels, hidden_labels = set(), set()
+    for r in sk.rows:
+        if r.calls > 0:
+            label = _skill_group_label(r.group, plugins)
+            (shown_labels if _skill_shown(r.skill, r.group, plugins) else hidden_labels).add(label)
+    acc_by_label = {}
+    for g in sk.groups:
+        if g.calls > 0:
+            acc = acc_by_label.setdefault(_skill_group_label(g.group, plugins), [0, 0, 0, 0])
+            acc[0] += g.skills
+            acc[1] += g.calls
+            acc[2] += g.sessions
+            acc[3] += 1
+    rows = []
+    for label, acc in acc_by_label.items():
+        names = acc[0] if label in shown_labels and label not in hidden_labels else None
+        rows.append((label, names, acc[1], acc[2] if acc[3] == 1 else None))
+    rows.sort(key=lambda r: (-r[2], r[0]))
+    return rows
+
+
+def _global_agent_skill_rows(sk, plugins) -> list:
+    """Filas (agente, conjunto del agente, skill, invocaciones) de las skills invocadas dentro de subagentes, con
+    el nombre de skill y el conjunto protegidos como en `_global_skill_rows` y las filas iguales sumadas."""
+    merged = {}
+    for r in sk.by_agent:
+        if r.calls <= 0:
+            continue
+        skill = r.skill if _skill_shown(r.skill, r.skill_group, plugins) else OTHER_SKILL
+        key = (r.agent, _group_label(r.agent_group), skill)
+        merged[key] = merged.get(key, 0) + r.calls
+    rows = [(key[0], key[1], key[2], calls) for key, calls in merged.items()]
+    rows.sort(key=lambda r: (-r[3], r[0], r[1], r[2]))
+    return rows
+
+
+def _group_detail_table(metrics) -> list:
+    rows = []
+    for g in metrics.groups:
+        m = g.metrics
+        tk = m.tokens
+        rows.append([_code(_group_label(g.group)), _num(m.sessions), _tenths(m.calls_per_session_tenths),
+                     _small(tk.n, tk.total.small), _num(tk.total.total),
+                     _small(m.duration.p90, m.duration.small), _small(m.tools.p90, m.tools.small),
+                     _num(m.repeats), _percent(m.repeats, m.calls)])
+    return _capped_table(["Conjunto", "Sesiones", "Llamadas/sesi\u00f3n", "n", "Tokens (suma)",
+                          "Duraci\u00f3n aprox. s (p90)", "Herramientas (p90)", "Repeticiones (inferido)",
+                          "Repeticiones (% de llamadas)"], "lrrrrrrrr", rows)
+
+
+def _group_range_table(metrics) -> list:
+    rows = []
+    for g in metrics.groups:
+        for row in g.metrics.versions:
+            if row.calls <= 0:
+                continue
+            tk = row.tokens
+            note = NOTE_DOUBTFUL_RANGE if row.inflated else (NOTE_NO_RANGE if row.range == RANGE_NONE else "")
+            rows.append([_code(_group_label(g.group)), _code(row.range), _num(row.calls), _small(tk.n, tk.total.small),
+                         _small(tk.total.median, tk.total.small), _small(tk.total.p90, tk.total.small), note])
+    return _capped_table(["Conjunto", "Rango", "Llamadas", "n", "Mediana", "p90", "Nota"], "llrrrrl", rows)
+
+
+def _live_group_calls(metrics) -> list:
+    """Llamadas de cada conjunto DE AGENTES con llamadas: `sin-meta` no es un conjunto de agentes."""
+    return [g.metrics.calls for g in metrics.groups if g.metrics.calls > 0 and g.group != NO_META_GROUP]
+
+
+def _global_group_section(metrics) -> list:
+    live = _live_group_calls(metrics)
+    out = ["## Por conjunto", ""]
+    if len(live) == 1:
+        out += ["Solo hay un conjunto con llamadas en la ventana: no hay con qu\u00e9 comparar.", ""]
+    elif len(live) > 1 and max(live) >= VOLUME_RATIO * min(live):
+        out += ["Los conjuntos tienen vol\u00famenes muy distintos (de %d a %d llamadas): compararlos es solo"
+                " indicativo." % (min(live), max(live)), ""]
+    if any(g.group == NO_META_GROUP and g.metrics.calls > 0 for g in metrics.groups):
+        out += [GLOBAL_SIN_META_NOTE, ""]
+    out += _group_table(metrics, True)
+    out += ["", "Detalle por conjunto:", ""] + _group_detail_table(metrics)
+    out += ["", "Tokens por llamada, por conjunto y rango de versi\u00f3n:", ""] + _group_range_table(metrics)
+    return out + [""]
+
+
+def _global_project_section(metrics) -> list:
+    # numeracion por valores visibles (llamadas, sesiones, tokens): nunca por alias. El orden es estable y, si dos
+    # proyectos empatan en todo, sus filas son identicas
+    projects = sorted(metrics.projects, key=lambda p: (-p.metrics.calls, -p.metrics.sessions,
+                                                       -p.metrics.tokens.total.total))
+    max_calls = max([p.metrics.calls for p in projects] or [0])
+    rows = [[_code("proyecto %d" % n), _num(p.metrics.sessions), _num(p.metrics.calls),
+             _bar(p.metrics.calls, max_calls), _num(p.metrics.tokens.total.total)]
+            for n, p in enumerate(projects, 1)]
+    out = ["## Por proyecto", ""]
+    for note in GLOBAL_PROJECT_NOTES:
+        out += [note, ""]
+    out += _capped_table(["Proyecto", "Sesiones", "Llamadas", "Barra", "Tokens (suma)"], "lrrlr", rows)
+    omitted = projects[MAX_TABLE_ROWS:]
+    if omitted:
+        calls = sum(p.metrics.calls for p in omitted)
+        out += ["", "%s %s %s." % (
+            "La fila omitida suma" if len(omitted) == 1 else "Las %d filas omitidas suman" % len(omitted),
+            _num(calls), "llamada" if calls == 1 else "llamadas")]
+    return out + [""]
+
+
+def _global_skills_section(metrics) -> list:
+    sk = metrics.skills
+    plugins = _plugin_groups_seen(metrics)
+    out = ["## Skills", ""]
+    if sk.calls == 0:
+        out.append("Sin invocaciones de skills en la ventana.")
+    else:
+        out.append("Invocaciones: %d en %s (%d en la sesi\u00f3n principal, %d en subagentes)." % (
+            sk.calls, _plural(sk.sessions, "sesi\u00f3n", "sesiones"), sk.main_calls, sk.subagent_calls))
+        rows = _global_skill_rows(sk, plugins)
+        max_calls = max([r[2] for r in rows] or [0])
+        out += ["", "Por skill:", ""]
+        out += _capped_table(
+            ["Skill", "Conjunto", "Invocaciones", "Barra", "Sesiones", "Sesi\u00f3n principal", "Subagente"],
+            "llrlrrr",
+            [[_code(r[0]), _code(r[1]), _num(r[2]), _bar(r[2], max_calls), _num(r[5]), _num(r[3]), _num(r[4])]
+             for r in rows])
+        out += ["", "Por conjunto de skill:", ""]
+        out += _capped_table(
+            ["Conjunto", "Skills", "Invocaciones", "Sesiones"], "lrrr",
+            [[_code(r[0]), _num(r[1]), _num(r[2]), _num(r[3])] for r in _global_skill_groups(sk, plugins)])
+        linked = _global_agent_skill_rows(sk, plugins)
+        if linked:
+            out += ["", "Por agente (skills invocadas dentro de subagentes):", ""]
+            out += _capped_table(
+                ["Agente", "Conjunto del agente", "Skill", "Invocaciones"], "lllr",
+                [[_code(r[0]), _code(r[1]), _code(r[2]), _num(r[3])] for r in linked])
+        out += ["", GLOBAL_SKILLS_NOTE]
+    out += ["", "No se atribuyen tokens a una skill: corre en el contexto de la sesi\u00f3n que la invoca.", ""]
+    return out
+
+
+def _global_compare_section() -> list:
+    return ["## Qu\u00e9 compara y qu\u00e9 no", ""] + _bullets(GLOBAL_COMPARES) + [""]
+
+
+def _global_quality_section(metrics) -> list:
+    """La calidad de T5 y, tras sus tablas, el limite de la agrupacion de proyectos por alias."""
+    return _quality_section(metrics)[:-1] + ["", GLOBAL_ALIAS_LIMIT, ""]
+
+
+def _global_header_section(metrics, generated) -> list:
+    t = metrics.total
+    lines = [
+        REPORT_MARKER,
+        "# Reporte global de uso de subagentes",
+        "",
+        "> - Ventana: " + _window_text(metrics.window),
+        "> - Llamadas: %d en %s en %s" % (t.calls, _plural(t.sessions, "sesi\u00f3n", "sesiones"),
+                                         _plural(len(metrics.projects), "proyecto", "proyectos")),
+        "> - Claude Code: " + _versions_header(metrics.versions_seen),
+        "> - Esquema del reporte: %d" % REPORT_SCHEMA,
+    ]
+    if generated is not None:
+        lines.append("> - Generado: " + generated.isoformat())
+    lines.append("> - Alcance: todos los proyectos le\u00eddos; proyectos numerados por volumen, sin nombres ni rutas"
+                 " ni alias.")
+    lines.append("> - Reporte privado por defecto: lleva el volumen de uso de cada proyecto; no lo subas a git y"
+                 " comp\u00e1rtelo solo despu\u00e9s de revisarlo.")
+    for text in _notices(metrics):
+        lines.append("> - AVISO: " + text)
+    return lines + [""]
+
+
+def _global_footer_section(metrics) -> list:
+    out = ["## Pie", ""] + _bullets([
+        "report_schema: %d" % REPORT_SCHEMA,
+        "herramienta: " + TOOL_NAME,
+        "ultima_version_verificada: " + _code(metrics.verified_max),
+        "alcance: global (todos los proyectos le\u00eddos)",
+    ])
+    return out + [""] + _bullets(GLOBAL_PRIVACY_NOTES)
+
+
+def render_global_report(metrics, generated=None) -> str:
+    """Markdown del reporte GLOBAL (todos los proyectos leidos; ver la cabecera de la seccion). Pura.
+
+    `metrics`: UsageMetrics de las llamadas de TODOS los proyectos (un `ProjectMetrics` por proyecto; el global los
+    numera y no imprime su alias). `generated`: datetime.date inyectada o None; el generador no lee el reloj.
+    ValueError con mensaje fijo (sin eco del valor) ante argumentos invalidos. Devuelve texto con LF y salto
+    final; T7 lo escribe en UTF-8 sin BOM."""
+    if not isinstance(metrics, UsageMetrics):
+        raise ValueError(MSG_GLOBAL_METRICS)
+    if generated is not None and not _is_date(generated):
+        raise ValueError(MSG_REPORT_DATE)
+    extra = ["Proyectos con llamadas en la ventana: %d" % len(metrics.projects),
+             "Conjuntos con llamadas: %d" % len(_live_group_calls(metrics))]
+    lines = _global_header_section(metrics, generated)
+    lines += _summary_section(metrics, extra)
+    if metrics.total.calls:
+        lines += _global_group_section(metrics)
+        lines += _agent_sections(metrics, _global_model_label)
+        lines += _global_project_section(metrics)
+    lines += _global_skills_section(metrics)
+    if metrics.total.calls:
+        lines += _version_section(metrics)
+    lines += _global_compare_section()
+    lines += _global_quality_section(metrics)
+    lines += _guide_section(HOW_TO_READ_GLOBAL)
+    lines += _global_footer_section(metrics)
     return "\n".join(lines) + "\n"
 
 

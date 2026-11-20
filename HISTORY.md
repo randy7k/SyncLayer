@@ -2,6 +2,17 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 2, T6)
+
+- `tools/usage_report.py`: `render_global_report`, generador puro del reporte global comparativo:
+  comparación por conjunto de agentes (SyncLayer, integrado, `plugin:<prefijo>`, otros) con las
+  mismas columnas, skills, rangos de versión de Claude Code y sección fija «Qué compara y qué no».
+  Los proyectos se numeran `proyecto 1..N` por volumen, sin hash ni alias (un alias sin sal se
+  recalcula por diccionario); el prefijo de plugin de una skill sólo sale si coincide con un agente
+  visto; los modelos se limitan a tramos de lista cerrada.
+- El lector avisa si dos carpetas de proyecto dan el mismo alias.
+- `docs/plans/2026-11-19-fase2-reporte-de-uso.md`: decisiones de T6 y los riesgos que T7 debe cubrir.
+
 ### Añadido (Fase 2, T5)
 
 - `tools/usage_report.py`: `render_project_report`, generador puro (sin E/S ni reloj) del reporte de
