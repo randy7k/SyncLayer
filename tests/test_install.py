@@ -121,7 +121,9 @@ class StaticChecks(unittest.TestCase):
             self.assertNotIn(personal, text.lower())
 
     def test_allowed_pattern_matches_generator(self):
-        text = self.raw.decode("ascii")
+        # Con core.autocrlf git deja install.ps1 en CRLF al hacer checkout o merge: el ancla `$`
+        # de la regex no tolera el retorno de carro (CR), asi que se normaliza antes de buscar.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
         m = re.search(r"^\$AllowedPattern = '(.*)'$", text, re.M)
         self.assertIsNotNone(m, "no se encontro $AllowedPattern en install.ps1")
         ps_pattern = m.group(1)

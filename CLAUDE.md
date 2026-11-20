@@ -98,7 +98,11 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   `tests/test_agent_guard.py`.
 - Todo cambio en `install.ps1` empieza con una prueba que falla en `tests/test_install.py`.
 - `install.ps1` va en ASCII puro y sin BOM: Windows PowerShell 5.1 lee como ANSI un archivo
-  sin BOM. Los mensajes van en español sin acentos. Hay una prueba.
+  sin BOM. Los mensajes van en español sin acentos. Hay una prueba. Con `core.autocrlf` git
+  deja el archivo en CRLF al hacer checkout o merge: las pruebas que leen su texto deben
+  normalizar `
+` a `
+` antes de usar regex con anclas de fin de línea.
 - Ejecuta Python con `-B`. No se versiona `__pycache__`.
 - Los SVG de `assets/brand/` se regeneran con los scripts de `assets/brand/src/`; no se
   editan a mano.
