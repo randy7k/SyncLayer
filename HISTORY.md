@@ -2,6 +2,13 @@
 
 ## [Sin publicar]
 
+### Añadido (exploración de la Fase 2)
+
+- `docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md`: qué datos de uso de subagentes
+  existen (transcripciones locales, hooks, OpenTelemetry), riesgos (formato interno, privacidad,
+  tokens inflados por reintentos), decisiones del propietario (script sobre transcripciones ahora,
+  hook después; reportes locales fuera de git; tablas y barras de texto) y lo no verificado.
+
 ### Corregido (instalador)
 
 - `test_allowed_pattern_matches_generator` fallaba tras el merge a `main`: git (con
