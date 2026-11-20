@@ -3,8 +3,16 @@
 Uso (se ejecuta desde el clon; no se instala en ~/.claude):
 
     python -B tools/usage_report.py inspect [--claude-dir DIR] [--project-dir DIR] [--show-paths]
+    python -B tools/usage_report.py project [--project-dir DIR] [--claude-dir DIR] [--transcripts-dir NOMBRE]...
+                                            [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths]
+    python -B tools/usage_report.py global  [--claude-dir DIR] [--since ..] [--until .. | --all] [--stdout] [--show-paths]
 
-Por ahora existe el subcomando `inspect`: imprime SOLO estructura (nombres de claves de una
+`project` escribe <project-dir>/.synclayer/usage-report.md (con .synclayer/.gitignore) y `global`
+escribe <claude-dir>/synclayer-usage.md; con --stdout imprimen el reporte (bytes UTF-8) y no
+escriben nada. Los destinos son fijos: no hay --out. La seccion "Subcomandos project y global (T7)"
+documenta las garantias de escritura. `project` y `global` devuelven 1 si no hay transcripciones.
+
+El subcomando `inspect` imprime SOLO estructura (nombres de claves de una
 lista cerrada, tipos y conteos agregados) para confirmar el formato de las transcripciones.
 Nunca imprime valores de contenido (solo `version` y `model` filtrados salen como texto), prompts, rutas, nombres de carpeta ni identificadores de
 sesion, asi que su salida es segura de pegar en una conversacion. Una clave que no esta en
@@ -46,6 +54,7 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import ntpath
 import os
 import re
 import stat
@@ -1022,6 +1031,12 @@ class ReadResult:
         self._seen_ids = set()                 # digests de message.id ya sumados (entre archivos)
         self._seen_inodes = set()              # (st_dev, st_ino) de los hardlinks (nlink > 1) ya leidos
         self._alias_folders = set()            # (alias, nombre de carpeta en minusculas) leidos; solo en memoria
+        self.sessions_read = 0                 # sesiones enumeradas (T7; 0: no hay transcripciones)
+
+    @property
+    def folders_read(self) -> int:
+        """Carpetas de projects/ leidas y listadas (T7: cabecera del reporte de proyecto)."""
+        return self.quality["carpetas de proyecto leidas"]
 
     def release_key(self) -> None:
         """Olvida la clave de los resumenes (`_key = None`). T7 la invoca cuando ya no se crean mas
@@ -1511,6 +1526,7 @@ def _count_alias_collisions(res: ReadResult) -> int:
 def _read_project_folder(folder_path, folder_name, res: ReadResult) -> None:
     res._alias_folders.add((_project_alias(folder_name), folder_name.lower()))
     for sid, has_main, has_dir in _enum_sessions(folder_path, res.quality) or ():
+        res.sessions_read += 1
         if has_main:   # la sesion principal solo se lee para las invocaciones de Skill (T4)
             _read_main(folder_path, folder_name, sid, res)
         if has_dir:
@@ -1573,7 +1589,7 @@ def check_damaged(calls) -> None:
 
 
 def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True,
-               digest_key=None) -> ReadResult:
+               digest_key=None, extra_folders=()) -> ReadResult:
     """Lee todas las llamadas de subagentes bajo <claude_dir>/projects (o solo las del proyecto) y las
     invocaciones de Skill de las sesiones principales y de los subagentes (T4).
 
@@ -1591,7 +1607,12 @@ def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True,
     sobre las llamadas de la ventana. Un message.id repetido entre archivos se atribuye al
     archivo que se recorre primero (ver _drop_repeated_ids). Dos nombres del mismo inodo dentro
     de projects/ (hardlinks) son una sola llamada. Al terminar se liberan los conjuntos de ids e
-    inodos de ReadResult (None)."""
+    inodos de ReadResult (None).
+
+    `extra_folders` (T7, `--transcripts-dir`): nombres de carpetas de projects/ que se leen ADEMAS de la
+    derivada de `project_dir` (sesiones abiertas desde una subcarpeta o un worktree). Solo cuentan con
+    `project_dir`; deben venir YA EN MINUSCULAS (la comparacion no distingue mayusculas) y el llamador
+    las valida con valid_dir_name; el lector las vuelve a filtrar con valid_dir_name al recorrer projects/."""
     projects = os.path.join(claude_dir, "projects")
     reason = _projects_dir_state(projects)
     if reason is not None:
@@ -1601,7 +1622,8 @@ def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True,
         raise EnvError("no se puede leer projects/")
     wanted = None
     if project_dir is not None:
-        wanted = derive_folder_name(os.path.abspath(project_dir)).lower()
+        wanted = {derive_folder_name(os.path.abspath(project_dir)).lower()}
+        wanted.update(extra_folders)
     res = ReadResult()
     res._key = digest_key if digest_key is not None else os.urandom(16)
     for name, kind in listing:
@@ -1610,7 +1632,7 @@ def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True,
         elif kind == "dir":
             if not valid_dir_name(name):
                 res.quality["nombres no validos omitidos"] += 1
-            elif wanted is None or name.lower() == wanted:
+            elif wanted is None or name.lower() in wanted:
                 _read_project_folder(os.path.join(projects, name), name, res)
     res.quality["alias de proyecto repetido entre carpetas"] = _count_alias_collisions(res)
     res._alias_folders = None   # nombres de carpeta: no deben sobrevivir a la lectura
@@ -2087,6 +2109,7 @@ class UsageMetrics:
     read_quality: tuple       # ((etiqueta, n), ...) de la lectura completa (no de la ventana)
     warnings: tuple           # avisos de texto fijo del lector (T5 los muestra en la cabecera)
     skills: SkillMetrics      # uso de skills en la ventana (T4)
+    folders_read: int = 0     # carpetas de projects/ leidas (T7); 0 si la fuente no es un ReadResult
 
 
 def _range_of(key) -> str:
@@ -2287,7 +2310,9 @@ def aggregate_calls(source, window=None, today=None, check_damage: bool = True,
     5 % de las llamadas DE LA VENTANA, mas las danadas sin ninguna hora (fuera de la ventana pero
     contadas por prudencia), esta danado. Pura: no hace E/S y el resultado no depende del orden de
     entrada."""
+    folders_read = 0
     if isinstance(source, ReadResult):
+        folders_read = int(source.folders_read)
         calls = list(source.calls)
         warnings = tuple(source.warnings)
         read_quality = tuple((label, int(source.quality[label])) for label in READ_QUALITY_LABELS)
@@ -2345,6 +2370,7 @@ def aggregate_calls(source, window=None, today=None, check_damage: bool = True,
         read_quality=read_quality,
         warnings=warnings,
         skills=skill_metrics(skill_uses, window),
+        folders_read=folders_read,
     )
 
 
@@ -2680,6 +2706,10 @@ def _header_section(metrics, alias, generated) -> list:
         "",
         "> - Ventana: " + _window_text(metrics.window),
         "> - Llamadas: %d en %s" % (t.calls, _plural(t.sessions, "sesi\u00f3n", "sesiones")),
+    ]
+    if metrics.folders_read:   # 0: las metricas no vienen de una lectura (pruebas): no se inventa el dato
+        lines.append("> - Carpetas de transcripciones le\u00eddas: %d" % metrics.folders_read)
+    lines += [
         "> - Claude Code: " + _versions_header(metrics.versions_seen),
         "> - Esquema del reporte: %d" % REPORT_SCHEMA,
     ]
@@ -3386,10 +3416,22 @@ def render_global_report(metrics, generated=None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _say(message: str, stream) -> None:
+    """Una linea de texto en `stream`. Un caracter que la codificacion del flujo no admite (una ruta con
+    --show-paths en una consola cp1252) sale como `?` y un flujo roto se ignora: ni lo uno ni lo otro puede
+    cambiar el codigo de salida de una escritura que ya salio bien."""
+    try:
+        enc = getattr(stream, "encoding", None) or "utf-8"
+        stream.write(message.encode(enc, "replace").decode(enc) + "\n")
+        stream.flush()
+    except (OSError, ValueError, LookupError, UnicodeError):
+        pass
+
+
 def _fail(message: str, code: int, path=None, show_paths=False) -> int:
     if show_paths and path is not None:
         message = message + ": " + path
-    print("error: " + message, file=sys.stderr)
+    _say("error: " + message, sys.stderr)
     return code
 
 
@@ -3444,16 +3486,521 @@ def _cmd_inspect(args) -> int:
     return EXIT_OK
 
 
+# --- Subcomandos project y global (T7) ---
+#
+# Une lectura (read_calls), metricas (aggregate_calls) y generadores (render_*) y escribe SOLO en los destinos
+# fijos de 3.7 del plan: <project-dir>/.synclayer/usage-report.md (con .synclayer/.gitignore) y
+# <claude-dir>/synclayer-usage.md. No existe `--out`: no hay forma de escribir en otra ruta.
+#
+# Escritura (cada punto cubre un riesgo de la revision de `shield`):
+#   - Nunca se abre el destino para escribir: temporal de nombre aleatorio en la MISMA carpeta, creado con
+#     O_CREAT|O_EXCL (y O_NOFOLLOW donde exista), modo 0600 (y fchmod en POSIX), escritura binaria UTF-8 sin BOM
+#     con LF, y os.replace. Si algo falla (o hay Ctrl+C) se borra el temporal.
+#   - Justo antes del reemplazo se repite el lstat de .synclayer, <project-dir> (o <claude-dir> en el global) y
+#     se repite la comprobacion del destino (marcador, enlaces). Es una ventana estrecha, no cerrada: la
+#     biblioteca estandar no permite abrir por descriptor de carpeta en Windows. Quien puede escribir en esas
+#     carpetas ya puede escribir el reporte a mano.
+#   - El marcador (primera linea de 3.6) se lee con lectura acotada (MARKER_READ bytes) sin seguir enlaces
+#     (_open_regular). Un destino sin marcador, enlace, junction, carpeta o con mas de un enlace duro: exit 1.
+#   - `.synclayer/.gitignore` debe valer EXACTAMENTE `*\n`: con `*` mas `!usage-report.md` el reporte volveria a
+#     verse en git. Si falta, se crea; si existe y difiere, exit 1 y no se edita. Se escribe antes que el reporte.
+#   - Un exit 1 o 3 no deja nada: lectura y agregacion ocurren ANTES de tocar el disco, y si el fallo llega
+#     durante la escritura se borra lo que esta corrida creo (temporales y, si ella creo .synclayer, la carpeta).
+#     No se crea <claude-dir> ni <project-dir>.
+#   - Windows: la ACL se hereda de la carpeta (puede ser compartida u OneDrive) y no se modifica. Con otro
+#     proceso teniendo el destino abierto, os.replace falla: exit 1 sin restos.
+#
+# Privacidad: el mensaje final dice cuantas llamadas y sesiones, nunca una ruta (con --show-paths la anade).
+# Los errores llevan texto fijo o el nombre de la clase de la excepcion. ReadResult, CallRecord, SkillUse y
+# UsageMetrics no se serializan ni se imprimen jamas; ReadResult.release_key() se invoca al terminar de agregar.
+#
+# Git, sin procesos externos (la herramienta es biblioteca estandar pura y no llama a git):
+#   - Global: si existe .git (carpeta o archivo) en <claude-dir> o en una carpeta padre (hasta MAX_GIT_PARENTS) se
+#     escribe igual y se avisa por stderr (texto fijo, sin ruta). No se lee su contenido.
+#   - Proyecto: si .synclayer/usage-report.md ya esta versionado se escribe igual y se avisa. Se busca la ruta
+#     en el indice de git (.git/index, version 2 y 3, que guardan la ruta completa), subiendo desde el proyecto
+#     hasta la primera carpeta con .git (admite `.git` archivo de worktree o submodulo). LIMITES: la lectura es
+#     acotada (MAX_GIT_INDEX_BYTES) y de solo lectura; el indice version 4 comprime los prefijos de ruta y no
+#     se detecta; un indice disperso (sparse) o dividido (split) puede no listarla; puede haber un falso
+#     positivo si otra ruta versionada termina igual. En todos esos casos, sin aviso o con aviso de mas: el aviso
+#     es una ayuda, no una garantia. En Windows (core.ignorecase) git guarda la ruta con las mayusculas con que
+#     se anadio y aqui se busca con las del disco y las de --project-dir: si difieren, no se detecta.
+#     Un `gitdir:` UNC o de dispositivo no se sigue (no se hace lstat ni open sobre el). `.gitignore` no afecta a archivos ya versionados; `git add -f` tampoco.
+
+PROJECT_FOLDER = ".synclayer"
+PROJECT_REPORT = "usage-report.md"
+GLOBAL_REPORT = "synclayer-usage.md"
+GITIGNORE_NAME = ".gitignore"
+GITIGNORE_BODY = b"*\n"
+MARKER_BYTES = REPORT_MARKER.encode("ascii")
+MARKER_READ = len(MARKER_BYTES) + 2          # el marcador mas un posible \r\n; nunca se lee mas
+GIT_INDEX_CHUNK = 1024 * 1024
+MAX_GIT_INDEX_BYTES = 256 * 1024 * 1024
+MAX_GIT_POINTER_BYTES = 4096
+MAX_GIT_PARENTS = 64
+DATE_ARG_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
+
+WHAT_PROJECT = "la carpeta del proyecto"
+WHAT_CLAUDE = "la carpeta de usuario"
+WHAT_SYNCLAYER = "la carpeta .synclayer"
+MSG_DIR_MISSING = " no existe o no se puede leer"
+MSG_DIR_LINK = " es un enlace simbolico o junction: no se sigue"
+MSG_DIR_NOT_DIR = " no es una carpeta"
+MSG_DIR_CHANGED = " cambio mientras se escribia el reporte"
+MSG_GITIGNORE_BAD = ("el .gitignore de la carpeta del reporte no es exactamente una linea * seguida de salto de "
+                     "linea (no se edita): corrijalo o borrelo")
+MSG_DEST_FOREIGN = ("el destino ya existe y no empieza por el marcador de un reporte de SyncLayer: no se "
+                    "sobrescribe un archivo ajeno")
+MSG_DEST_KIND = "el destino es un enlace, una junction o no es un archivo regular: no se sigue"
+MSG_DEST_UNREADABLE = "no se puede leer el destino para comprobar el marcador"
+MSG_TMP_CREATE = "no se pudo crear el archivo temporal en la carpeta de destino"
+MSG_WRITE = "no se pudo escribir el reporte"
+MSG_REPLACE = "no se pudo reemplazar el destino (otro proceso puede tenerlo abierto)"
+MSG_MKDIR = "no se pudo crear la carpeta .synclayer"
+MSG_NO_PROJECT_TRANSCRIPTS = ("el proyecto no tiene transcripciones; si abrio sesiones desde una subcarpeta o "
+                              "un worktree, indique su carpeta de projects/ con --transcripts-dir")
+MSG_NO_TRANSCRIPTS = "no hay transcripciones en projects/"
+MSG_TRANSCRIPTS_MISSING = ("una carpeta indicada con --transcripts-dir no existe en projects/ (o es un enlace): "
+                           "no se lee")
+MSG_ALIAS_MISMATCH = "alias de proyecto inconsistente entre la lectura y el reporte"
+MSG_WINDOW_BOTH = "--all es incompatible con --since y --until"
+MSG_WINDOW_BAD = "ventana invalida: since debe ser anterior o igual a until, dentro del rango de fechas"
+GIT_NOTICE_GLOBAL = ("la carpeta de usuario parece un repositorio git (existe .git): el reporte global podria "
+                     "subirse; revise antes de hacer commit o push")
+GIT_NOTICE_PROJECT = ("el reporte de proyecto ya esta versionado por git (.gitignore no afecta a archivos ya "
+                      "versionados): retirelo del indice con git rm --cached para que deje de subirse")
+
+
+def _check_dir(path: str, what: str):
+    """lstat de una carpeta que debe ser normal (ni enlace ni junction). Devuelve el lstat o lanza EnvError."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        raise EnvError(what + MSG_DIR_MISSING) from None
+    kind = _kind(st)
+    if kind == "link":
+        raise EnvError(what + MSG_DIR_LINK)
+    if kind != "dir":
+        raise EnvError(what + MSG_DIR_NOT_DIR)
+    return st
+
+
+def _recheck(guards) -> None:
+    """Repite el lstat de las carpetas protegidas: siguen siendo carpetas normales y la misma (ino, dev)."""
+    for path, before, what in guards:
+        now = _check_dir(path, what)
+        if _identity_changed(before, now):
+            raise EnvError(what + MSG_DIR_CHANGED)
+
+
+def _check_gitignore(sdir: str) -> bool:
+    """True si .synclayer/.gitignore existe y vale EXACTAMENTE `*\\n`; False si falta; EnvError si es otra cosa."""
+    path = os.path.join(sdir, GITIGNORE_NAME)
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise EnvError(MSG_GITIGNORE_BAD) from None
+    if _kind(st) != "file":
+        raise EnvError(MSG_GITIGNORE_BAD)
+    try:
+        with _open_regular(path) as f:
+            data = f.read(len(GITIGNORE_BODY) + 1)
+    except OSError:
+        raise EnvError(MSG_GITIGNORE_BAD) from None
+    if data != GITIGNORE_BODY:
+        raise EnvError(MSG_GITIGNORE_BAD)
+    return True
+
+
+def _check_destination(path: str) -> bool:
+    """False si el destino no existe; True si existe y es un reporte nuestro (primera linea = marcador).
+    EnvError si es un enlace, no es un archivo regular o no lleva el marcador. Lectura acotada, sin enlaces."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise EnvError(MSG_DEST_UNREADABLE) from None
+    if _kind(st) != "file":
+        raise EnvError(MSG_DEST_KIND)
+    try:
+        with _open_regular(path) as f:
+            head = f.read(MARKER_READ)
+    except OSError:
+        raise EnvError(MSG_DEST_UNREADABLE) from None
+    first = head.split(b"\n", 1)[0]
+    if first.endswith(b"\r"):
+        first = first[:-1]
+    if first != MARKER_BYTES:
+        raise EnvError(MSG_DEST_FOREIGN)
+    return True
+
+
+def _unlink_quiet(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _write_atomic(folder: str, name: str, data: bytes, guards, verify) -> None:
+    """Escribe `data` en <folder>/<name> sin abrir nunca el destino: temporal aleatorio O_EXCL en la misma
+    carpeta, repeticion de las comprobaciones (`guards` y `verify`) y os.replace. Lanza EnvError (texto fijo).
+    Cualquier fallo, incluido Ctrl+C, borra el temporal."""
+    tmp = os.path.join(folder, "." + name + "." + os.urandom(8).hex() + ".tmp")
+    dest = os.path.join(folder, name)
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    not_ours = False   # O_EXCL fallo: el nombre ya existia y no es nuestro, no se intenta borrar
+    try:
+        try:
+            fd = os.open(tmp, flags, 0o600)
+        except OSError:
+            not_ours = True
+            raise EnvError(MSG_TMP_CREATE) from None
+        try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            view = memoryview(data)
+            while len(view):
+                view = view[os.write(fd, view):]
+            try:
+                os.fsync(fd)
+            except OSError:   # algunos sistemas de archivos no lo admiten: no es un fallo del reporte
+                pass
+        except OSError:
+            raise EnvError(MSG_WRITE) from None
+        finally:
+            os.close(fd)
+        _recheck(guards)
+        verify()
+        try:
+            os.replace(tmp, dest)
+        except OSError:
+            raise EnvError(MSG_REPLACE) from None
+    except BaseException:
+        if not not_ours:   # el try cubre tambien el instante tras os.open: un Ctrl+C ahi no deja el temporal
+            _unlink_quiet(tmp)
+        raise
+
+
+def _remove_created_folder(sdir: str, before) -> None:
+    """Borra .synclayer y sus dos archivos SOLO si esta corrida creo la carpeta y sigue siendo la misma."""
+    try:
+        now = os.lstat(sdir)
+        if _kind(now) != "dir" or (before is not None and _identity_changed(before, now)):
+            return
+        for name in (GITIGNORE_NAME, PROJECT_REPORT):
+            path = os.path.join(sdir, name)
+            try:
+                if _kind(os.lstat(path)) == "file":
+                    os.unlink(path)
+            except OSError:
+                pass
+        os.rmdir(sdir)
+    except OSError:
+        pass
+
+
+def _remove_own_gitignore(sdir: str) -> None:
+    """Retira .synclayer/.gitignore solo si es un archivo regular (lstat, sin enlaces) con EXACTAMENTE `*\n`."""
+    try:
+        if _check_gitignore(sdir):
+            os.unlink(os.path.join(sdir, GITIGNORE_NAME))
+    except (OSError, EnvError):
+        pass
+
+
+def _write_project_report(project_dir: str, data: bytes) -> None:
+    """<project-dir>/.synclayer/{.gitignore,usage-report.md}. EnvError si algo no cuadra.
+
+    Si falla, lo que ESTA corrida creo se borra: los temporales, la carpeta .synclayer (si la creo ella) o, en una
+    .synclayer preexistente, el .gitignore que escribio (solo si sigue siendo un archivo regular con el contenido
+    exacto). No se toca nada que ya existia antes de la corrida (un reporte previo queda como estaba)."""
+    pst = _check_dir(project_dir, WHAT_PROJECT)
+    sdir = os.path.join(project_dir, PROJECT_FOLDER)
+    dest = os.path.join(sdir, PROJECT_REPORT)
+    sst = None
+    has_gitignore = False
+    if os.path.lexists(sdir):
+        sst = _check_dir(sdir, WHAT_SYNCLAYER)
+        has_gitignore = _check_gitignore(sdir)
+        _check_destination(dest)
+    created = False      # esta corrida creo .synclayer (se marca ANTES de verificarla: un Ctrl+C ahi no la deja)
+    wrote_gitignore = False
+    try:
+        if sst is None:
+            try:
+                os.mkdir(sdir)
+            except OSError:
+                raise EnvError(MSG_MKDIR) from None
+            created = True
+            sst = _check_dir(sdir, WHAT_SYNCLAYER)
+        guards = [(project_dir, pst, WHAT_PROJECT), (sdir, sst, WHAT_SYNCLAYER)]
+        if not has_gitignore:
+            wrote_gitignore = True   # antes de escribir: si algo falla a medias se intenta retirar
+            _write_atomic(sdir, GITIGNORE_NAME, GITIGNORE_BODY, guards, lambda: _check_gitignore(sdir))
+        _write_atomic(sdir, PROJECT_REPORT, data, guards, lambda: _check_destination(dest))
+    except BaseException:
+        if created:
+            _remove_created_folder(sdir, sst)
+        elif wrote_gitignore:
+            _remove_own_gitignore(sdir)
+        raise
+
+
+def _write_global_report(claude_dir: str, data: bytes, cst) -> None:
+    """<claude-dir>/synclayer-usage.md. `cst`: el lstat de claude_dir tomado antes de leer."""
+    dest = os.path.join(claude_dir, GLOBAL_REPORT)
+    _check_destination(dest)
+    _write_atomic(claude_dir, GLOBAL_REPORT, data, [(claude_dir, cst, WHAT_CLAUDE)],
+                  lambda: _check_destination(dest))
+
+
+def _gitdir_from_file(dot_git: str, base: str):
+    """Carpeta que senala un `.git` archivo (`gitdir: <ruta>`), o None. Lectura acotada, solo lectura."""
+    try:
+        with _open_regular(dot_git) as f:
+            raw = f.read(MAX_GIT_POINTER_BYTES)
+        text = raw.decode("utf-8").strip()
+        if not text.startswith("gitdir:"):
+            return None
+        target = text[len("gitdir:"):].strip()
+        if not target or _is_network_or_device_path(target):
+            return None
+        target = os.path.normpath(os.path.join(base, target))
+        if _is_network_or_device_path(target):   # antes de CUALQUIER lstat: un UNC haria una peticion de red
+            return None
+        return target if _kind(os.lstat(target)) == "dir" else None
+    except (OSError, ValueError):
+        return None
+
+
+def _is_network_or_device_path(path: str) -> bool:
+    """Ruta UNC o de dispositivo (`\\\\host`, `//host`, `\\\\?\\`, `\\\\.\\`), mirada con las reglas de Windows
+    en cualquier sistema: tocarla (lstat, open) puede iniciar una conexion de red o abrir un dispositivo."""
+    if path.startswith(("\\\\", "//")):
+        return True
+    drive = ntpath.splitdrive(path)[0]
+    return drive.startswith(("\\\\", "//"))
+
+
+def _find_dot_git(start: str):
+    """(carpeta, ruta de `.git`, lstat) de la primera carpeta desde `start` hacia arriba que tiene `.git`
+    (carpeta o archivo), o None. Tope MAX_GIT_PARENTS niveles. No lee el contenido."""
+    cur = start
+    for _ in range(MAX_GIT_PARENTS):
+        dot = os.path.join(cur, ".git")
+        try:
+            return cur, dot, os.lstat(dot)
+        except FileNotFoundError:
+            pass
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+    return None
+
+
+def _git_index_location(project_dir: str):
+    """(ruta del indice, ruta del reporte relativa a la raiz del repositorio con `/`), o None."""
+    found = _find_dot_git(project_dir)
+    if found is None:
+        return None
+    cur, dot, st = found
+    kind = _kind(st)
+    gitdir = dot if kind == "dir" else _gitdir_from_file(dot, cur) if kind == "file" else None
+    if gitdir is None:
+        return None
+    rel = os.path.relpath(os.path.join(project_dir, PROJECT_FOLDER, PROJECT_REPORT), cur)
+    return os.path.join(gitdir, "index"), rel.replace(os.sep, "/")
+
+
+def _project_report_tracked(project_dir: str) -> bool:
+    """True si el indice de git lista .synclayer/usage-report.md. Solo lectura, sin procesos; ver el bloque
+    de comentarios de la seccion para los limites. Ante cualquier duda (error, tamano, formato): False."""
+    try:
+        location = _git_index_location(project_dir)
+        if location is None:
+            return False
+        index, rel = location
+        needle = rel.encode("utf-8") + b"\x00"
+        st = os.lstat(index)
+        if _kind(st) != "file" or st.st_size > MAX_GIT_INDEX_BYTES:
+            return False
+        total, tail = 0, b""
+        with _open_regular(index) as f:
+            while True:
+                chunk = f.read(GIT_INDEX_CHUNK)
+                if not chunk:
+                    return False
+                total += len(chunk)
+                if total > MAX_GIT_INDEX_BYTES:
+                    return False
+                buf = tail + chunk
+                if needle in buf:
+                    return True
+                tail = buf[-(len(needle) - 1):]
+    except (OSError, ValueError):
+        return False
+
+
+def _window_from_args(args, today):
+    """(Window, None) o (None, motivo de uso incorrecto)."""
+    if args.all and (args.since is not None or args.until is not None):
+        return None, MSG_WINDOW_BOTH
+    try:
+        return make_window(today, args.since, args.until, args.all), None
+    except ValueError:
+        return None, MSG_WINDOW_BAD
+
+
+def _emit_stdout(data: bytes) -> None:
+    """Bytes UTF-8 por sys.stdout.buffer: la consola de Windows (cp1252) fallaria con `print` y traduce LF."""
+    out = getattr(sys.stdout, "buffer", None)
+    if out is None:   # un flujo sin .buffer no admite bytes: solo texto (no ocurre con la consola real)
+        sys.stdout.write(data.decode("utf-8"))
+        sys.stdout.flush()
+        return
+    sys.stdout.flush()
+    out.write(data)
+    out.flush()
+
+
+def _aggregate(res, window):
+    """UsageMetrics de la lectura, o None si no habia ninguna sesion. Libera la clave de los resumenes
+    siempre (try/finally): despues de agregar no se crean mas resumenes."""
+    try:
+        if res.sessions_read == 0:
+            return None
+        return aggregate_calls(res, window=window)
+    finally:
+        res.release_key()
+
+
+def _done(kind: str, calls: int, sessions: int, extra: str, path, show_paths: bool) -> None:
+    message = "reporte %s escrito: %s, %s, %s" % (kind, _plural(calls, "llamada", "llamadas"),
+                                                  _plural(sessions, "sesion", "sesiones"), extra)
+    if show_paths:
+        message += ": " + path
+    _say(message, sys.stdout)
+
+
+def _cmd_project(args) -> int:
+    today = utc_today()
+    window, problem = _window_from_args(args, today)
+    if problem is not None:
+        return _fail(problem, 2)
+    claude_dir = args.claude_dir if args.claude_dir is not None else _default_claude_dir()
+    project_dir = os.path.abspath(args.project_dir if args.project_dir is not None else os.getcwd())
+    dest = os.path.join(project_dir, PROJECT_FOLDER, PROJECT_REPORT)
+    extras = [name.lower() for name in (args.transcripts_dir or ())]
+    if not args.stdout:
+        try:
+            _check_dir(project_dir, WHAT_PROJECT)
+        except EnvError as exc:
+            return _fail(exc.message, EXIT_ENV, project_dir, args.show_paths)
+    if extras:
+        listing = _list_dir(os.path.join(claude_dir, "projects"))
+        if listing is not None:
+            present = {name.lower() for name, kind in listing if kind == "dir"}
+            if any(name not in present for name in extras):
+                return _fail(MSG_TRANSCRIPTS_MISSING, EXIT_ENV)
+    res = read_calls(claude_dir, project_dir, check_damage=False, extra_folders=extras)
+    metrics = _aggregate(res, window)
+    if metrics is None:
+        return _fail(MSG_NO_PROJECT_TRANSCRIPTS, EXIT_ENV)
+    alias = _project_alias(derive_folder_name(project_dir))
+    if not extras and any(p.project != alias for p in metrics.projects):
+        return _fail(MSG_ALIAS_MISMATCH, EXIT_ENV)
+    data = render_project_report(metrics, alias, today).encode("utf-8")
+    if args.stdout:
+        _emit_stdout(data)
+        return EXIT_OK
+    try:
+        _write_project_report(project_dir, data)
+    except EnvError as exc:
+        return _fail(exc.message, EXIT_ENV, dest, args.show_paths)
+    if _project_report_tracked(project_dir):
+        _say("aviso: " + GIT_NOTICE_PROJECT, sys.stderr)
+    _done("de proyecto", metrics.total.calls, metrics.total.sessions,
+          _plural(metrics.folders_read, "carpeta leida", "carpetas leidas"), dest, args.show_paths)
+    return EXIT_OK
+
+
+def _cmd_global(args) -> int:
+    today = utc_today()
+    window, problem = _window_from_args(args, today)
+    if problem is not None:
+        return _fail(problem, 2)
+    claude_dir = args.claude_dir if args.claude_dir is not None else _default_claude_dir()
+    dest = os.path.join(claude_dir, GLOBAL_REPORT)
+    cst = None
+    if not args.stdout:
+        try:
+            cst = _check_dir(claude_dir, WHAT_CLAUDE)
+        except EnvError as exc:
+            return _fail(exc.message, EXIT_ENV, claude_dir, args.show_paths)
+    res = read_calls(claude_dir, None, check_damage=False)
+    metrics = _aggregate(res, window)
+    if metrics is None:
+        return _fail(MSG_NO_TRANSCRIPTS, EXIT_ENV)
+    data = render_global_report(metrics, today).encode("utf-8")
+    if args.stdout:
+        _emit_stdout(data)
+        return EXIT_OK
+    try:
+        _write_global_report(claude_dir, data, cst)
+    except EnvError as exc:
+        return _fail(exc.message, EXIT_ENV, dest, args.show_paths)
+    try:   # .git en claude-dir o en cualquier carpeta padre (dotfiles en el home); sin leer su contenido
+        if _find_dot_git(os.path.abspath(claude_dir)) is not None:
+            _say("aviso: " + GIT_NOTICE_GLOBAL, sys.stderr)
+    except OSError:
+        pass
+    _done("global", metrics.total.calls, metrics.total.sessions,
+          _plural(len(metrics.projects), "proyecto", "proyectos"), dest, args.show_paths)
+    return EXIT_OK
+
+
 def _non_empty(value: str) -> str:
     if not value:
         raise argparse.ArgumentTypeError("no puede estar vacio")
     return value
 
 
+def _date_arg(value: str):
+    if DATE_ARG_RE.match(value):
+        try:
+            return datetime.date.fromisoformat(value)
+        except ValueError:
+            pass
+    raise argparse.ArgumentTypeError("fecha invalida: use AAAA-MM-DD")
+
+
+def _folder_arg(value: str) -> str:
+    """Solo un nombre de carpeta de projects/ (lista permitida de valid_dir_name): ni rutas ni `..`."""
+    if not valid_dir_name(value):
+        raise argparse.ArgumentTypeError(
+            "nombre de carpeta de projects/ invalido: solo letras, digitos y guiones, sin rutas")
+    return value
+
+
+def _add_report_arguments(parser) -> None:
+    parser.add_argument("--claude-dir", default=None, type=_non_empty, help="carpeta de usuario (por defecto ~/.claude)")
+    parser.add_argument("--since", default=None, type=_date_arg, help="inicio de la ventana, AAAA-MM-DD (UTC)")
+    parser.add_argument("--until", default=None, type=_date_arg, help="fin de la ventana, AAAA-MM-DD (UTC)")
+    parser.add_argument("--all", action="store_true", help="sin ventana (incompatible con --since y --until)")
+    parser.add_argument("--stdout", action="store_true", help="imprime el reporte en UTF-8 y no escribe archivos")
+    parser.add_argument("--show-paths", action="store_true",
+                        help="permite rutas en los mensajes de stderr y en el mensaje final")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="usage_report.py",
-        description="Reporte de uso de subagentes de Claude Code (solo lectura de estructura por ahora).",
+        description="Reporte de uso de subagentes de Claude Code a partir de las transcripciones locales.",
         allow_abbrev=False,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -3465,6 +4012,18 @@ def _build_parser() -> argparse.ArgumentParser:
     insp.add_argument("--show-paths", action="store_true",
                       help="permite rutas en los mensajes de error de stderr")
     insp.set_defaults(func=_cmd_inspect)
+    proj = sub.add_parser("project", help="escribe el reporte de uso de un proyecto (.synclayer/usage-report.md)",
+                          allow_abbrev=False)
+    proj.add_argument("--project-dir", default=None, type=_non_empty,
+                      help="proyecto a reportar y donde se escribe el reporte (por defecto la carpeta actual)")
+    proj.add_argument("--transcripts-dir", action="append", default=None, type=_folder_arg,
+                      help="nombre de una carpeta de projects/ que tambien se lee (repetible; worktrees)")
+    _add_report_arguments(proj)
+    proj.set_defaults(func=_cmd_project)
+    glob = sub.add_parser("global", help="escribe el reporte global comparativo (<claude-dir>/synclayer-usage.md)",
+                          allow_abbrev=False)
+    _add_report_arguments(glob)
+    glob.set_defaults(func=_cmd_global)
     return parser
 
 

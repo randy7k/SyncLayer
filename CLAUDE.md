@@ -184,6 +184,13 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   autenticidad; los riesgos residuales están en `README.md` («Límites del instalador»).
 - Copia `~/.claude` -> repo sólo por archivo (`git ls-files`), nunca con comodines:
   `~/.claude/hooks/` y otras carpetas tienen archivos ajenos y el repo es público.
+- `tools/usage_report.py project|global` (Fase 2, T7) escribe sólo `<project-dir>/.synclayer/usage-report.md`
+  (con `.synclayer/.gitignore` exactamente `*\n`) y `<claude-dir>/synclayer-usage.md`: no hay `--out`.
+  Temporal aleatorio `O_EXCL` + `os.replace`; enlaces, junctions y destinos sin el marcador dan exit 1;
+  exit 1 o 3 no dejan `.synclayer/`. Sin `--show-paths` no imprime ninguna ruta. Los avisos de git
+  (`.git` en `<claude-dir>` o en una carpeta padre; reporte de proyecto ya versionado, leyendo `.git/index` sin llamar a git, no
+  detecta el índice v4) salen por stderr y la herramienta escribe igual. Pruebas: `tests/test_usage_report_cli.py`
+  (siempre con `--claude-dir` y carpetas temporales, nunca el `~/.claude` real). Documentación completa: T8.
 
 ## Cierre de un cambio
 

@@ -1726,7 +1726,8 @@ class ReaderDefensive(ReaderBase):
                   "skills: id repetido entre archivos", "skills: ids sin deduplicar (tope)",
                   "sesiones principales omitidas por enlace duro",
                   "sesiones principales omitidas por tope de tamano", "sesiones principales ilegibles",
-                  "alias de proyecto repetido entre carpetas"}
+                  "alias de proyecto repetido entre carpetas",
+                  "carpetas de proyecto leidas"}   # T7: ReadResult.folders_read
         self.assertLessEqual(used, keys | values | labels | set(ur.TOKEN_FIELDS))
         self.assertEqual(ur.TOKEN_FIELDS, ("input_tokens", "output_tokens", "cache_creation_input_tokens",
                                            "cache_read_input_tokens"))

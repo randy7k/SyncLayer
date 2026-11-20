@@ -740,3 +740,16 @@ Minor aprobados por `auditor` que se cierran junto con T4 (en el lector o su pru
 8. **Objetos e identificadores:** `release_key()` tras agregar; no serializar ni registrar `ReadResult`, `CallRecord`, `SkillUse` ni `UsageMetrics`; errores sólo con texto fijo o el nombre de clase; ninguna ruta salvo con `--show-paths` (si el mensaje final imprime la ruta escrita contiene el usuario: valorar ponerla detrás de `--show-paths`).
 9. **Fallos:** exit 1 o 3 no dejan `.synclayer/` ni temporales; no crear `<claude-dir>` ni `<project-dir>`.
 10. **Cabecera del reporte de proyecto:** añadir «Carpetas de transcripciones leídas: N» (hoy `UsageMetrics` no lo expone) y comprobar que sin `--transcripts-dir` hay un solo alias igual al pasado.
+
+## Notas de la revisión de T7 (2026-11-20)
+
+`auditor` y `shield`: sin Critical, Important, High ni Medium. Decisiones del propietario: sin `--show-paths` el mensaje final no imprime ruta; el global escribe y avisa si hay `.git` (en `<claude-dir>` o una carpeta padre); el proyecto escribe y avisa si el reporte ya está versionado, detectado leyendo `.git/index` sin subprocesos.
+
+Para T8 (documentar) y C4:
+
+1. **Detección de versionado.** No cubre el índice v4, sparse ni split; puede dar falso positivo si otra ruta versionada termina igual; en Windows depende de las mayúsculas escritas en `--project-dir`. Es una ayuda, no una garantía. Un repo «bare» con `--work-tree` no es detectable.
+2. **Puntos de reanálisis.** `_kind` trata todo reparse point como enlace: los marcadores de OneDrive Files On-Demand podrían dar exit 1 «es un enlace» (falla cerrado). Posible mejora: distinguir por `st_reparse_tag` (SYMLINK y MOUNT_POINT). `--project-dir` enlazado se rechaza; `--claude-dir` enlazado (dotfiles con stow) impide escribir el global.
+3. **`.synclayer/` preexistente ajena** se acepta (se crea `.gitignore` `*` dentro). Si la escritura falla, el `.gitignore` creado por esa corrida se retira.
+4. **TOCTOU residual** entre la última comprobación y `os.replace`: ventana de microsegundos, sin solución con la biblioteca estándar en Windows (no hay apertura por descriptor de carpeta).
+5. **ACL en Windows** se hereda de la carpeta (OneDrive o carpeta compartida): documentarlo en el README.
+6. **Sin verificar en este equipo:** rama POSIX (`0600` con umask 0, `fchmod` real, `O_NOFOLLOW`), índices git reales, OneDrive real. Las pruebas «sin aviso de git» suben carpetas padre reales: fallarían en una máquina con `.git` en el home o en `%TEMP%`.

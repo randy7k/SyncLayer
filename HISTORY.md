@@ -2,6 +2,19 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 2, T7)
+
+- `tools/usage_report.py`: subcomandos `project` y `global`. Escriben sólo en destinos fijos
+  (`<project-dir>/.synclayer/usage-report.md` con `.synclayer/.gitignore` exactamente `*`, y
+  `<claude-dir>/synclayer-usage.md`); no existe `--out`. Escritura por temporal aleatorio
+  `O_EXCL` en la misma carpeta y `os.replace`, con `lstat` repetido antes del reemplazo, marcador
+  leído de forma acotada, modo `0600`, UTF-8 sin BOM con LF y limpieza si algo falla. `--stdout`
+  imprime bytes UTF-8. `--transcripts-dir` (repetible) sólo admite nombres de carpeta de `projects/`.
+- El reporte de proyecto lleva «Carpetas de transcripciones leídas: N».
+- El mensaje final no imprime rutas salvo con `--show-paths`. El global avisa si
+  existe `.git` en `<claude-dir>` o en una carpeta padre; el de proyecto avisa si `usage-report.md` ya está versionado (lectura
+  de `.git/index`, sin llamar a git; límites en el código).
+
 ### Añadido (Fase 2, T6)
 
 - `tools/usage_report.py`: `render_global_report`, generador puro del reporte global comparativo:
