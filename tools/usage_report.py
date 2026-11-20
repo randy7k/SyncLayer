@@ -776,28 +776,29 @@ MODEL_ALIASES = frozenset(("opus", "sonnet", "haiku", "fable"))
 NOT_A_MODEL = frozenset(("inherit",))
 _DATE_SUFFIX_RE = re.compile(r"[-@][0-9]{8}\Z")
 
-# Avisos de texto fijo para el reporte (T5): salen de ReadResult.warnings. ASCII, sin datos.
-WARN_NO_MESSAGE_ID = ("hay lineas con usage sin message.id: cada linea se cuenta como una peticion "
+# Avisos de texto fijo para el reporte (T5): salen de ReadResult.warnings. Sin datos. Llevan tildes y enes
+# como escapes \u00xx: el reporte es en espanol correcto y el fuente sigue siendo ASCII.
+WARN_NO_MESSAGE_ID = ("hay l\u00edneas con usage sin message.id: cada l\u00ednea se cuenta como una petici\u00f3n "
                       "y no se puede deduplicar")
 WARN_ID_REPEATED = ("hay message.id repetidos entre archivos (p. ej. agentes reanudados): el "
                     "segundo archivo no suma esas peticiones")
-WARN_ID_CAP = ("se alcanzo el tope de ids para deduplicar entre archivos: puede haber peticiones "
+WARN_ID_CAP = ("se alcanz\u00f3 el tope de ids para deduplicar entre archivos: puede haber peticiones "
                "repetidas sin detectar")
 WARN_SKILL_ID_REPEATED = ("hay tool_use de Skill con el mismo id en varios archivos (p. ej. agentes "
-                          "reanudados): la segunda aparicion no se cuenta")
-WARN_SKILL_ID_CAP = ("se alcanzo el tope de ids de Skill para deduplicar entre archivos: puede haber "
+                          "reanudados): la segunda aparici\u00f3n no se cuenta")
+WARN_SKILL_ID_CAP = ("se alcanz\u00f3 el tope de ids de Skill para deduplicar entre archivos: puede haber "
                      "invocaciones repetidas sin detectar")
 WARN_MAIN_HARDLINK = ("hay sesiones principales omitidas por ser enlaces duros: sus invocaciones de "
                       "Skill no se cuentan")
-WARN_MAIN_CAP = ("hay sesiones principales omitidas por superar el tope de tamano: sus invocaciones de "
+WARN_MAIN_CAP = ("hay sesiones principales omitidas por superar el tope de tama\u00f1o: sus invocaciones de "
                  "Skill no se cuentan")
 WARN_MAIN_UNREADABLE = "hay sesiones principales ilegibles: sus invocaciones de Skill no se cuentan"
 
 # Limitaciones del conteo de skills: texto fijo para "Como leer estos numeros" (T5), como
 # REPEAT_LIMITATIONS. Las dos son subconteos SILENCIOSOS (el lector no puede saber que se perdio algo).
 SKILL_LIMITATIONS = (
-    "Una linea corrupta en medio de una sesion principal o de un subagente se descarta y puede esconder"
-    " una invocacion de Skill: el conteo de skills puede ser menor que el real.",
+    "Una l\u00ednea corrupta en medio de una sesi\u00f3n principal o de un subagente se descarta y puede esconder"
+    " una invocaci\u00f3n de Skill: el conteo de skills puede ser menor que el real.",
     "Las skills que el usuario invoca con /nombre no generan un bloque tool_use de Skill y no se cuentan:"
     " solo se cuentan las que invoca el modelo.",
 )
@@ -1768,13 +1769,13 @@ _DOUBTFUL_TO = (2, 1, 327)
 
 # Limitaciones de la senal "repeticiones consecutivas": texto fijo para "Como leer estos numeros" (T5).
 REPEAT_LIMITATIONS = (
-    "Las repeticiones son una senal inferida por horas de inicio y fin, no un reintento confirmado.",
+    "Las repeticiones son una se\u00f1al inferida por horas de inicio y fin, no un reintento confirmado.",
     "Una llamada puede marcarse aunque corra en paralelo con otra anterior del mismo agente: solo se"
     " mira la anterior inmediata por hora de inicio (A1 0-100, A2 10-20, A3 30-40: se marca A3).",
     "Las llamadas sin hora de inicio no participan en la cadena ni la rompen.",
     "La primera llamada de la ventana no se marca, aunque su anterior quedara fuera de la ventana.",
-    "Las llamadas sin meta nunca se marcan, pero rompen la cadena de los demas agentes.",
-    "En flujos secuenciales legitimos (el mismo agente en pasos distintos de un plan) sobreestima.",
+    "Las llamadas sin meta nunca se marcan, pero rompen la cadena de los dem\u00e1s agentes.",
+    "En flujos secuenciales leg\u00edtimos (el mismo agente en pasos distintos de un plan) sobreestima.",
 )
 
 MSG_TODAY_REQUIRED = "aggregate_calls necesita `today` (o `window`): no lee el reloj"
@@ -2322,6 +2323,582 @@ def aggregate_calls(source, window=None, today=None, check_damage: bool = True,
         warnings=warnings,
         skills=skill_metrics(skill_uses, window),
     )
+
+
+# --- Reporte de proyecto (T5) ---
+#
+# `render_project_report` es PURA: recibe el resultado agregado (`UsageMetrics`) mas dos datos inyectados (el
+# alias del proyecto y, opcionalmente, la fecha de generacion) y devuelve el Markdown como `str`. No hace E/S,
+# no lee el reloj (la fecha la inyecta el llamador, T7), no importa nada y no recibe llamadas crudas: solo ve
+# numeros y etiquetas que el lector ya filtro por listas cerradas. T7 la codifica en UTF-8 sin BOM.
+#
+# Decisiones de formato:
+#   - El texto en espanol lleva tildes y enes correctas (decision del propietario: titulos, rotulos de columna,
+#     avisos, HOW_TO_READ, REPEAT_LIMITATIONS, SKILL_LIMITATIONS y WARN_*), siempre como escapes \u00xx dentro
+#     de las constantes: el FUENTE sigue siendo ASCII, el REPORTE no (UTF-8 sin BOM, LF; T7 lo escribe asi).
+#     Las barras (\u2588 y \u2591) salen igual. Lo que pasa por `_code` (nombres, versiones, etiquetas de
+#     READ_QUALITY_LABELS y de rango) sigue en ASCII: `_code` cambia lo no ASCII por `?`. Esas etiquetas son
+#     cerradas y sin tildes, por eso no necesitan salir de `_code`.
+#   - Enteros SIN separador de miles (3.6 del plan): sin ambiguedad de configuracion regional y cualquier valor,
+#     por enorme que sea, se imprime completo. Un decimal usa punto ("1.5"). `None` es "-" y el cero real es "0".
+#   - Porcentajes: entero, redondeo al mas cercano con medio hacia arriba; un valor distinto de cero que
+#     redondea a 0 se escribe "<1 %"; sin base, "-".
+#   - Marca "*" (pocas muestras) en n, mediana y p90 cuando n < SMALL_N.
+#   - Todo texto variable (agente, conjunto, modelo, skill, version) pasa por `_code`: ASCII imprimible, entre
+#     comillas invertidas, con `|` escapado, sin saltos de linea y acotado a MAX_CELL_CHARS. Una tabla no puede
+#     romperse. Las filas de cada tabla se acotan a MAX_TABLE_ROWS (las versiones, a MAX_VERSION_ROWS).
+#   - Privacidad: de la entrada solo se muestran las etiquetas de las listas cerradas del lector, los avisos de
+#     texto fijo conocidos (uno desconocido sale como "aviso no reconocido") y los contadores de
+#     READ_QUALITY_LABELS. Nunca el alias de OTROS proyectos (`metrics.projects` no se imprime), ni `call_id`,
+#     `session` o `agent_key` (no existen en `UsageMetrics`).
+#   - El orden de las filas es el de las metricas (llamadas descendente y nombre): mismo input, mismos bytes.
+#   - REGLA (T6 la hereda): TODA tabla por agente lleva la columna `Conjunto` junto a `Agente`. T3 agrupa por
+#     (agente, conjunto) y `(otro agente)` sale en `otros` y en `plugin:(no-valido)`: sin la columna, dos filas
+#     serian indistinguibles. No se usan etiquetas compuestas. "Agentes distintos" cuenta pares (nombre, conjunto).
+#   - Marca `*` (pocas muestras): cada tabla que la contenga lleva debajo su leyenda (`_table`/`_capped_table`
+#     la anaden solas), tambien si la tabla de tokens no la tiene y la de duracion si.
+#   - Cabecera: un dato por linea con `> - ` (varias lineas `> ...` seguidas son UN parrafo en GFM).
+#   - Contadores de la lectura (READ_QUALITY_LABELS) en listas cerradas: INCIDENCIA (READ_INCIDENT_LABELS) o
+#     INFORMATIVO (READ_INFO_LABELS). Solo las incidencias entran en el resumen de la cabecera y en el detalle
+#     de incidencias; las que ya tienen aviso propio (READ_WARNED) no se cuentan dos veces en la cabecera.
+#   - Varios alias en `metrics.projects`: no es un error. T7 puede leer varias carpetas (`--transcripts-dir`; un
+#     worktree vive en otra carpeta y tiene otro alias; `c--` y `C--` dan el mismo alias) y el generador solo
+#     imprime el alias que recibe. `UsageMetrics` no expone cuantas carpetas se leyeron: el campo
+#     "Carpetas de transcripciones leidas: N" de la cabecera queda para T7 (necesita ese dato en el resultado
+#     de la lectura) y se anade entonces.
+#
+# DESVIOS respecto de 3.6 del plan (a registrar en el plan al cerrar T5):
+#   - "Tokens por llamada" lleva `Conjunto`, `Tokens (suma)` y `Barra` ademas de las columnas del plan.
+#   - "Duracion y herramientas" y "Modelo real" llevan `Conjunto` (regla de arriba).
+#   - El reporte de proyecto lleva tambien la tabla "Por conjunto" (en el plan es solo del global).
+#   - La tabla de skills tiene 7 columnas (Skill, Conjunto, Invocaciones, Barra, Sesiones, Sesion principal,
+#     Subagente) mas las de conjunto y agente, en vez de `Skill | Invocaciones | Sesiones`.
+#   - Seccion "Resumen" (no esta en el plan) tras la cabecera.
+#   - Dos tablas de versiones: por rango (con la nota de 2.1.310 a 2.1.327, G1 2) y versiones vistas.
+
+REPORT_SCHEMA = 1
+REPORT_MARKER = "<!-- synclayer-usage-report v%d -->" % REPORT_SCHEMA
+TOOL_NAME = "tools/usage_report.py"
+BAR_WIDTH = 10
+BAR_FULL = "\u2588"
+BAR_EMPTY = "\u2591"
+MAX_CELL_CHARS = 64
+MAX_TABLE_ROWS = 40
+MAX_VERSION_ROWS = 40
+ALIAS_RE = re.compile(r"p-[0-9a-f]{8}\Z")
+SMALL_MARK = " *"
+MSG_REPORT_METRICS = "render_project_report necesita un UsageMetrics"
+MSG_REPORT_ALIAS = "alias de proyecto invalido: debe ser p- y 8 hexadecimales en minuscula"
+MSG_REPORT_DATE = "fecha de generacion invalida: debe ser datetime.date o None"
+UNKNOWN_WARNING = "aviso no reconocido"
+LABEL_MAIN_READ = "sesiones principales leidas"
+
+# "Como leer estos numeros" (texto fijo). Las limitaciones de repeticiones y de skills salen de
+# REPEAT_LIMITATIONS y SKILL_LIMITATIONS (T3, T4) y se vuelcan tal cual debajo.
+HOW_TO_READ = (
+    "No mide la calidad del resultado de un agente ni el costo en dinero: una llamada con menos tokens no"
+    " dice nada sobre su resultado.",
+    "No muestra costos. Los tokens no son una factura (la cach\u00e9 le\u00edda se cobra distinto) y cualquier costo"
+    " ser\u00eda una estimaci\u00f3n a precio de lista; aqu\u00ed no se calcula.",
+    "Una llamada es un archivo de subagente (`agent-<id>.jsonl`). Los tokens por llamada suman entrada,"
+    " salida, cach\u00e9 escrita y cach\u00e9 le\u00edda; una respuesta repartida en varias l\u00edneas se cuenta una vez (se"
+    " deduplica por `message.id`).",
+    "La duraci\u00f3n es aproximada: \u00faltima marca de tiempo menos la primera. Incluye esperas de herramientas y"
+    " de permisos.",
+    "Con n < 10 llamadas (marca `*`, pocas muestras) la mediana y el p90 dicen poco.",
+    "Mediana: con n par, media de los dos centrales redondeada al entero (medio hacia arriba). p90: el valor"
+    " en la posici\u00f3n ceil(0,9 n) de la lista ordenada. Los porcentajes se redondean al entero m\u00e1s cercano"
+    " (medio hacia arriba); `<1 %` es un valor distinto de cero que redondea a 0.",
+    "Las repeticiones son una inferencia, no un reintento confirmado (ver abajo).",
+    "Las versiones 2.1.310 a 2.1.327 de Claude Code pueden inflar los tokens por reintentos y no se corrige"
+    " num\u00e9ricamente. Comparar entre rangos de versi\u00f3n es solo indicativo.",
+    "Los n\u00fameros dependen de un formato interno de Claude Code que no est\u00e1 garantizado y puede cambiar sin"
+    " aviso.",
+    "Solo se leen las carpetas de transcripciones elegidas para este proyecto: las sesiones abiertas desde"
+    " una subcarpeta o un worktree viven en otra carpeta y no se incluyen salvo que se indique.",
+)
+PRIVACY_NOTES = (
+    "Este archivo no contiene contenido de conversaciones ni rutas, pero revela volumen de uso. Es local: no"
+    " lo subas a git ni lo compartas sin revisarlo.",
+    "El alias `p-<8 hex>` es un hash sin sal del nombre de la carpeta del proyecto: quien conozca la ruta"
+    " puede recalcularlo. No es anonimato.",
+    "Los nombres de skills de usuario y el prefijo de un plugin (`plugin:<prefijo>`) salen tal cual: pueden"
+    " revelar nombres privados.",
+    "Un agente de proyecto con el mismo nombre que uno de SyncLayer cuenta como SyncLayer.",
+)
+KNOWN_WARNINGS = frozenset((
+    WARN_NO_MESSAGE_ID, WARN_ID_REPEATED, WARN_ID_CAP, WARN_SKILL_ID_REPEATED, WARN_SKILL_ID_CAP,
+    WARN_MAIN_HARDLINK, WARN_MAIN_CAP, WARN_MAIN_UNREADABLE,
+))
+NOTE_DOUBTFUL_RANGE = "dudoso: tokens posiblemente inflados por reintentos (corregido en 2.1.328)"
+NOTE_NO_RANGE = "sin versi\u00f3n en las l\u00edneas o versi\u00f3n no reconocible"
+LEGEND_SMALL = "`*`: n < %d, pocas muestras. La mediana y el p90 dicen poco." % SMALL_N
+
+# Contadores de la lectura completa, en dos listas CERRADAS (cada etiqueta de READ_QUALITY_LABELS esta en una
+# sola). INFORMATIVOS: dicen que se leyo o se saco a proposito, no que algo fallo. El resto son INCIDENCIAS.
+READ_INFO_LABELS = (
+    "hardlinks duplicados dentro de projects",
+    "lineas synthetic excluidas",
+    "sesiones principales leidas",
+)
+READ_INCIDENT_LABELS = tuple(label for label in READ_QUALITY_LABELS if label not in READ_INFO_LABELS)
+# Incidencias con aviso propio en la cabecera (ReadResult.warnings): no se cuentan otra vez en el resumen.
+READ_WARNED = {
+    "usage sin message.id": WARN_NO_MESSAGE_ID,
+    "message.id repetido entre archivos": WARN_ID_REPEATED,
+    "message.id sin deduplicar entre archivos (tope)": WARN_ID_CAP,
+    "skills: id repetido entre archivos": WARN_SKILL_ID_REPEATED,
+    "skills: ids sin deduplicar (tope)": WARN_SKILL_ID_CAP,
+    "sesiones principales omitidas por enlace duro": WARN_MAIN_HARDLINK,
+    "sesiones principales omitidas por tope de tamano": WARN_MAIN_CAP,
+    "sesiones principales ilegibles": WARN_MAIN_UNREADABLE,
+}
+
+def _bar(value, maximum) -> str:
+    """Barra de BAR_WIDTH caracteres proporcional al maximo de la columna. Redondeo al mas cercano (medio
+    hacia arriba) con enteros; un valor distinto de cero lleva al menos un bloque; maximo <= 0: vacia."""
+    if value is None or maximum is None or maximum <= 0 or value <= 0:
+        return BAR_EMPTY * BAR_WIDTH
+    filled = (2 * BAR_WIDTH * value + maximum) // (2 * maximum)
+    filled = min(BAR_WIDTH, max(1, filled))
+    return BAR_FULL * filled + BAR_EMPTY * (BAR_WIDTH - filled)
+
+
+def _num(value) -> str:
+    return "-" if value is None else "%d" % value
+
+
+def _tenths(value) -> str:
+    if value is None:
+        return "-"
+    whole, tenth = divmod(value, 10)
+    return "%d.%d" % (whole, tenth)
+
+
+def _percent(part, whole) -> str:
+    if whole <= 0:
+        return "-"
+    if part <= 0:
+        return "0 %"
+    rounded = (200 * part + whole) // (2 * whole)
+    return "<1 %" if rounded == 0 else "%d %%" % rounded
+
+
+def _plural(count, one, many) -> str:
+    return "%d %s" % (count, one if count == 1 else many)
+
+
+def _code(text) -> str:
+    """Texto variable seguro para una celda o una linea: ASCII imprimible entre comillas invertidas, `|`
+    escapado, sin saltos de linea ni comillas invertidas propias, y acotado a MAX_CELL_CHARS."""
+    if not isinstance(text, str):
+        return "`(no cadena)`"
+    if text == "":
+        return "`(vacio)`"
+    if len(text) > MAX_CELL_CHARS:
+        text = text[:MAX_CELL_CHARS - 3] + "..."
+    clean = "".join(ch if " " <= ch <= "~" else "?" for ch in text)
+    clean = clean.replace("\\", "/").replace("`", "'").replace("|", "\\|")
+    return "`" + clean + "`"
+
+
+def _small(value, small) -> str:
+    """Un entero (o None) con la marca de pocas muestras cuando `small` y hay valor."""
+    return _num(value) + (SMALL_MARK if small and value is not None else "")
+
+
+def _raw_table(headers, aligns, rows) -> list:
+    """Tabla Markdown sin leyenda. Todas las filas tienen las columnas de la cabecera (ValueError si no)."""
+    out = ["| " + " | ".join(headers) + " |",
+           "|" + "|".join("---:" if a == "r" else "---" for a in aligns) + "|"]
+    for row in rows:
+        if len(row) != len(headers):
+            raise ValueError("fila con columnas de mas o de menos")
+        out.append("| " + " | ".join(row) + " |")
+    return out
+
+
+def _legend(table_lines) -> list:
+    """La leyenda de `*` (con una linea en blanco antes) si alguna fila de la tabla lleva la marca; si no, nada.
+    Una celda de texto variable termina en comilla invertida (`_code`), nunca en " * |"."""
+    if any((SMALL_MARK + " |") in line for line in table_lines[2:]):
+        return ["", LEGEND_SMALL]
+    return []
+
+
+def _table(headers, aligns, rows) -> list:
+    """Tabla Markdown con su leyenda de `*` si lleva la marca."""
+    out = _raw_table(headers, aligns, rows)
+    return out + _legend(out)
+
+
+def _capped_table(headers, aligns, rows) -> list:
+    """Como _table, acotada a MAX_TABLE_ROWS filas, con una nota si se omiten (antes de la leyenda)."""
+    out = _raw_table(headers, aligns, rows[:MAX_TABLE_ROWS])
+    legend = _legend(out)
+    if len(rows) > MAX_TABLE_ROWS:
+        out += ["", "Se muestran las %d primeras filas de %d." % (MAX_TABLE_ROWS, len(rows))]
+    return out + legend
+
+
+def _bullets(lines) -> list:
+    return ["- " + line for line in lines]
+
+
+def _range_calls(metrics, name) -> int:
+    for row in metrics.total.versions:
+        if row.range == name:
+            return row.calls
+    return 0
+
+
+def _window_text(window) -> str:
+    if window.is_all:
+        return "todo el historial (sin ventana)"
+    return "%s a %s (UTC, ambos inclusive)" % (window.since.isoformat(), window.until.isoformat())
+
+
+def _versions_header(seen) -> str:
+    # las versiones de las metricas son texto de entrada para este generador: siempre por `_code`
+    if not seen:
+        return "sin versiones reconocibles"
+    if len(seen) == 1:
+        return "versi\u00f3n %s" % _code(seen[0][0])
+    return "versiones %s a %s (%d versiones)" % (_code(seen[0][0]), _code(seen[-1][0]), len(seen))
+
+
+def _recent_codes(labels) -> str:
+    """Hasta MAX_SHOWN_VERSIONS versiones, las mas recientes primero y cada una por `_code`, y cuantas quedan
+    fuera. Como `_recent_first` del lector, pero sin confiar en que las etiquetas ya vengan filtradas."""
+    ordered = sorted(labels, key=lambda v: (version_key(v), v), reverse=True)
+    text = ", ".join(_code(v) for v in ordered[:MAX_SHOWN_VERSIONS])
+    if len(ordered) > MAX_SHOWN_VERSIONS:
+        text += " (+%d m\u00e1s)" % (len(ordered) - MAX_SHOWN_VERSIONS)
+    return text
+
+
+def _read_incidents(metrics) -> list:
+    """Incidencias de la lectura completa: contadores distintos de cero de READ_INCIDENT_LABELS (las
+    informativas y las etiquetas fuera de la lista cerrada no cuentan)."""
+    return [(label, n) for label, n in metrics.read_quality if label in READ_INCIDENT_LABELS and n > 0]
+
+
+def _read_info(metrics) -> list:
+    """Contadores informativos distintos de cero. `sesiones principales leidas` va en la tabla base."""
+    return [(label, n) for label, n in metrics.read_quality
+            if label in READ_INFO_LABELS and label != LABEL_MAIN_READ and n > 0]
+
+
+def _unwarned_incidents(metrics) -> list:
+    """Las incidencias que la cabecera no avisa ya por su cuenta: sin aviso propio, o con aviso que las
+    metricas no traen. Evita decir dos veces lo mismo (el aviso y el resumen)."""
+    return [(label, n) for label, n in _read_incidents(metrics)
+            if label not in READ_WARNED or READ_WARNED[label] not in metrics.warnings]
+
+
+def _read_count(metrics, label) -> int:
+    return sum(n for name, n in metrics.read_quality if name == label)
+
+
+def _notices(metrics) -> list:
+    """Avisos de la cabecera: solo los que valen mas de cero."""
+    q = metrics.quality
+    out = []
+    doubtful = _range_calls(metrics, RANGE_DOUBTFUL)
+    if doubtful:
+        out.append("%s con versiones de Claude Code de 2.1.310 a 2.1.327: tokens posiblemente inflados por"
+                   " reintentos (corregido en 2.1.328)." % _plural(doubtful, "llamada", "llamadas"))
+    if metrics.unverified_versions:
+        out.append("hay versiones de Claude Code posteriores a la \u00faltima verificada (%s): %s. El formato"
+                   " interno puede haber cambiado."
+                   % (_code(metrics.verified_max), _recent_codes(metrics.unverified_versions)))
+    for text in metrics.warnings:
+        out.append(text if text in KNOWN_WARNINGS else UNKNOWN_WARNING)
+    if q.excluded == 1:
+        out.append("1 llamada da\u00f1ada queda fuera de los tokens, la duraci\u00f3n y las herramientas.")
+    elif q.excluded:
+        out.append("%d llamadas da\u00f1adas quedan fuera de los tokens, la duraci\u00f3n y las herramientas."
+                   % q.excluded)
+    if q.without_start:
+        text = _plural(q.without_start, "llamada sin hora de inicio", "llamadas sin hora de inicio")
+        if q.placed_by_fallback:
+            text += "; %s por la fecha de modificaci\u00f3n del archivo (aproximada)" % _plural(
+                q.placed_by_fallback, "ubicada", "ubicadas")
+        out.append(text + ".")
+    if q.hardlinks == 1:
+        out.append("1 llamada le\u00edda de un enlace duro aceptado.")
+    elif q.hardlinks:
+        out.append("%d llamadas le\u00eddas de enlaces duros aceptados." % q.hardlinks)
+    incidents = _unwarned_incidents(metrics)
+    if incidents:
+        out.append("la lectura tuvo incidencias en %s (detalle en Calidad de los datos)."
+                   % _plural(len(incidents), "contador", "contadores"))
+    return out
+
+
+def _header_section(metrics, alias, generated) -> list:
+    t = metrics.total
+    # un dato por linea con `> - `: varias lineas `> ...` seguidas serian un solo parrafo en GFM
+    lines = [
+        REPORT_MARKER,
+        "# Reporte de uso de subagentes: proyecto " + alias,
+        "",
+        "> - Ventana: " + _window_text(metrics.window),
+        "> - Llamadas: %d en %s" % (t.calls, _plural(t.sessions, "sesi\u00f3n", "sesiones")),
+        "> - Claude Code: " + _versions_header(metrics.versions_seen),
+        "> - Esquema del reporte: %d" % REPORT_SCHEMA,
+    ]
+    if generated is not None:
+        lines.append("> - Generado: " + generated.isoformat())
+    lines.append("> - Reporte local: no lo subas a git.")
+    for text in _notices(metrics):
+        lines.append("> - AVISO: " + text)
+    return lines + [""]
+
+
+def _summary_section(metrics) -> list:
+    t = metrics.total
+    lines = ["## Resumen", ""]
+    items = ["Llamadas: %d en %s (%s llamadas por sesi\u00f3n)" % (
+        t.calls, _plural(t.sessions, "sesi\u00f3n", "sesiones"), _tenths(t.calls_per_session_tenths))]
+    if not t.calls:
+        lines += _bullets(items)
+        return lines + ["", "Sin llamadas a subagentes en la ventana.", ""]
+    # pares (nombre, conjunto), que es como T3 agrupa: el numero coincide con las filas de las tablas
+    items.append("Agentes distintos (por nombre y conjunto): %d" % len(metrics.agents))
+    items.append("Tokens (suma de las llamadas con estad\u00edsticas): %s en %s" % (
+        _num(t.tokens.total.total), _plural(t.tokens.n, "llamada", "llamadas")))
+    items.append("Repeticiones consecutivas (inferido): %d" % t.repeats)
+    doubtful = _range_calls(metrics, RANGE_DOUBTFUL)
+    items.append("Llamadas en el rango de versi\u00f3n dudoso (2.1.310 a 2.1.327): %d de %d (%s)" % (
+        doubtful, t.calls, _percent(doubtful, t.calls)))
+    if t.excluded:
+        items.append("Llamadas da\u00f1adas, fuera de tokens, duraci\u00f3n y herramientas: %d de %d (%s)" % (
+            t.excluded, t.calls, _percent(t.excluded, t.calls)))
+    items.append("Skills: %s en %s" % (_plural(metrics.skills.calls, "invocaci\u00f3n", "invocaciones"),
+                                       _plural(metrics.skills.sessions, "sesi\u00f3n", "sesiones")))
+    return lines + _bullets(items) + [""]
+
+
+def _agent_sections(metrics) -> list:
+    agents = metrics.agents
+    max_calls = max([a.metrics.calls for a in agents] or [0])
+    max_tokens = max([a.metrics.tokens.total.total for a in agents] or [0])
+    calls_rows, token_rows, time_rows, model_rows = [], [], [], []
+    for a in agents:
+        m = a.metrics
+        # el par (Agente, Conjunto) va en TODAS las tablas por agente (ver la regla de la cabecera de la seccion)
+        name, group = _code(a.agent), _code(a.group)
+        calls_rows.append([name, group, _num(m.calls), _bar(m.calls, max_calls), _num(m.sessions),
+                           _tenths(m.calls_per_session_tenths), _num(m.repeats)])
+        tk = m.tokens
+        token_rows.append([
+            name, group, _small(tk.n, tk.total.small), _num(tk.total.total), _bar(tk.total.total, max_tokens),
+            _small(tk.total.median, tk.total.small), _small(tk.total.p90, tk.total.small),
+            _num(tk.input_tokens.median), _num(tk.output_tokens.median),
+            _num(tk.cache_creation_tokens.median), _num(tk.cache_read_tokens.median),
+            _num(tk.requests.median)])
+        time_rows.append([
+            name, group, _small(m.duration.median, m.duration.small),
+            _small(m.duration.p90, m.duration.small),
+            _small(m.tools.median, m.tools.small), _small(m.tools.p90, m.tools.small)])
+        for model, count in m.models:
+            model_rows.append([name, group, _code(model), _num(count)])
+    out = ["## Llamadas por agente", ""]
+    out += _capped_table(["Agente", "Conjunto", "Llamadas", "Barra", "Sesiones", "Llamadas/sesi\u00f3n",
+                          "Repeticiones (inferido)"], "llrlrrr", calls_rows)
+    out += ["", "## Tokens por llamada", ""]
+    out += _capped_table(
+        ["Agente", "Conjunto", "n", "Tokens (suma)", "Barra", "Mediana", "p90", "Entrada (med.)",
+         "Salida (med.)", "Cach\u00e9 escrita (med.)", "Cach\u00e9 le\u00edda (med.)", "Peticiones (med.)"],
+        "llrrlrrrrrrr", token_rows)
+    out += ["", "## Duraci\u00f3n y herramientas", ""]
+    out += _capped_table(["Agente", "Conjunto", "Duraci\u00f3n aprox. s (med.)", "p90", "Herramientas (med.)",
+                          "p90"], "llrrrr", time_rows)
+    out += ["", "## Modelo real", ""]
+    out += _capped_table(["Agente", "Conjunto", "Modelo", "Llamadas"], "lllr", model_rows)
+    return out + [""]
+
+
+def _group_section(metrics) -> list:
+    groups = metrics.groups
+    max_calls = max([g.metrics.calls for g in groups] or [0])
+    rows = []
+    for g in groups:
+        m = g.metrics
+        rows.append([_code(g.group), _num(g.agents), _num(m.calls), _bar(m.calls, max_calls),
+                     _small(m.tokens.total.median, m.tokens.total.small),
+                     _small(m.tokens.total.p90, m.tokens.total.small),
+                     _small(m.duration.median, m.duration.small), _small(m.tools.median, m.tools.small)])
+    out = ["## Por conjunto", ""]
+    out += _capped_table(["Conjunto", "Agentes", "Llamadas", "Barra", "Tokens/llamada (med.)", "p90",
+                          "Duraci\u00f3n aprox. s (med.)", "Herramientas (med.)"], "lrrlrrrr", rows)
+    return out + [""]
+
+
+def _skills_section(metrics) -> list:
+    sk = metrics.skills
+    out = ["## Skills", ""]
+    if sk.calls == 0:
+        out.append("Sin invocaciones de skills en la ventana.")
+    else:
+        out.append("Invocaciones: %d en %s (%d en la sesi\u00f3n principal, %d en subagentes)." % (
+            sk.calls, _plural(sk.sessions, "sesi\u00f3n", "sesiones"), sk.main_calls, sk.subagent_calls))
+        rows = [r for r in sk.rows if r.calls > 0]
+        max_calls = max([r.calls for r in rows] or [0])
+        out += ["", "Por skill:", ""]
+        out += _capped_table(
+            ["Skill", "Conjunto", "Invocaciones", "Barra", "Sesiones", "Sesi\u00f3n principal", "Subagente"],
+            "llrlrrr",
+            [[_code(r.skill), _code(r.group), _num(r.calls), _bar(r.calls, max_calls), _num(r.sessions),
+              _num(r.main_calls), _num(r.subagent_calls)] for r in rows])
+        groups = [g for g in sk.groups if g.calls > 0]
+        out += ["", "Por conjunto de skill:", ""]
+        out += _capped_table(
+            ["Conjunto", "Skills", "Invocaciones", "Sesiones"], "lrrr",
+            [[_code(g.group), _num(g.skills), _num(g.calls), _num(g.sessions)] for g in groups])
+        linked = [r for r in sk.by_agent if r.calls > 0]
+        if linked:
+            out += ["", "Por agente (skills invocadas dentro de subagentes):", ""]
+            out += _capped_table(
+                ["Agente", "Conjunto del agente", "Skill", "Invocaciones"], "lllr",
+                [[_code(r.agent), _code(r.agent_group), _code(r.skill), _num(r.calls)] for r in linked])
+    out += ["", "No se atribuyen tokens a una skill: corre en el contexto de la sesi\u00f3n que la invoca.", ""]
+    return out
+
+
+def _version_section(metrics) -> list:
+    rows = []
+    for row in metrics.total.versions:
+        if row.range == RANGE_NONE and row.calls == 0:
+            continue
+        note = NOTE_DOUBTFUL_RANGE if row.inflated else (NOTE_NO_RANGE if row.range == RANGE_NONE else "")
+        tk = row.tokens
+        rows.append([_code(row.range), _num(row.calls), _small(tk.total.median, tk.total.small),
+                     _small(tk.total.p90, tk.total.small), note])
+    out = ["## Versiones de Claude Code", "", "Por rango de versi\u00f3n:", ""]
+    out += _table(["Rango", "Llamadas", "Tokens/llamada (med.)", "p90", "Nota"], "lrrrl", rows)
+    out += ["", "Comparar entre rangos es solo indicativo.", ""]
+    seen = list(metrics.versions_seen)
+    omitted = max(0, len(seen) - MAX_VERSION_ROWS)
+    version_rows = []
+    for version, count in seen[omitted:]:
+        if _range_of(version_key(version)) == RANGE_DOUBTFUL:
+            note = "dudosa: posible conteo doble (2.1.310 a 2.1.327)"
+        elif is_unverified(version):
+            note = "no verificada (mayor que %s)" % _code(metrics.verified_max)
+        else:
+            note = ""
+        version_rows.append([_code(version), _num(count), note])
+    if version_rows:
+        out += ["Versiones vistas:", ""]
+        out += _table(["Versi\u00f3n", "Llamadas", "Nota"], "lrl", version_rows)
+        if omitted:
+            out += ["", "Solo se muestran las %d versiones m\u00e1s recientes; %s." % (
+                MAX_VERSION_ROWS, "se omite la versi\u00f3n m\u00e1s antigua" if omitted == 1
+                else "se omiten las %d versiones m\u00e1s antiguas" % omitted)]
+        out.append("")
+    return out
+
+
+def _quality_section(metrics) -> list:
+    q = metrics.quality
+    rows = [["Llamadas le\u00eddas (todas las ventanas)", _num(q.calls_read)],
+            ["Llamadas en la ventana", _num(q.calls_in_window)],
+            ["Llamadas fuera de la ventana", _num(q.calls_outside_window)],
+            ["Llamadas con estad\u00edsticas de tokens", _num(q.tokens_calls)]]
+    # solo si son distintos de cero (los cuatro de arriba van siempre)
+    problems = (
+        ("Llamadas da\u00f1adas (fuera de tokens, duraci\u00f3n y herramientas)", q.excluded),
+        ("Llamadas da\u00f1adas por l\u00ednea intermedia corrupta", q.excluded_corrupt_line),
+        ("Llamadas da\u00f1adas por archivo ilegible", q.excluded_unreadable),
+        ("Llamadas da\u00f1adas por tope de tama\u00f1o", q.excluded_cap),
+        ("Llamadas sin hora de inicio", q.without_start),
+        ("Llamadas ubicadas por la fecha de modificaci\u00f3n del archivo (aproximada)", q.placed_by_fallback),
+        ("Llamadas sin ninguna hora (le\u00eddas en total)", q.without_any_time),
+        ("Llamadas sin usage", q.without_usage),
+        ("Llamadas con todos sus `message.id` ya contados en otro archivo", q.all_ids_repeated),
+        ("Llamadas sin meta (agente `(sin-meta)`)", q.without_meta),
+        ("Llamadas sin versi\u00f3n", q.without_version),
+        ("Llamadas con versi\u00f3n no reconocible", q.unrecognized_version),
+        ("Llamadas con versiones en varios rangos", q.multiple_ranges),
+        ("Llamadas con una versi\u00f3n posterior a la verificada", q.unverified_calls),
+        ("Enlaces duros aceptados (hardlinks)", q.hardlinks),
+        ("L\u00edneas sobredimensionadas descartadas", q.oversize_lines),
+        ("Llamadas con modelo distinto del que declara el meta", q.model_mismatch),
+    )
+    for label, value in problems:
+        if value:
+            rows.append([label, _num(value)])
+    main_read = _read_count(metrics, LABEL_MAIN_READ)
+    if main_read:
+        rows.append(["Sesiones principales le\u00eddas (solo para contar skills)", _num(main_read)])
+    sq = metrics.skills.quality
+    if sq.uses_read:
+        rows.append(["Skills: invocaciones le\u00eddas", _num(sq.uses_read)])
+        if sq.outside_window:
+            rows.append(["Skills: invocaciones fuera de la ventana", _num(sq.outside_window)])
+        if sq.without_time:
+            rows.append(["Skills: invocaciones sin hora (solo cuentan con todo el historial)",
+                         _num(sq.without_time)])
+        if sq.other_name:
+            rows.append(["Skills: invocaciones con nombre no v\u00e1lido (se muestran como `(otra skill)`)",
+                         _num(sq.other_name)])
+    out = ["## Calidad de los datos", ""] + _table(["Concepto", "Cantidad"], "lr", rows)
+    incidents = _read_incidents(metrics)
+    if incidents:
+        out += ["", "Lectura completa (no solo la ventana), contadores de incidencias distintos de cero:", ""]
+        out += _table(["Contador", "Cantidad"], "lr", [[_code(label), _num(n)] for label, n in incidents])
+    info = _read_info(metrics)
+    if info:
+        out += ["", "Lectura completa, contadores informativos (no son incidencias) distintos de cero:", ""]
+        out += _table(["Contador", "Cantidad"], "lr", [[_code(label), _num(n)] for label, n in info])
+    return out + [""]
+
+
+def _guide_section() -> list:
+    out = ["## C\u00f3mo leer estos n\u00fameros", ""] + _bullets(HOW_TO_READ)
+    out += ["", "### Repeticiones (inferido)", ""] + _bullets(REPEAT_LIMITATIONS)
+    out += ["", "### Skills", ""] + _bullets(SKILL_LIMITATIONS)
+    return out + [""]
+
+
+def _footer_section(metrics, alias) -> list:
+    out = ["## Pie", ""] + _bullets([
+        "report_schema: %d" % REPORT_SCHEMA,
+        "herramienta: " + TOOL_NAME,
+        "ultima_version_verificada: " + _code(metrics.verified_max),
+        "proyecto: " + alias,
+    ])
+    return out + [""] + _bullets(PRIVACY_NOTES)
+
+
+def render_project_report(metrics, project_alias, generated=None) -> str:
+    """Markdown del reporte local de UN proyecto (ver la cabecera de la seccion). Pura.
+
+    `metrics`: UsageMetrics de las llamadas de ESE proyecto (el llamador filtra; este generador imprime
+    solo `project_alias`, nunca `metrics.projects`). `project_alias`: `p-<8 hex>` (ValueError si no
+    encaja: una ruta o un nombre real no puede colarse). `generated`: datetime.date inyectada o None; el
+    generador no lee el reloj. ValueError con mensaje fijo (sin eco del valor) ante argumentos invalidos.
+    Devuelve texto con LF y salto final; T7 lo escribe en UTF-8 sin BOM."""
+    if not isinstance(metrics, UsageMetrics):
+        raise ValueError(MSG_REPORT_METRICS)
+    if not isinstance(project_alias, str) or not ALIAS_RE.match(project_alias):
+        raise ValueError(MSG_REPORT_ALIAS)
+    if generated is not None and not _is_date(generated):
+        raise ValueError(MSG_REPORT_DATE)
+    lines = _header_section(metrics, project_alias, generated)
+    lines += _summary_section(metrics)
+    if metrics.total.calls:
+        lines += _agent_sections(metrics)
+        lines += _group_section(metrics)
+    lines += _skills_section(metrics)
+    if metrics.total.calls:
+        lines += _version_section(metrics)
+    lines += _quality_section(metrics)
+    lines += _guide_section()
+    lines += _footer_section(metrics, project_alias)
+    return "\n".join(lines) + "\n"
 
 
 def _fail(message: str, code: int, path=None, show_paths=False) -> int:

@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import unittest
 from unittest import mock
 
@@ -2475,8 +2476,8 @@ class ReaderAuditFixes(ReaderBase):
         self.assertEqual(res.quality["usage sin message.id"], 1)
         self.assertTrue(res.usage_without_message_id)
         self.assertEqual(res.warnings, [ur.WARN_NO_MESSAGE_ID])
-        ur.WARN_NO_MESSAGE_ID.encode("ascii")
-        clean = us.Tree(os.path.join(self.base, "limpio"))
+        self.assertIn("líneas", ur.WARN_NO_MESSAGE_ID)      # el texto del reporte lleva tildes (decision del propietario)
+        clean =us.Tree(os.path.join(self.base, "limpio"))
         clean.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
         res = self.read(clean)
         self.assertFalse(res.usage_without_message_id)
@@ -3354,11 +3355,12 @@ class ConsecutiveRepeats(unittest.TestCase):
         # distintos de un plan cuentan igual que un reintento
         self.assertEqual(self.repeats([mk(0, **self._t(0, 1)), mk(1, **self._t(50, 51))]), 1)
 
-    def test_limitations_text_for_the_report_is_fixed_ascii_and_covers_each_limit(self):
+    def test_limitations_text_for_the_report_is_fixed_text_and_covers_each_limit(self):
         self.assertIsInstance(ur.REPEAT_LIMITATIONS, tuple)
         self.assertEqual(len(ur.REPEAT_LIMITATIONS), 6)
         for line in ur.REPEAT_LIMITATIONS:
-            line.encode("ascii")
+            line.encode("utf-8")
+        self.assertIn("señal", ur.REPEAT_LIMITATIONS[0])
         joined = " ".join(ur.REPEAT_LIMITATIONS)
         for needle in ("inferida", "paralelo", "sin hora de inicio", "fuera de la ventana", "sin meta",
                        "secuenciales"):
@@ -4061,9 +4063,9 @@ class SkillReading(ReaderBase):
         # y llegan a las metricas junto con el resto de los avisos
         self.assertEqual(agg(res).warnings, (ur.WARN_MAIN_HARDLINK,))
 
-    def test_main_session_warnings_are_fixed_ascii_text_and_limitations_are_documented(self):
+    def test_main_session_warnings_are_fixed_text_and_limitations_are_documented(self):
         for text in (ur.WARN_MAIN_HARDLINK, ur.WARN_MAIN_CAP, ur.WARN_MAIN_UNREADABLE) + ur.SKILL_LIMITATIONS:
-            text.encode("ascii")
+            text.encode("utf-8")
             self.assertNotIn("ZZMARK", text)
         self.assertEqual(len({ur.WARN_MAIN_HARDLINK, ur.WARN_MAIN_CAP, ur.WARN_MAIN_UNREADABLE}), 3)
         # sin sesiones omitidas no hay aviso
@@ -4648,6 +4650,1418 @@ class MakeWindowTypes(unittest.TestCase):
         self.assertEqual(ur.make_window(TODAY, since=d(2026, 3, 10)).until, TODAY)
         with self.assertRaises(ValueError):
             ur.make_window(TODAY, since=d(2026, 3, 10), until=d(2026, 3, 9))
+
+
+# --- T5: reporte de proyecto (texto Markdown, funcion pura) ---
+ALIAS = "p-0a1b2c3d"
+BAR_FULL = "\u2588"
+BAR_EMPTY = "\u2591"
+ACCENTED = "\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1\u00c1\u00c9\u00cd\u00d3\u00da\u00d1\u00fc"
+
+
+def render(source, uses=None, alias=ALIAS, **kw):
+    """Agrega `source` (llamadas) y genera el reporte de proyecto."""
+    if isinstance(source, ur.UsageMetrics):
+        metrics = source
+    else:
+        metrics = agg(source, skill_uses=uses) if uses is not None else agg(source)
+    return ur.render_project_report(metrics, alias, **kw)
+
+
+def md_tables(text):
+    """Bloques de lineas consecutivas que empiezan por '|' (tablas Markdown)."""
+    blocks, cur = [], []
+    for line in text.split("\n"):
+        if line.startswith("|"):
+            cur.append(line)
+        elif cur:
+            blocks.append(cur)
+            cur = []
+    if cur:
+        blocks.append(cur)
+    return blocks
+
+
+def columns(line):
+    """Numero de celdas de una fila (los `\\|` escapados no separan)."""
+    return len(re.split(r"(?<!\\)\|", line)) - 2
+
+
+def cells_of(line):
+    return [c.strip() for c in re.split(r"(?<!\\)\|", line)[1:-1]]
+
+
+def table_with(text, header_start):
+    for block in md_tables(text):
+        if block[0].startswith(header_start):
+            return block
+    raise AssertionError("tabla no encontrada: " + header_start)
+
+
+def sample_calls():
+    """Cinco llamadas: forge x2 (sesiones s1, s2), scout, un agente de plugin y otro de usuario."""
+    return [
+        mk(1, session="s1", input_tokens=100, output_tokens=50, cache_creation_tokens=20,
+           cache_read_tokens=30, tools=3, **span(60)),
+        mk(2, session="s2", input_tokens=10, output_tokens=5, cache_creation_tokens=2,
+           cache_read_tokens=3, tools=1, **span(20)),
+        mk(3, session="s1", agent="scout", agent_group="SyncLayer", versions=("2.1.315",), tools=0,
+           **span(5, hour=11)),
+        mk(4, session="s1", agent="plugin:pl", agent_group="plugin:pl", versions=("2.1.300",),
+           **span(8, hour=12)),
+        mk(5, session="s3", agent="(otro agente)", agent_group="otros", versions=("2.1.340",),
+           **span(9, hour=13)),
+    ]
+
+
+class ReportBars(unittest.TestCase):
+    def test_bar_is_ten_chars_proportional_to_the_max_with_a_one_block_floor(self):
+        bar = ur._bar
+        self.assertEqual(bar(100, 100), BAR_FULL * 10)
+        self.assertEqual(bar(0, 100), BAR_EMPTY * 10)
+        self.assertEqual(bar(1, 1000), BAR_FULL + BAR_EMPTY * 9)     # distinto de cero: minimo un bloque
+        self.assertEqual(bar(50, 100), BAR_FULL * 5 + BAR_EMPTY * 5)
+        # redondeo al mas cercano, medio hacia arriba: 14 de 100 = 1,4 -> 1; 15 = 1,5 -> 2; 16 -> 2
+        self.assertEqual(bar(14, 100).count(BAR_FULL), 1)
+        self.assertEqual(bar(15, 100).count(BAR_FULL), 2)
+        self.assertEqual(bar(16, 100).count(BAR_FULL), 2)
+        self.assertEqual(bar(94, 100).count(BAR_FULL), 9)
+        self.assertEqual(bar(95, 100).count(BAR_FULL), 10)
+        for v in range(0, 101):
+            self.assertEqual(len(bar(v, 100)), 10)
+        # maximo cero o ausente: barra vacia, sin dividir entre cero
+        self.assertEqual(bar(0, 0), BAR_EMPTY * 10)
+        self.assertEqual(bar(5, 0), BAR_EMPTY * 10)
+        self.assertEqual(bar(None, 10), BAR_EMPTY * 10)
+        # un valor mayor que el maximo no se sale de la barra
+        self.assertEqual(bar(500, 100), BAR_FULL * 10)
+        # enormes: sin perdida de precision
+        big = 10 ** 18
+        self.assertEqual(bar(big, big), BAR_FULL * 10)
+        self.assertEqual(bar(big // 2, big), BAR_FULL * 5 + BAR_EMPTY * 5)
+
+
+class ReportNumberFormats(unittest.TestCase):
+    def test_numbers_are_plain_integers_and_none_is_a_dash(self):
+        self.assertEqual(ur._num(0), "0")
+        self.assertEqual(ur._num(1234567), "1234567")       # sin separador de miles (3.6 del plan)
+        self.assertEqual(ur._num(10 ** 18), "1000000000000000000")
+        self.assertEqual(ur._num(None), "-")
+
+    def test_percent_rounds_half_up_and_flags_less_than_one(self):
+        pct = ur._percent
+        self.assertEqual(pct(1, 2), "50 %")
+        self.assertEqual(pct(1, 3), "33 %")        # 33,33
+        self.assertEqual(pct(2, 3), "67 %")        # 66,67
+        self.assertEqual(pct(1, 8), "13 %")        # 12,5 -> medio hacia arriba
+        self.assertEqual(pct(5, 1000), "1 %")      # 0,5 -> 1
+        self.assertEqual(pct(4, 1000), "<1 %")     # 0,4 no es cero pero redondea a 0
+        self.assertEqual(pct(0, 10), "0 %")
+        self.assertEqual(pct(10, 10), "100 %")
+        self.assertEqual(pct(0, 0), "-")           # sin base no hay porcentaje
+
+    def test_tenths_use_a_dot(self):
+        self.assertEqual(ur._tenths(15), "1.5")
+        self.assertEqual(ur._tenths(20), "2.0")
+        self.assertEqual(ur._tenths(5), "0.5")
+        self.assertEqual(ur._tenths(1234), "123.4")
+        self.assertEqual(ur._tenths(None), "-")
+
+
+class ReportEscaping(unittest.TestCase):
+    def test_code_cell_never_breaks_a_table(self):
+        code = ur._code
+        self.assertEqual(code("forge"), "`forge`")
+        self.assertEqual(code("a|b"), "`a\\|b`")
+        self.assertEqual(code("a`b"), "`a'b`")
+        self.assertEqual(code("a\nb\rc\td"), "`a?b?c?d`")
+        self.assertEqual(code("a\\b"), "`a/b`")
+        self.assertEqual(code("\u00e9\u2588"), "`??`")          # fuera de ASCII imprimible
+        self.assertEqual(code(""), "`(vacio)`")
+        self.assertEqual(code(None), "`(no cadena)`")
+        self.assertEqual(code(123), "`(no cadena)`")
+        long = code("x" * 500)
+        self.assertEqual(len(long), ur.MAX_CELL_CHARS + 2)
+        self.assertTrue(long.endswith("...`"))
+
+    def test_hostile_names_keep_the_columns(self):
+        calls = [mk(1, agent="a|b\nc`d\\e" + "x" * 100, agent_group="otros|x", model="m|\nn",
+                    models=("m|\nn",)),
+                 mk(2, agent="(otro agente)", agent_group="plugin:p|q")]
+        text = render(calls)
+        for block in md_tables(text):
+            self.assertEqual(len({columns(line) for line in block}), 1, block[0])
+        self.assertNotIn("\r", text)
+        self.assertNotIn("a|b", text)
+
+
+class ReportShape(unittest.TestCase):
+    def setUp(self):
+        self.text = render(sample_calls(), generated=datetime.date(2026, 4, 1))
+
+    def test_bytes_are_lf_ascii_plus_bars_and_end_with_one_newline(self):
+        text = self.text
+        self.assertTrue(text.startswith("<!-- synclayer-usage-report v1 -->\n"))
+        self.assertEqual(ur.REPORT_MARKER, "<!-- synclayer-usage-report v1 -->")
+        self.assertNotIn("\r", text)
+        self.assertFalse(text.startswith("\ufeff"))
+        self.assertTrue(text.endswith("\n"))
+        self.assertFalse(text.endswith("\n\n"))
+        self.assertNotIn("\n\n\n", text)
+        # el reporte lleva tildes y eñes (decision del propietario): ASCII, las barras y esas letras
+        allowed = {BAR_FULL, BAR_EMPTY} | set(ACCENTED)
+        for ch in text:
+            self.assertTrue(ch in allowed or ch == "\n" or " " <= ch <= "~", repr(ch))
+        self.assertTrue(any(ch in ACCENTED for ch in text))
+        raw = text.encode("utf-8")
+        self.assertEqual(raw.decode("utf-8"), text)
+        self.assertNotIn(b"\r", raw)
+        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+
+    def test_sections_in_order_with_the_planned_titles(self):
+        titles = [line for line in self.text.split("\n") if line.startswith("#")]
+        self.assertEqual(titles[:11], [
+            "# Reporte de uso de subagentes: proyecto " + ALIAS,
+            "## Resumen",
+            "## Llamadas por agente",
+            "## Tokens por llamada",
+            "## Duración y herramientas",
+            "## Modelo real",
+            "## Por conjunto",
+            "## Skills",
+            "## Versiones de Claude Code",
+            "## Calidad de los datos",
+            "## Cómo leer estos números",
+        ])
+        self.assertEqual(titles[-1], "## Pie")
+
+    def test_table_headers_match_the_plan(self):
+        heads = [block[0] for block in md_tables(self.text)]
+        self.assertIn("| Agente | Conjunto | Llamadas | Barra | Sesiones | Llamadas/sesión | Repeticiones (inferido) |",
+                      heads)
+        self.assertIn("| Agente | Conjunto | n | Tokens (suma) | Barra | Mediana | p90 | Entrada (med.) |"
+                      " Salida (med.) | Caché escrita (med.) | Caché leída (med.) | Peticiones (med.) |", heads)
+        self.assertIn("| Agente | Conjunto | Duración aprox. s (med.) | p90 | Herramientas (med.) | p90 |", heads)
+        self.assertIn("| Agente | Conjunto | Modelo | Llamadas |", heads)
+        self.assertIn("| Conjunto | Agentes | Llamadas | Barra | Tokens/llamada (med.) | p90 |"
+                      " Duración aprox. s (med.) | Herramientas (med.) |", heads)
+        self.assertIn("| Rango | Llamadas | Tokens/llamada (med.) | p90 | Nota |", heads)
+        self.assertIn("| Versión | Llamadas | Nota |", heads)
+
+    def test_every_table_has_the_same_column_count_in_all_rows_and_a_separator(self):
+        blocks = md_tables(self.text)
+        self.assertGreaterEqual(len(blocks), 8)
+        for block in blocks:
+            self.assertGreaterEqual(len(block), 3, block[0])     # cabecera, separador y una fila
+            self.assertRegex(block[1], r"^\|(---:?\|)+$")
+            self.assertEqual(len({columns(line) for line in block}), 1, block[0])
+
+    def test_header_has_window_alias_schema_and_the_injected_date_only(self):
+        head = self.text.split("## Resumen")[0]
+        self.assertIn("2026-03-02 a 2026-03-31 (UTC, ambos inclusive)", head)
+        self.assertIn(ALIAS, head)
+        self.assertIn("Esquema del reporte: 1", head)
+        self.assertIn("Generado: 2026-04-01", head)
+        self.assertIn("no lo subas a git", head)
+        # sin fecha inyectada no hay linea de fecha, y el reporte no lee el reloj
+        self.assertNotIn("Generado", render(sample_calls()))
+        self.assertIn("Generado: 2030-01-02", render(sample_calls(), generated=datetime.date(2030, 1, 2)))
+
+    def test_header_data_are_one_bullet_per_line_so_gfm_does_not_merge_them(self):
+        # varias lineas `> texto` seguidas forman UN parrafo en GFM: cada dato va en su propia linea `> - `
+        head = self.text.split("## Resumen")[0].split("\n")
+        quoted = [line for line in head if line.startswith(">")]
+        self.assertGreaterEqual(len(quoted), 6)
+        for line in quoted:
+            self.assertTrue(line.startswith("> - "), line)
+        self.assertIn("> - Ventana: 2026-03-02 a 2026-03-31 (UTC, ambos inclusive)", head)
+        self.assertIn("> - Llamadas: 5 en 3 sesiones", head)
+        self.assertIn("> - Generado: 2026-04-01", head)
+        self.assertIn("> - Reporte local: no lo subas a git.", head)
+        self.assertTrue(any(line.startswith("> - AVISO: ") for line in head))
+        # el bloque de cita no se interrumpe y el titulo va antes, con una linea en blanco
+        first = head.index(quoted[0])
+        self.assertEqual(head[first - 1], "")
+        self.assertEqual(head[first:first + len(quoted)], quoted)
+
+    def test_all_time_window_is_named(self):
+        text = render(agg(sample_calls(), window=ur.make_window(TODAY, all_time=True)))
+        self.assertIn("todo el historial", text.split("## Resumen")[0])
+
+    def test_footer_has_schema_tool_verified_max_alias_and_privacy_warnings(self):
+        foot = self.text.split("## Pie")[1]
+        self.assertIn("- report_schema: 1", foot)
+        self.assertIn("- herramienta: tools/usage_report.py", foot)
+        self.assertIn("- ultima_version_verificada: `" + ur.VERIFIED_MAX + "`", foot)
+        self.assertIn("- proyecto: " + ALIAS, foot)
+        self.assertIn("no contiene contenido de conversaciones ni rutas, pero revela volumen de uso", foot)
+        self.assertIn("hash sin sal", foot)
+        self.assertIn("No es anonimato", foot)
+        self.assertIn("mismo nombre que uno de SyncLayer cuenta como SyncLayer", foot)
+
+
+class ReportDeterminism(unittest.TestCase):
+    def test_same_input_same_bytes_in_any_order(self):
+        calls = sample_calls()
+        day = datetime.date(2026, 4, 1)
+        base = render(calls, generated=day).encode("utf-8")
+        rnd = random.Random(5)
+        for _ in range(5):
+            shuffled = list(calls)
+            rnd.shuffle(shuffled)
+            self.assertEqual(render(shuffled, generated=day).encode("utf-8"), base)
+        self.assertEqual(render(calls, generated=day).encode("utf-8"), base)
+
+    def test_does_not_read_the_clock(self):
+        class Boom(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                raise AssertionError("el generador leyo el reloj")
+
+            @classmethod
+            def utcnow(cls):
+                raise AssertionError("el generador leyo el reloj")
+
+        metrics = agg(sample_calls())
+        with mock.patch.object(datetime, "datetime", Boom), \
+                mock.patch("time.time", side_effect=AssertionError("reloj")):
+            ur.render_project_report(metrics, ALIAS)
+
+    def test_does_no_io(self):
+        metrics = agg(sample_calls())
+
+        def boom(*a, **k):
+            raise AssertionError("E/S en el generador")
+
+        with mock.patch("builtins.open", boom), mock.patch.object(os, "stat", boom), \
+                mock.patch.object(os, "lstat", boom), mock.patch.object(os, "scandir", boom), \
+                mock.patch.object(os, "listdir", boom), mock.patch.object(os, "open", boom), \
+                mock.patch.object(os, "fstat", boom), mock.patch("sys.stdout", new=None), \
+                mock.patch("sys.stderr", new=None):
+            ur.render_project_report(metrics, ALIAS)
+
+    def test_input_metrics_are_not_modified(self):
+        metrics = agg(sample_calls())
+        before = repr(metrics)
+        ur.render_project_report(metrics, ALIAS)
+        self.assertEqual(repr(metrics), before)
+
+
+class ReportArguments(unittest.TestCase):
+    def test_alias_must_be_p_plus_eight_lowercase_hex(self):
+        metrics = agg(sample_calls())
+        for bad in ("", "p-123", "p-0A1B2C3D", "p-0a1b2c3d4", "c--Users-me-proj", "p-0a1b2c3g", None, 5,
+                    "p-0a1b2c3d\n", "../p-0a1b2c3d", "C:\\proj", " p-0a1b2c3d"):
+            with self.subTest(alias=bad):
+                with self.assertRaises(ValueError):
+                    ur.render_project_report(metrics, bad)
+        ur.render_project_report(metrics, "p-00000000")
+
+    def test_generated_must_be_a_date_or_none(self):
+        metrics = agg(sample_calls())
+        for bad in (datetime.datetime(2026, 4, 1, 12), "2026-04-01", 20260401, True):
+            with self.subTest(generated=bad):
+                with self.assertRaises(ValueError):
+                    ur.render_project_report(metrics, ALIAS, generated=bad)
+        ur.render_project_report(metrics, ALIAS, generated=None)
+
+    def test_metrics_must_be_usage_metrics(self):
+        for bad in (None, [], "texto", agg(sample_calls()).total):
+            with self.subTest(kind=type(bad).__name__):
+                with self.assertRaises(ValueError):
+                    ur.render_project_report(bad, ALIAS)
+
+    def test_error_messages_do_not_echo_the_value(self):
+        with self.assertRaises(ValueError) as cm:
+            ur.render_project_report(agg(sample_calls()), "ZZMARK-alias-secreto")
+        self.assertNotIn("ZZMARK", str(cm.exception))
+
+
+class ReportAgentTables(unittest.TestCase):
+    def setUp(self):
+        self.text = render(sample_calls())
+
+    def row(self, header_start, first_cell):
+        for line in table_with(self.text, header_start)[2:]:
+            if line.startswith("| " + first_cell + " |"):
+                return cells_of(line)
+        raise AssertionError((header_start, first_cell))
+
+    def test_calls_table_values_by_hand(self):
+        # forge: 2 llamadas en 2 sesiones (s1, s2) -> 1.0 por sesion; max de llamadas = 2 -> barra llena
+        cells = self.row("| Agente | Conjunto | Llamadas", "`forge`")
+        self.assertEqual(cells[:3], ["`forge`", "`SyncLayer`", "2"])
+        self.assertEqual(cells[3], BAR_FULL * 10)
+        self.assertEqual(cells[4:6], ["2", "1.0"])
+        # scout: 1 llamada -> 1 de 2 = media barra; 1 sesion
+        cells = self.row("| Agente | Conjunto | Llamadas", "`scout`")
+        self.assertEqual(cells[2:6], ["1", BAR_FULL * 5 + BAR_EMPTY * 5, "1", "1.0"])
+        # el orden es el de las metricas: llamadas descendente, luego nombre
+        names = [cells_of(line)[0] for line in md_tables(self.text)[0][2:]]
+        self.assertEqual(names, ["`forge`", "`(otro agente)`", "`plugin:pl`", "`scout`"])
+
+    def test_tokens_table_values_by_hand(self):
+        # forge: llamada 1 = 100+50+20+30 = 200 tokens, llamada 2 = 10+5+2+3 = 20. suma 220; n = 2 (< 10: *)
+        # mediana (20+200+1)//2 = 110; p90 posicion 2 = 200; entrada [10, 100] -> (10+100+1)//2 = 55
+        cells = self.row("| Agente | Conjunto | n | Tokens", "`forge`")
+        self.assertEqual(cells[:4], ["`forge`", "`SyncLayer`", "2 *", "220"])
+        self.assertEqual(cells[5:7], ["110 *", "200 *"])
+        self.assertEqual(cells[7], "55")           # entrada (med.)
+        self.assertEqual(cells[8], "28")           # salida [5, 50] -> (5+50+1)//2 = 28
+        self.assertEqual(cells[9], "11")           # cache escrita [2, 20] -> (2+20+1)//2 = 11
+        self.assertEqual(cells[10], "17")          # cache leida [3, 30] -> (3+30+1)//2 = 17
+        self.assertEqual(cells[11], "1")           # peticiones [1, 1] -> 1
+        # la barra de tokens es proporcional al maximo de la columna (forge 220; scout 20 = 9 %: 1 bloque)
+        self.assertEqual(cells[4], BAR_FULL * 10)
+        cells = self.row("| Agente | Conjunto | n | Tokens", "`scout`")
+        self.assertEqual(cells[2:4], ["1 *", "20"])
+        self.assertEqual(cells[4], BAR_FULL + BAR_EMPTY * 9)
+
+    def test_duration_and_tools_by_hand(self):
+        # forge: duraciones [60, 20] -> (20+60+1)//2 = 40, p90 60; herramientas [3, 1] -> 2, p90 3
+        cells = self.row("| Agente | Conjunto | Duración", "`forge`")
+        self.assertEqual(cells[:2], ["`forge`", "`SyncLayer`"])
+        self.assertEqual(cells[2:6], ["40 *", "60 *", "2 *", "3 *"])
+        cells = self.row("| Agente | Conjunto | Duración", "`scout`")
+        self.assertEqual(cells[2:6], ["5 *", "5 *", "0 *", "0 *"])
+
+    def test_model_table_one_row_per_agent_and_model(self):
+        calls = [mk(1, model="claude-opus-4-1"), mk(2, model="claude-sonnet-4-5", models=("claude-sonnet-4-5",)),
+                 mk(3, model="mixto", models=("claude-opus-4-1", "claude-sonnet-4-5"))]
+        block = table_with(render(calls), "| Agente | Conjunto | Modelo")
+        self.assertEqual(block[2:], [
+            "| `forge` | `SyncLayer` | `claude-opus-4-1` | 1 |",
+            "| `forge` | `SyncLayer` | `claude-sonnet-4-5` | 1 |",
+            "| `forge` | `SyncLayer` | `mixto` | 1 |",
+        ])
+
+    def test_small_marker_only_when_n_is_under_ten(self):
+        calls = [mk(i, session="s%d" % i) for i in range(10)]
+        text = render(calls)
+        block = table_with(text, "| Agente | Conjunto | n |")
+        self.assertIn("| `forge` | `SyncLayer` | 10 | 200 |", block[2])
+        self.assertNotIn("*", block[2])
+        # n = 10 en todas partes: ninguna tabla lleva `*` ni leyenda (la guia final si nombra la marca)
+        self.assertNotIn("pocas muestras", text.split("## Cómo leer")[0])
+        text = render(calls[:9])
+        block = table_with(text, "| Agente | Conjunto | n |")
+        self.assertIn("| `forge` | `SyncLayer` | 9 * | 180 |", block[2])
+        self.assertIn("pocas muestras", text.split("## Tokens por llamada")[1].split("## Duración")[0])
+
+    def test_none_medians_are_a_dash_and_real_zero_is_zero(self):
+        # sin usage: n = 0, medianas None; la duracion y las herramientas si existen
+        text = render([no_usage(1, tools=0)])
+        self.assertEqual(cells_of(table_with(text, "| Agente | Conjunto | n |")[2]),
+                         ["`forge`", "`SyncLayer`", "0", "0", BAR_EMPTY * 10, "-", "-", "-", "-", "-", "-", "-"])
+        self.assertEqual(cells_of(table_with(text, "| Agente | Conjunto | Duración")[2]),
+                         ["`forge`", "`SyncLayer`", "10 *", "10 *", "0 *", "0 *"])
+        # tokens cero reales (usable con 0 tokens): "0", no "-"
+        text = render([mk(1, input_tokens=0, output_tokens=0, cache_creation_tokens=0, cache_read_tokens=0)])
+        self.assertEqual(cells_of(table_with(text, "| Agente | Conjunto | n |")[2])[:7],
+                         ["`forge`", "`SyncLayer`", "1 *", "0", BAR_EMPTY * 10, "0 *", "0 *"])
+
+    def test_huge_token_values_print_in_full(self):
+        big = 10 ** 15
+        text = render([mk(1, input_tokens=3 * big, output_tokens=0, cache_creation_tokens=0,
+                          cache_read_tokens=0)])
+        self.assertIn("| 1 * | 3000000000000000 |", table_with(text, "| Agente | Conjunto | n |")[2])
+        self.assertIn("3000000000000000 *", table_with(text, "| Agente | Conjunto | n |")[2])
+        self.assertIn("Tokens (suma de las llamadas con estadísticas): 3000000000000000", text)
+
+    def test_repeats_column_counts_inferred_repetitions(self):
+        calls = [mk(1, **span(10)), mk(2, **span(10, hour=11))]      # la segunda repite a la primera
+        self.assertEqual(cells_of(table_with(render(calls), "| Agente | Conjunto | Llamadas")[2])[-1], "1")
+
+    def test_single_agent_report_is_well_formed(self):
+        text = render([mk(1)])
+        self.assertEqual(len(md_tables(text)[0]), 3)
+        self.assertIn("Llamadas: 1 en 1 sesión", text.split("## Llamadas por agente")[0])
+
+    def test_group_table(self):
+        block = table_with(self.text, "| Conjunto | Agentes")
+        # SyncLayer: forge, scout (2 agentes, 3 llamadas); luego los de 1 llamada por nombre
+        self.assertEqual(cells_of(block[2])[:4], ["`SyncLayer`", "2", "3", BAR_FULL * 10])
+        self.assertEqual([cells_of(line)[0] for line in block[2:]], ["`SyncLayer`", "`otros`", "`plugin:pl`"])
+
+    def test_row_cap_adds_a_note(self):
+        calls = [mk(i, agent="plugin:p%d" % i, agent_group="plugin:p%d" % i, session="s%d" % i)
+                 for i in range(ur.MAX_TABLE_ROWS + 5)]
+        text = render(calls)
+        self.assertEqual(len(md_tables(text)[0]) - 2, ur.MAX_TABLE_ROWS)
+        self.assertIn("Se muestran las %d primeras filas de %d" % (ur.MAX_TABLE_ROWS, ur.MAX_TABLE_ROWS + 5), text)
+
+    def test_every_per_agent_table_and_the_group_table_are_capped_with_a_note(self):
+        # un agente y un conjunto por llamada: llamadas, tokens, duracion, modelo y por conjunto (5 tablas)
+        total = ur.MAX_TABLE_ROWS + 5
+        calls = [mk(i, agent="plugin:p%d" % i, agent_group="plugin:p%d" % i, session="s%d" % i)
+                 for i in range(total)]
+        text = render(calls)
+        heads = ("| Agente | Conjunto | Llamadas", "| Agente | Conjunto | n |", "| Agente | Conjunto | Duración",
+                 "| Agente | Conjunto | Modelo", "| Conjunto | Agentes")
+        for head in heads:
+            self.assertEqual(len(table_with(text, head)) - 2, ur.MAX_TABLE_ROWS, head)
+        self.assertEqual(text.count("Se muestran las %d primeras filas de %d." % (ur.MAX_TABLE_ROWS, total)), 5)
+
+    def test_same_visible_name_in_two_groups_is_told_apart_in_every_per_agent_table(self):
+        # T3 agrupa por (agente, conjunto): `(otro agente)` sale en `otros` y en `plugin:(no-valido)`, y un
+        # agente hostil tambien. Las tres tablas por agente llevan la columna Conjunto y no hay etiquetas
+        # compuestas. REGLA para T6 (reporte global): toda tabla por agente lleva `Conjunto`.
+        calls = [mk(1, agent="(otro agente)", agent_group="otros"),
+                 mk(2, agent="(otro agente)", agent_group="plugin:(no-valido)"),
+                 mk(3, agent="a|b\nZZHOST", agent_group="otros")]
+        text = render(calls)
+        for head in ("| Agente | Conjunto | Llamadas", "| Agente | Conjunto | n |", "| Agente | Conjunto | Duración",
+                     "| Agente | Conjunto | Modelo"):
+            rows = [cells_of(line)[:2] for line in table_with(text, head)[2:]]
+            self.assertEqual(len(rows), 3, head)
+            self.assertEqual(len({tuple(r) for r in rows}), 3, head)
+            self.assertIn(["`(otro agente)`", "`otros`"], rows, head)
+            self.assertIn(["`(otro agente)`", "`plugin:(no-valido)`"], rows, head)
+            self.assertNotIn("ZZHOST|", "".join(table_with(text, head)))
+        # el conteo del resumen coincide con su texto: pares (nombre, conjunto)
+        self.assertIn("- Agentes distintos (por nombre y conjunto): 3", text)
+        self.assertNotIn("por nombre visible", text)
+        # y con un solo conjunto por nombre, ambos criterios darian lo mismo
+        self.assertIn("- Agentes distintos (por nombre y conjunto): 1", render([mk(1), mk(2)]))
+
+
+class ReportZeroCalls(unittest.TestCase):
+    def test_empty_window_report_has_no_agent_tables_but_keeps_the_frame(self):
+        text = render([])
+        self.assertTrue(text.startswith(ur.REPORT_MARKER + "\n"))
+        self.assertIn("Sin llamadas a subagentes en la ventana.", text)
+        self.assertNotIn("## Llamadas por agente", text)
+        self.assertNotIn("## Tokens por llamada", text)
+        self.assertNotIn("## Versiones de Claude Code", text)
+        for title in ("## Resumen", "## Skills", "## Calidad de los datos", "## Cómo leer estos números", "## Pie"):
+            self.assertIn(title, text)
+        for block in md_tables(text):
+            self.assertEqual(len({columns(line) for line in block}), 1)
+        self.assertIn("- proyecto: " + ALIAS, text)
+
+    def test_all_calls_outside_the_window(self):
+        text = render([mk(1, start=dt(1, month=1), end=dt(1, 0, 1, month=1))])
+        self.assertIn("Sin llamadas a subagentes en la ventana.", text)
+        self.assertIn("| Llamadas leídas (todas las ventanas) | 1 |", text)
+        self.assertIn("| Llamadas fuera de la ventana | 1 |", text)
+
+    def test_no_division_by_zero_anywhere_with_zero_calls(self):
+        render([])
+        render([], uses=[su(1)])
+        render(agg([], window=ur.make_window(TODAY, all_time=True)))
+
+
+class ReportVersions(unittest.TestCase):
+    def test_range_table_has_the_three_ranges_and_marks_the_doubtful_one(self):
+        block = table_with(render(sample_calls()), "| Rango")
+        names = [cells_of(line)[0] for line in block[2:]]
+        self.assertEqual(names, ["`<2.1.310`", "`2.1.310-2.1.327`", "`>=2.1.328`"])
+        self.assertIn("dudoso", block[3])
+        self.assertIn("inflados", block[3])
+        self.assertNotIn("dudoso", block[2])
+        self.assertNotIn("dudoso", block[4])
+        # llamadas por rango: 2.1.300 -> 1; 2.1.315 -> 1; 2.1.330 (x2) + 2.1.340 -> 3
+        self.assertEqual([cells_of(line)[1] for line in block[2:]], ["1", "1", "3"])
+
+    def test_unrecognised_range_row_only_when_there_are_such_calls(self):
+        block = table_with(render([mk(1, versions=())]), "| Rango")
+        self.assertEqual([cells_of(line)[0] for line in block[2:]],
+                         ["`<2.1.310`", "`2.1.310-2.1.327`", "`>=2.1.328`", "`sin version reconocible`"])
+
+    def test_versions_seen_table_flags_doubtful_and_unverified(self):
+        block = table_with(render(sample_calls()), "| Versión |")
+        rows = {cells_of(line)[0]: cells_of(line) for line in block[2:]}
+        self.assertEqual(list(rows), ["`2.1.300`", "`2.1.315`", "`2.1.330`", "`2.1.340`"])
+        self.assertIn("dudosa", rows["`2.1.315`"][2])
+        self.assertIn("no verificada", rows["`2.1.340`"][2])
+        self.assertNotIn("dudosa", rows["`2.1.300`"][2])
+        self.assertEqual(rows["`2.1.300`"][2], "")
+        self.assertIn("no verificada", rows["`2.1.330`"][2])    # 2.1.330 > VERIFIED_MAX (2.1.326)
+
+    def test_doubtful_range_notice_in_the_header_only_when_calls_fall_in_it(self):
+        with_notice = render(sample_calls()).split("## Resumen")[0]
+        self.assertIn("AVISO", with_notice)
+        self.assertIn("2.1.310 a 2.1.327", with_notice)
+        self.assertIn("inflados por reintentos (corregido en 2.1.328)", with_notice)
+        clean = render([mk(1, versions=("2.1.300",)), mk(2, versions=("2.1.309",))]).split("## Resumen")[0]
+        self.assertNotIn("AVISO", clean)
+        self.assertNotIn("inflados", clean)
+
+    def test_boundaries_309_310_327_328(self):
+        for version, doubtful in (("2.1.309", False), ("2.1.310", True), ("2.1.327", True), ("2.1.328", False)):
+            with self.subTest(version=version):
+                head = render([mk(1, versions=(version,))]).split("## Resumen")[0]
+                self.assertEqual("inflados" in head, doubtful)
+
+    def test_unverified_version_notice(self):
+        head = render([mk(1, versions=("2.1.340",))]).split("## Resumen")[0]
+        self.assertIn("AVISO", head)
+        self.assertIn("posteriores a la última verificada (`" + ur.VERIFIED_MAX + "`)", head)
+        self.assertIn("`2.1.340`", head)
+
+    def test_versions_table_cap_keeps_the_most_recent_and_drops_the_oldest(self):
+        calls = [mk(i, versions=("3.0.%d" % i,), session="s%d" % i) for i in range(ur.MAX_VERSION_ROWS + 4)]
+        text = render(calls)
+        block = table_with(text, "| Versión |")
+        self.assertEqual(len(block) - 2, ur.MAX_VERSION_ROWS)
+        shown = [cells_of(line)[0] for line in block[2:]]
+        # las 40 mas recientes: 3.0.4 a 3.0.43; la mas antigua (3.0.0) y las 3 siguientes desaparecen
+        self.assertEqual(shown, ["`3.0.%d`" % i for i in range(4, ur.MAX_VERSION_ROWS + 4)])
+        self.assertIn("`3.0.%d`" % (ur.MAX_VERSION_ROWS + 3), shown)
+        self.assertNotIn("`3.0.0`", shown)
+        self.assertIn("Solo se muestran las %d versiones más recientes; se omiten las 4 versiones más antiguas."
+                      % ur.MAX_VERSION_ROWS, text)
+        # una sola omitida: singular
+        one = render([mk(i, versions=("3.0.%d" % i,), session="s%d" % i) for i in range(ur.MAX_VERSION_ROWS + 1)])
+        self.assertIn("se omite la versión más antigua.", one)
+        self.assertNotIn("`3.0.0`", [cells_of(line)[0] for line in table_with(one, "| Versión |")[2:]])
+
+
+class ReportNotices(unittest.TestCase):
+    def head(self, source, **kw):
+        return render(source, **kw).split("## Resumen")[0]
+
+    def test_clean_data_has_no_notice(self):
+        self.assertNotIn("AVISO", self.head([mk(1, versions=("2.1.300",))]))
+
+    def test_reader_warnings_appear_in_the_header_verbatim(self):
+        res = ur.ReadResult()
+        res.calls.append(mk(1, versions=("2.1.300",)))
+        res.quality["usage sin message.id"] = 2
+        res.quality["message.id repetido entre archivos"] = 1
+        res.quality["message.id sin deduplicar entre archivos (tope)"] = 1
+        head = self.head(agg(res))
+        for warning in (ur.WARN_NO_MESSAGE_ID, ur.WARN_ID_REPEATED, ur.WARN_ID_CAP):
+            self.assertIn("> - AVISO: " + warning, head)
+        # cada contador con aviso propio sale UNA vez en la cabecera: su aviso, sin resumen de incidencias
+        self.assertEqual(head.count("AVISO"), 3)
+        self.assertNotIn("la lectura tuvo incidencias", head)
+
+    def test_a_counter_with_its_own_warning_is_not_repeated_in_the_header_summary(self):
+        res = ur.ReadResult()
+        res.calls.append(mk(1, versions=("2.1.300",)))
+        res.quality["message.id repetido entre archivos"] = 1
+        head = self.head(agg(res))
+        self.assertEqual(head.count("AVISO"), 1)
+        self.assertIn("> - AVISO: " + ur.WARN_ID_REPEATED, head)
+        # el detalle de Calidad de los datos si lo lista
+        self.assertIn("| `message.id repetido entre archivos` | 1 |", render(agg(res)))
+        # con otro contador sin aviso propio, el resumen cuenta solo ese
+        res.quality["lineas corruptas"] = 2
+        head = self.head(agg(res))
+        self.assertEqual(head.count("AVISO"), 2)
+        self.assertIn("la lectura tuvo incidencias en 1 contador (", head)
+        # si el aviso no esta entre los de las metricas, el contador si cuenta en el resumen
+        m = dataclasses.replace(agg(res), warnings=())
+        self.assertIn("la lectura tuvo incidencias en 2 contadores (", render(m).split("## Resumen")[0])
+
+    def test_informative_counters_are_not_incidents(self):
+        res = ur.ReadResult()
+        res.calls.append(mk(1, versions=("2.1.300",)))
+        res.quality["lineas synthetic excluidas"] = 7
+        res.quality["hardlinks duplicados dentro de projects"] = 2
+        text = render(agg(res))
+        self.assertNotIn("AVISO", text)
+        self.assertNotIn("la lectura tuvo incidencias", text)
+        # se listan aparte, rotulados como informativos, no como incidencias
+        self.assertIn("contadores informativos (no son incidencias)", text)
+        self.assertIn("| `lineas synthetic excluidas` | 7 |", text)
+        self.assertIn("| `hardlinks duplicados dentro de projects` | 2 |", text)
+        self.assertNotIn("contadores distintos de cero", text)
+
+    def test_unknown_warning_text_is_not_copied(self):
+        m = dataclasses.replace(agg([mk(1)]), warnings=("ZZMARK texto libre con ruta C:\\x", ur.WARN_ID_CAP))
+        text = ur.render_project_report(m, ALIAS)
+        self.assertNotIn("ZZMARK", text)
+        self.assertIn("> - AVISO: aviso no reconocido", text)
+        self.assertIn(ur.WARN_ID_CAP, text)
+
+    def test_excluded_and_time_notices(self):
+        calls = [mk(i) for i in range(30)] + [damaged(30), mk(31, start=None, end=None, fallback_time=dt(10, 5))]
+        head = self.head(calls)
+        self.assertIn("1 llamada dañada queda fuera de los tokens, la duración y las herramientas", head)
+        self.assertIn("1 llamada sin hora de inicio", head)
+        self.assertIn("ubicada por la fecha de modificación del archivo (aproximada)", head)
+
+    def test_plural_forms(self):
+        calls = [mk(i) for i in range(60)] + [damaged(60), damaged(61)]
+        head = self.head(calls)
+        self.assertIn("2 llamadas dañadas quedan fuera de los tokens, la duración y las herramientas", head)
+
+    def test_hardlinks_accepted_notice_singular_and_plural(self):
+        head = self.head([mk(1, hardlink=True), mk(2)])
+        self.assertIn("1 llamada leída de un enlace duro aceptado.", head)
+        head = self.head([mk(1, hardlink=True), mk(2, hardlink=True), mk(3)])
+        self.assertIn("2 llamadas leídas de enlaces duros aceptados.", head)
+        self.assertNotIn("enlace duro aceptado.", head)
+
+    def test_read_quality_summary_and_detail(self):
+        res = ur.ReadResult()
+        res.calls.append(mk(1))
+        res.quality["archivos con ultima linea truncada"] = 3
+        res.quality["lineas corruptas"] = 2
+        text = ur.render_project_report(agg(res), ALIAS)
+        head = text.split("## Resumen")[0]
+        self.assertIn("> - AVISO: la lectura tuvo incidencias en 2 contadores (detalle en Calidad de los datos)",
+                      head)
+        self.assertIn("| `archivos con ultima linea truncada` | 3 |", text)
+        self.assertIn("| `lineas corruptas` | 2 |", text)
+        self.assertNotIn("| `lineas oversize descartadas` |", text)      # en cero no se pinta
+        res.quality["lineas corruptas"] = 0
+        self.assertIn("incidencias en 1 contador (", ur.render_project_report(agg(res), ALIAS))
+
+    def test_closed_lists_split_every_read_counter_into_incident_or_informative(self):
+        labels = set(ur.READ_QUALITY_LABELS)
+        incidents, info = set(ur.READ_INCIDENT_LABELS), set(ur.READ_INFO_LABELS)
+        self.assertEqual(incidents | info, labels)
+        self.assertEqual(incidents & info, set())
+        self.assertEqual(info, {"lineas synthetic excluidas", "hardlinks duplicados dentro de projects",
+                                "sesiones principales leidas"})
+        # los contadores con aviso propio son incidencias y su aviso es uno de los conocidos
+        for label, warning in ur.READ_WARNED.items():
+            self.assertIn(label, incidents)
+            self.assertIn(warning, ur.KNOWN_WARNINGS)
+        # y son exactamente los que el lector convierte en aviso
+        res = ur.ReadResult()
+        for label in ur.READ_WARNED:
+            res.quality[label] = 1
+        self.assertEqual(set(res.warnings), set(ur.READ_WARNED.values()))
+        self.assertEqual(len(res.warnings), len(ur.READ_WARNED))
+
+    def test_main_sessions_read_is_a_base_count_not_an_incident(self):
+        res = ur.ReadResult()
+        res.calls.append(mk(1, versions=("2.1.300",)))
+        res.quality["sesiones principales leidas"] = 4
+        text = ur.render_project_report(agg(res), ALIAS)
+        self.assertNotIn("AVISO", text)
+        self.assertIn("| Sesiones principales leídas (solo para contar skills) | 4 |", text)
+        self.assertNotIn("Lectura completa", text)
+
+    def test_read_quality_labels_outside_the_closed_list_are_dropped(self):
+        m = dataclasses.replace(agg([mk(1)]), read_quality=(("ZZMARK etiqueta", 9), ("lineas corruptas", 1)))
+        text = ur.render_project_report(m, ALIAS)
+        self.assertNotIn("ZZMARK", text)
+        self.assertIn("| `lineas corruptas` | 1 |", text)
+
+    def test_quality_table_always_has_the_four_base_rows_and_hides_zero_problems(self):
+        block = table_with(render([mk(1, versions=("2.1.300",))]), "| Concepto")
+        self.assertEqual([cells_of(line)[0] for line in block[2:]], [
+            "Llamadas leídas (todas las ventanas)", "Llamadas en la ventana", "Llamadas fuera de la ventana",
+            "Llamadas con estadísticas de tokens"])
+        self.assertEqual([cells_of(line)[1] for line in block[2:]], ["1", "1", "0", "1"])
+
+    def test_quality_rows_for_problem_counts(self):
+        calls = [mk(1), damaged(2), no_usage(3), mk(4, hardlink=True),
+                 mk(5, agent="(sin-meta)", agent_group="sin-meta", has_meta=False, status="sin_meta")]
+        text = render(ur.aggregate_calls(calls, today=TODAY, check_damage=False))
+        for needle in ("| Llamadas dañadas (fuera de tokens, duración y herramientas) | 1 |",
+                       "| Llamadas sin usage | 1 |", "| Enlaces duros aceptados (hardlinks) | 1 |",
+                       "| Llamadas sin meta (agente `(sin-meta)`) | 1 |"):
+            self.assertIn(needle, text)
+
+    def test_each_conditional_quality_row_prints_its_own_field(self):
+        # un valor distinto por campo: cualquier fila que lea el campo equivocado, o que falte, falla
+        fields = (
+            ("Llamadas dañadas (fuera de tokens, duración y herramientas)", "excluded"),
+            ("Llamadas dañadas por línea intermedia corrupta", "excluded_corrupt_line"),
+            ("Llamadas dañadas por archivo ilegible", "excluded_unreadable"),
+            ("Llamadas dañadas por tope de tamaño", "excluded_cap"),
+            ("Llamadas sin hora de inicio", "without_start"),
+            ("Llamadas ubicadas por la fecha de modificación del archivo (aproximada)", "placed_by_fallback"),
+            ("Llamadas sin ninguna hora (leídas en total)", "without_any_time"),
+            ("Llamadas sin usage", "without_usage"),
+            ("Llamadas con todos sus `message.id` ya contados en otro archivo", "all_ids_repeated"),
+            ("Llamadas sin meta (agente `(sin-meta)`)", "without_meta"),
+            ("Llamadas sin versión", "without_version"),
+            ("Llamadas con versión no reconocible", "unrecognized_version"),
+            ("Llamadas con versiones en varios rangos", "multiple_ranges"),
+            ("Llamadas con una versión posterior a la verificada", "unverified_calls"),
+            ("Enlaces duros aceptados (hardlinks)", "hardlinks"),
+            ("Líneas sobredimensionadas descartadas", "oversize_lines"),
+            ("Llamadas con modelo distinto del que declara el meta", "model_mismatch"),
+        )
+        base = agg([mk(1)])
+        quality = dataclasses.replace(base.quality, **{f: 100 + i for i, (_, f) in enumerate(fields)})
+        text = render(dataclasses.replace(base, quality=quality))
+        rows = {cells_of(line)[0]: cells_of(line)[1] for line in table_with(text, "| Concepto")[2:]}
+        for i, (label, _) in enumerate(fields):
+            self.assertEqual(rows.get(label), str(100 + i), label)
+        # en cero, ninguna se pinta
+        zero = dataclasses.replace(base.quality, **{f: 0 for _, f in fields})
+        rows = [cells_of(line)[0] for line in table_with(render(dataclasses.replace(base, quality=zero)),
+                                                            "| Concepto")[2:]]
+        self.assertEqual(len(rows), 4)
+
+
+class ReportSkills(unittest.TestCase):
+    @staticmethod
+    def skills_section(text):
+        return text.split("## Skills")[1].split("## Versiones")[0].split("## Calidad")[0]
+
+    def test_no_skills_prints_a_line_and_no_empty_rows(self):
+        section = self.skills_section(render([mk(1)]))
+        self.assertIn("Sin invocaciones de skills en la ventana", section)
+        self.assertNotIn("|", section)
+        self.assertNotIn("SyncLayer", section)           # conjunto de skills de SyncLayer vacio: sin fila
+        self.assertIn("No se atribuyen tokens a una skill", section)
+
+    def test_skills_tables_by_hand(self):
+        fa = dict(agent="forge", agent_group="SyncLayer", origin="subagente")
+        uses = [su(1), su(2), su(3, session="s2"), su(4, skill="review", group="integrado"),
+                su(5, skill="plugin:pl", group="plugin:pl", session="s2", **fa), su(6, session="s1", **fa)]
+        section = self.skills_section(render([mk(1)], uses=uses))
+        self.assertIn("Invocaciones: 6 en 2 sesiones (4 en la sesión principal, 2 en subagentes)", section)
+        tables = md_tables(section)
+        # por skill: brainstorm 4 (3 principal + 1 subagente) en s1 y s2; review 1; plugin:pl 1 (subagente)
+        self.assertEqual(tables[0][0],
+                         "| Skill | Conjunto | Invocaciones | Barra | Sesiones | Sesión principal | Subagente |")
+        third = BAR_FULL * 3 + BAR_EMPTY * 7       # 1 de 4 = 2,5 -> 3 bloques (medio hacia arriba)
+        self.assertEqual(tables[0][2], "| `brainstorm` | `otros` | 4 | " + BAR_FULL * 10 + " | 2 | 3 | 1 |")
+        self.assertEqual(tables[0][3], "| `plugin:pl` | `plugin:pl` | 1 | " + third + " | 1 | 0 | 1 |")
+        self.assertEqual(tables[0][4], "| `review` | `integrado` | 1 | " + third + " | 1 | 1 | 0 |")
+        # por conjunto: otros 4 (1 skill), integrado 1, plugin:pl 1; sin fila de SyncLayer
+        self.assertEqual(tables[1][0], "| Conjunto | Skills | Invocaciones | Sesiones |")
+        self.assertEqual([cells_of(line)[0] for line in tables[1][2:]], ["`otros`", "`integrado`", "`plugin:pl`"])
+        # por agente: solo las hechas dentro de subagentes
+        self.assertEqual(tables[2][0], "| Agente | Conjunto del agente | Skill | Invocaciones |")
+        self.assertEqual(tables[2][2:], ["| `forge` | `SyncLayer` | `brainstorm` | 1 |",
+                                         "| `forge` | `SyncLayer` | `plugin:pl` | 1 |"])
+        for block in tables:
+            self.assertEqual(len({columns(line) for line in block}), 1)
+
+    def test_agent_table_absent_when_no_subagent_invoked_a_skill(self):
+        section = self.skills_section(render([mk(1)], uses=[su(1)]))
+        self.assertEqual(len(md_tables(section)), 2)
+        self.assertNotIn("Conjunto del agente", section)
+
+    def test_zero_rows_are_never_drawn(self):
+        # filas con 0 invocaciones (p. ej. el conjunto SyncLayer de skills, vacio): no se pintan
+        empty = ur.SkillMetrics(
+            calls=1, sessions=1, main_calls=1, subagent_calls=0,
+            rows=(ur.SkillRow("a", "otros", 1, 1, 0, 1), ur.SkillRow("b", "SyncLayer", 0, 0, 0, 0)),
+            groups=(ur.SkillGroupRow("otros", 1, 1, 1), ur.SkillGroupRow("SyncLayer", 0, 0, 0)),
+            by_agent=(ur.SkillAgentRow("forge", "SyncLayer", "a", "otros", 0),),
+            quality=ur.SkillQuality(1, 1, 0, 0, 0))
+        text = render(dataclasses.replace(agg([mk(1)]), skills=empty))
+        section = self.skills_section(text)
+        self.assertNotIn("SyncLayer", section)
+        self.assertNotIn("Conjunto del agente", section)
+        self.assertNotIn("`b`", section)
+        self.assertIn("| `a` | `otros` | 1 |", section)
+
+    def test_skills_without_calls_still_report(self):
+        self.assertIn("| `brainstorm` | `otros` | 1 |", render([], uses=[su(1)]))
+
+    def test_skill_quality_rows(self):
+        uses = [su(1, skill="(otra skill)"), su(2, moment=None), su(3, moment=dt(1, month=1))]
+        text = render([mk(1)], uses=uses)
+        self.assertIn("| Skills: invocaciones con nombre no válido (se muestran como `(otra skill)`) | 1 |", text)
+        self.assertIn("| Skills: invocaciones fuera de la ventana | 2 |", text)
+        self.assertIn("| Skills: invocaciones sin hora (solo cuentan con todo el historial) | 1 |", text)
+
+    def test_skill_rows_cap(self):
+        uses = [su(i, skill="sk%d" % i, session="s%d" % i) for i in range(ur.MAX_TABLE_ROWS + 3)]
+        section = self.skills_section(render([mk(1)], uses=uses))
+        self.assertEqual(len(md_tables(section)[0]) - 2, ur.MAX_TABLE_ROWS)
+        self.assertIn("Se muestran las %d primeras filas de %d" % (ur.MAX_TABLE_ROWS, ur.MAX_TABLE_ROWS + 3), section)
+
+    def test_skill_group_and_agent_tables_are_capped_too(self):
+        total = ur.MAX_TABLE_ROWS + 3
+        uses = [su(i, skill="sk%d" % i, group="plugin:g%d" % i, session="s%d" % i, origin="subagente",
+                   agent="plugin:a%d" % i, agent_group="plugin:a%d" % i) for i in range(total)]
+        section = self.skills_section(render([mk(1)], uses=uses))
+        tables = md_tables(section)
+        self.assertEqual(len(tables), 3)
+        for block in tables:
+            self.assertEqual(len(block) - 2, ur.MAX_TABLE_ROWS, block[0])
+        self.assertEqual(section.count("Se muestran las %d primeras filas de %d." % (ur.MAX_TABLE_ROWS, total)), 3)
+
+
+class ReportReadingGuide(unittest.TestCase):
+    def setUp(self):
+        self.text = render(sample_calls())
+        self.guide = self.text.split("## Cómo leer estos números")[1].split("## Pie")[0]
+
+    def test_it_dumps_both_limitation_tuples_verbatim(self):
+        for line in ur.REPEAT_LIMITATIONS + ur.SKILL_LIMITATIONS:
+            self.assertIn("- " + line + "\n", self.guide)
+
+    def test_it_says_what_is_not_measured(self):
+        self.assertIn("No mide la calidad del resultado", self.guide)
+        self.assertIn("No muestra costos", self.guide)
+        self.assertIn("precio de lista", self.guide)
+        self.assertIn("n < 10", self.guide)
+        self.assertIn("formato interno de Claude Code", self.guide)
+        self.assertIn("indicativo", self.guide)
+        self.assertIn("inferencia", self.guide.lower())
+
+    # Raices prohibidas (sin tildes: el texto se normaliza antes). Lista blanca: las frases fijas EXACTAS que
+    # niegan el costo y el precio; nada mas puede contener esas raices.
+    FORBIDDEN = re.compile(r"\b(ahorr|cost[eo]|gast|precio|barat|eficien|eficaz|optim|mejor|peor|rapid)")
+    ALLOWED_PHRASES = (ur.HOW_TO_READ[0], ur.HOW_TO_READ[1])
+
+    @classmethod
+    def forbidden_hits(cls, text):
+        for phrase in cls.ALLOWED_PHRASES:
+            text = text.replace(phrase, "")
+        plain = "".join(ch for ch in unicodedata.normalize("NFD", text.lower()) if not unicodedata.combining(ch))
+        return cls.FORBIDDEN.findall(plain)
+
+    def test_forbidden_stems_catch_the_variants_a_plain_word_list_missed(self):
+        for sentence in ("el coste total", "el gasto es menor", "el precio", "las mejores llamadas", "es eficaz",
+                         "el modo óptimo", "es más rápido", "ahorra tokens", "es barato", "peor resultado",
+                         "mejor opción", "más eficiente", "cualquier costo real", "costos bajos"):
+            with self.subTest(sentence=sentence):
+                self.assertTrue(self.forbidden_hits(sentence), sentence)
+        # las frases blancas exactas pasan; cambiarles una palabra ya no
+        for phrase in self.ALLOWED_PHRASES:
+            self.assertEqual(self.forbidden_hits(phrase), [])
+        self.assertTrue(self.forbidden_hits(self.ALLOWED_PHRASES[1] + " Es más barato."))
+        self.assertTrue(self.forbidden_hits(self.ALLOWED_PHRASES[1].replace("costo", "coste")))
+
+    def test_no_saving_cost_or_quality_claims_anywhere(self):
+        texts = (self.text, render([]), render([mk(1)], uses=[su(1)]), render(sample_calls(), uses=[su(1)]),
+                 render(golden_calls()))
+        for text in texts:
+            self.assertEqual(self.forbidden_hits(text), [])
+            low = text.lower()
+            for word in ("$", "usd", "dolar", "dólar", "euro"):
+                self.assertNotIn(word, low, word)
+        # la frase blanca esta de verdad en el reporte (no se prueba contra un texto vacio)
+        for phrase in self.ALLOWED_PHRASES:
+            self.assertIn(phrase, self.text)
+
+    def test_section_has_subsections_for_repeats_and_skills(self):
+        self.assertIn("### Repeticiones (inferido)", self.guide)
+        self.assertIn("### Skills", self.guide)
+
+
+class ReportPrivacy(ReaderBase):
+    FOLDER = "c--Users-" + us.M_FOLDER + "-proj"
+
+    def _text(self, **kw):
+        tree = us.Tree(self.base)
+        ts = "2026-03-10T10:00:%02dZ"
+        tree.main_session(self.FOLDER, us.M_SESSION + "-1", [us.skill_line("sm1", ts % 1, ["brainstorm"])])
+        tree.subagent(self.FOLDER, us.M_SESSION + "-1", "a1",
+                      [us.user(ts % 0), us.assistant("m1", ts % 3, blocks=[us.tool_use_block("t1", "Read")]),
+                       us.skill_line("sa1", ts % 5, ["plugin:" + us.M_SKILL_TAIL])],
+                      meta={"agentType": "pl:" + us.M_TYPE, "description": us.M_DESCRIPTION})
+        tree.subagent(self.FOLDER, us.M_SESSION + "-2", "a2",
+                      [us.assistant("m2", ts % 20, model=us.M_MODEL, version=us.M_VERSION)])
+        tree.subagent("c--otro-proyecto", "s9", "a9", [us.assistant("m9", ts % 30)])
+        self.res = self.read(tree, check_damage=False)
+        metrics = ur.aggregate_calls(self.res, today=TODAY)
+        return ur.render_project_report(metrics, ur._project_alias(self.FOLDER), **kw), metrics
+
+    def test_no_marker_path_identifier_or_other_alias_in_the_text(self):
+        text, metrics = self._text()
+        for marker in us.ALL_MARKERS:
+            self.assertNotIn(marker, text)
+        for c in self.res.calls:
+            self.assertNotIn(c.call_id, text)
+            self.assertNotIn(c.session, text)
+            self.assertNotIn(c.agent_key, text)
+        self.assertEqual(re.findall(r"\b[0-9a-f]{16}\b", text), [])
+        self.assertNotIn("c--otro-proyecto", text)
+        self.assertNotIn(self.FOLDER, text)
+        # solo aparece el alias propio, nunca el de otro proyecto de las metricas
+        other = ur._project_alias("c--otro-proyecto")
+        self.assertIn(other, {p.project for p in metrics.projects})
+        self.assertNotIn(other, text)
+        self.assertEqual(set(re.findall(r"\bp-[0-9a-f]{8}\b", text)), {ur._project_alias(self.FOLDER)})
+        for bad in ("\\", "C:", "/Users", "ZZMARK"):
+            self.assertNotIn(bad, text)
+
+    def test_text_shows_only_closed_list_labels(self):
+        text, _ = self._text()
+        self.assertIn("`plugin:pl`", text)       # solo el prefijo validado de un agente de plugin
+        self.assertNotIn(us.M_TYPE, text)
+        self.assertNotIn(us.M_MODEL, text)
+        self.assertIn("`(otro modelo)`", text)    # el modelo que no pasa el filtro sale con su etiqueta cerrada
+
+    def test_generator_receives_only_aggregated_metrics(self):
+        import inspect
+        params = list(inspect.signature(ur.render_project_report).parameters)
+        self.assertEqual(params, ["metrics", "project_alias", "generated"])
+
+
+class ReportSourceHygiene(unittest.TestCase):
+    def test_tool_source_is_ascii_with_lf_and_the_bars_come_from_escapes(self):
+        with open(SCRIPT, "rb") as f:
+            raw = f.read()
+        raw.decode("ascii")
+        self.assertNotIn(b"\r", raw)
+        self.assertEqual(ur.BAR_FULL, "\u2588")
+        self.assertEqual(ur.BAR_EMPTY, "\u2591")
+        self.assertIn(b'BAR_FULL = "\\u2588"', raw)
+        self.assertIn(b'BAR_EMPTY = "\\u2591"', raw)
+
+    def test_source_carries_the_accents_as_escapes(self):
+        # el modulo sigue siendo ASCII (arriba); el REPORTE lleva tildes, que salen de escapes \u00xx
+        with open(SCRIPT, "rb") as f:
+            raw = f.read()
+        for escape in (b"\\u00f3", b"\\u00e9", b"\\u00ed", b"\\u00f1"):
+            self.assertIn(escape, raw)
+        self.assertNotIn("ó".encode("utf-8"), raw)
+
+    def test_fixed_report_texts_are_ascii_or_accented_spanish_and_utf8(self):
+        fixed = (ur.HOW_TO_READ + ur.PRIVACY_NOTES + ur.REPEAT_LIMITATIONS + ur.SKILL_LIMITATIONS
+                 + tuple(ur.KNOWN_WARNINGS) + (ur.NOTE_DOUBTFUL_RANGE, ur.NOTE_NO_RANGE, ur.UNKNOWN_WARNING))
+        for text in fixed:
+            for ch in text:
+                self.assertTrue(" " <= ch <= "~" or ch in ACCENTED, (ch, text))
+            self.assertEqual(text.encode("utf-8").decode("utf-8"), text)
+        for text in (ur.REPORT_MARKER, ur.TOOL_NAME):
+            text.encode("ascii")
+        self.assertEqual(ur.REPORT_SCHEMA, 1)
+        # las etiquetas que pasan por `_code` siguen en ASCII (`_code` cambia lo no ASCII por `?`)
+        for text in ur.READ_QUALITY_LABELS + ur.VERSION_RANGES:
+            text.encode("ascii")
+
+    def test_report_has_no_unaccented_spanish_words_outside_code(self):
+        res = ur.ReadResult()
+        res.calls.extend(sample_calls())
+        res.quality["lineas corruptas"] = 1
+        res.quality["lineas synthetic excluidas"] = 1
+        res.quality["message.id repetido entre archivos"] = 1
+        texts = (render(sample_calls(), uses=[su(1), su(2, origin="subagente", agent="forge",
+                                                        agent_group="SyncLayer")]),
+                 render(agg(res)), render([]), render(golden_calls(), generated=datetime.date(2026, 4, 1)))
+        bare = re.compile(r"\b(sesion|duracion|numeros?|cache|linea|lineas|danad[oa]s?|ultim[ao]|tamano|"
+                          r"senal|estadisticas?|leid[oa]s?|invocacion|version|mas|"
+                          r"aqui|numericamente|posicion|estimacion|modificacion|aparicion|alcanzo|legitimos|"
+                          r"informacion|unica|metricas?|peticion|conversacion|opcion|ningun|despues|tambien)\b",
+                          re.IGNORECASE)
+        for text in texts:
+            outside = "\n".join(re.sub(r"`[^`]*`", "", line) for line in text.split("\n"))
+            self.assertEqual(bare.findall(outside), [])
+
+
+class ReportOverSyntheticTree(ReaderBase):
+    def test_report_from_a_read_tree_is_valid_and_deterministic(self):
+        tree = us.Tree(self.base)
+        ts = "2026-03-10T10:00:%02dZ"
+        for i in range(3):
+            tree.subagent("c--proj", "s%d" % (i % 2), "a%d" % i,
+                          [us.user(ts % (i * 10)),
+                           us.assistant("m%d" % i, ts % (i * 10 + 5), usage_value=us.usage(10 * (i + 1), 5, 2, 3),
+                                        blocks=[us.tool_use_block("t%d" % i, "Bash")])],
+                          meta={"agentType": ("forge", "scout", "auditor")[i]})
+        alias = ur._project_alias("c--proj")
+        text = ur.render_project_report(ur.aggregate_calls(self.read(tree), today=TODAY), alias)
+        again = ur.render_project_report(ur.aggregate_calls(self.read(tree), today=TODAY), alias)
+        self.assertEqual(text, again)       # claves de digest distintas por lectura: mismos bytes
+        for block in md_tables(text):
+            self.assertEqual(len({columns(line) for line in block}), 1)
+        self.assertIn("Llamadas: 3 en 2 sesiones", text)
+
+    def test_hostile_agent_type_and_model_from_the_reader_keep_every_table_intact(self):
+        # lector -> agregacion -> reporte con `|` y saltos de linea en agentType, meta.model y model de las lineas
+        tree = us.Tree(self.base)
+        ts = "2026-03-10T10:00:%02dZ"
+        hostile = ("a|b\nZZHOST", "Bad Prefix|x:zz\r\nZZHOST", "forge")
+        for i, agent_type in enumerate(hostile):
+            tree.subagent("c--proj", "s%d" % i, "a%d" % i,
+                          [us.user(ts % (i * 10)),
+                           us.assistant("m%d" % i, ts % (i * 10 + 5), model="x|y\nZZHOST%d" % i,
+                                        blocks=[us.tool_use_block("t%d" % i, "Bash")])],
+                          meta={"agentType": agent_type, "model": "m|\nZZHOST"})
+        alias = ur._project_alias("c--proj")
+        text = ur.render_project_report(ur.aggregate_calls(self.read(tree), today=TODAY), alias)
+        self.assertNotIn("ZZHOST", text)
+        self.assertNotIn("\r", text)
+        for block in md_tables(text):
+            self.assertEqual(len({columns(line) for line in block}), 1, block[0])
+        # nada se corto a media tabla: cada linea que empieza por `|` termina en `|`
+        for line in text.split("\n"):
+            if line.startswith("|"):
+                self.assertTrue(line.endswith("|"), line)
+        # los dos `(otro agente)` (conjuntos `otros` y `plugin:(no-valido)`) se distinguen en las tres tablas
+        for head in ("| Agente | Conjunto | Llamadas", "| Agente | Conjunto | n |",
+                     "| Agente | Conjunto | Duración", "| Agente | Conjunto | Modelo"):
+            rows = {tuple(cells_of(line)[:2]) for line in table_with(text, head)[2:]}
+            self.assertIn(("`(otro agente)`", "`otros`"), rows, head)
+            self.assertIn(("`(otro agente)`", "`plugin:(no-valido)`"), rows, head)
+        self.assertIn("- Agentes distintos (por nombre y conjunto): 3", text)
+        self.assertIn("`(otro modelo)`", text)
+
+
+class ReportSmallSampleLegend(unittest.TestCase):
+    LEGEND = "`*`: n < 10, pocas muestras. La mediana y el p90 dicen poco."
+
+    @classmethod
+    def tables_with_legend(cls, text):
+        """[(cabecera, lleva `*`, lleva leyenda)] de cada tabla: la leyenda es el parrafo que sigue a la tabla
+        (y a su nota de filas omitidas) hasta el siguiente titulo."""
+        lines = text.split("\n")
+        out, i = [], 0
+        while i < len(lines):
+            if not lines[i].startswith("|"):
+                i += 1
+                continue
+            j = i
+            while j < len(lines) and lines[j].startswith("|"):
+                j += 1
+            block = lines[i:j]
+            after = []
+            k = j
+            while k < len(lines) and not lines[k].startswith(("#", "|")):
+                after.append(lines[k])
+                k += 1
+            marked = any(re.search(r" \* \|", line) for line in block[2:])
+            out.append((block[0], marked, cls.LEGEND in after))
+            i = j
+        return out
+
+    def test_every_table_with_a_star_has_the_legend_and_no_other_does(self):
+        text = render(sample_calls())
+        tables = self.tables_with_legend(text)
+        self.assertGreaterEqual(sum(1 for _, marked, _ in tables if marked), 4)
+        for head, marked, legend in tables:
+            self.assertEqual(marked, legend, head)
+        self.assertEqual(text.count(self.LEGEND), sum(1 for _, marked, _ in tables if marked))
+
+    def test_tokens_n_over_ten_and_duration_n_five_puts_the_legend_only_under_the_small_tables(self):
+        calls = ([mk(i, session="s%d" % i) for i in range(5)]
+                 + [mk(i, session="s%d" % i, start=None, end=None, fallback_time=dt(10, 5))
+                    for i in range(5, 10)])
+        text = render(calls)
+        by_head = {head: (marked, legend) for head, marked, legend in self.tables_with_legend(text)}
+        tokens = [v for h, v in by_head.items() if h.startswith("| Agente | Conjunto | n |")][0]
+        duration = [v for h, v in by_head.items() if h.startswith("| Agente | Conjunto | Duración")][0]
+        group = [v for h, v in by_head.items() if h.startswith("| Conjunto | Agentes")][0]
+        self.assertEqual(tokens, (False, False))      # n = 10 llamadas con tokens
+        self.assertEqual(duration, (True, True))      # n = 5 con duracion
+        self.assertEqual(group, (True, True))         # la mediana de duracion del conjunto
+        for head, (marked, legend) in by_head.items():
+            self.assertEqual(marked, legend, head)
+        # la seccion de tokens no la lleva; la de duracion si
+        sections = text.split("\n## ")
+        tokens_section = [s for s in sections if s.startswith("Tokens por llamada")][0]
+        duration_section = [s for s in sections if s.startswith("Duración y herramientas")][0]
+        self.assertNotIn("pocas muestras", tokens_section)
+        self.assertIn(self.LEGEND, duration_section)
+
+    def test_legend_comes_after_the_row_cap_note(self):
+        calls = [mk(i, agent="plugin:p%d" % i, agent_group="plugin:p%d" % i, session="s%d" % i)
+                 for i in range(ur.MAX_TABLE_ROWS + 2)]
+        text = render(calls)
+        note = "Se muestran las %d primeras filas de %d." % (ur.MAX_TABLE_ROWS, ur.MAX_TABLE_ROWS + 2)
+        tokens = text.split("## Tokens por llamada")[1].split("## Duración")[0]
+        self.assertLess(tokens.index(note), tokens.index(self.LEGEND))
+
+    def test_no_legend_without_stars(self):
+        text = render([mk(i, session="s%d" % i) for i in range(10)])
+        self.assertNotIn("pocas muestras", text.split("## Cómo leer")[0])
+        self.assertNotIn("`*`", text.split("## Cómo leer")[0])
+
+
+class ReportHostileFields(unittest.TestCase):
+    HOSTILE = ("## ZZH", "a\rb", "x\x1b[31mred", "rtl\u202etxt", "<script>alert(1)</script>",
+               "[a](javascript:x)", "x|y\n## Inyectado")
+
+    def render_hostile(self, **replace):
+        base = agg(sample_calls())
+        fields = dict(versions_seen=tuple((h, 1) for h in self.HOSTILE), unverified_versions=self.HOSTILE,
+                      verified_max="[a](javascript:x)\r## ZZV\u202e<script>")
+        fields.update(replace)
+        return ur.render_project_report(dataclasses.replace(base, **fields), ALIAS)
+
+    def assert_nothing_injected(self, text):
+        for bad in ("\r", "\x1b", "\u202e"):
+            self.assertNotIn(bad, text)
+        for line in text.split("\n"):
+            self.assertFalse(line.startswith(("## ZZ", "## Inyectado")), line)
+            outside = re.sub(r"`[^`]*`", "", line)       # lo que queda fuera de los fragmentos de codigo
+            for bad in ("<script", "javascript:", "](", "## "):
+                if not line.startswith("#"):
+                    self.assertNotIn(bad, outside, line)
+        for block in md_tables(text):
+            self.assertEqual(len({columns(line) for line in block}), 1, block[0])
+
+    def test_versions_seen_unverified_and_verified_max_are_sanitized_everywhere(self):
+        text = self.render_hostile()
+        self.assert_nothing_injected(text)
+        head = text.split("## Resumen")[0]
+        self.assertIn("(`[a](javascript:x)?## ZZV?<script>`)", head)       # verified_max por _code, con `?`
+        self.assertIn("`x|y?## Inyectado`".replace("|", "\\|"), head)      # una version hostil en el aviso
+        foot = text.split("## Pie")[1]
+        self.assertIn("- ultima_version_verificada: `[a](javascript:x)?## ZZV?<script>`", foot)
+        # la cabecera: el rango de versiones sale por _code
+        self.assertIn("> - Claude Code: versiones `## ZZH` a ", head)
+
+    def test_a_single_hostile_version_in_the_header_is_a_code_span(self):
+        text = self.render_hostile(versions_seen=(("<script>x", 2),), unverified_versions=())
+        self.assertIn("> - Claude Code: versión `<script>x`", text)
+        self.assert_nothing_injected(text)
+
+    def test_unverified_list_is_capped_and_every_item_is_code(self):
+        many = tuple("9.0.%d" % i for i in range(ur.MAX_SHOWN_VERSIONS + 3))
+        text = self.render_hostile(unverified_versions=many)
+        head = text.split("## Resumen")[0]
+        self.assertIn("`9.0.%d`" % (ur.MAX_SHOWN_VERSIONS + 2), head)       # la mas reciente primero
+        self.assertIn("(+3 más)", head)
+        self.assertNotIn("`9.0.0`", head)
+        self.assert_nothing_injected(text)
+
+
+class ReportProjectsAndAliases(unittest.TestCase):
+    def test_more_than_one_alias_in_the_metrics_does_not_fail_and_only_the_given_one_prints(self):
+        # T7 puede leer varias carpetas (--transcripts-dir, un worktree tiene otro alias): `metrics.projects`
+        # trae varios y el generador solo imprime el alias que recibe
+        calls = [mk(1, project="p-00000001"), mk(2, project="p-00000002"), mk(3, project="p-00000003")]
+        metrics = agg(calls)
+        self.assertEqual(len(metrics.projects), 3)
+        text = ur.render_project_report(metrics, ALIAS)
+        self.assertEqual(set(re.findall(r"\bp-[0-9a-f]{8}\b", text)), {ALIAS})
+        self.assertIn("Llamadas: 3 en 1 sesión", text)
+
+    def test_c_and_capital_c_folder_names_give_the_same_alias(self):
+        self.assertEqual(ur._project_alias("c--proj"), ur._project_alias("C--proj"))
+        calls = [mk(1, project=ur._project_alias("c--proj")), mk(2, project=ur._project_alias("C--proj"))]
+        self.assertEqual(len(agg(calls).projects), 1)
+
+
+# Archivo dorado: el reporte completo de un caso pequeno (dos llamadas, una sesion, sin skills). Los valores se
+# calcularon a mano: suma 200 + 20 = 220 tokens; mediana de [20, 200] = (20+200+1)//2 = 110 y p90 = 200;
+# duraciones [60, 5] -> (5+60+1)//2 = 33; herramientas [3, 0] -> (0+3+1)//2 = 2; barra de scout en tokens
+# 20 de 200 = 1 bloque (minimo uno); 2 llamadas / 1 sesion = 2.0. La version 9.0.0 es posterior a VERIFIED_MAX
+# (que el golden NO fija: `@VM@` se sustituye por `ur.VERIFIED_MAX`, asi subirlo no rompe la prueba).
+GOLDEN_PROJECT_REPORT_TEMPLATE = (
+    '<!-- synclayer-usage-report v1 -->\n'
+    '# Reporte de uso de subagentes: proyecto p-0a1b2c3d\n'
+    '\n'
+    '> - Ventana: 2026-03-02 a 2026-03-31 (UTC, ambos inclusive)\n'
+    '> - Llamadas: 2 en 1 sesi\u00f3n\n'
+    '> - Claude Code: versiones `2.1.300` a `9.0.0` (2 versiones)\n'
+    '> - Esquema del reporte: 1\n'
+    '> - Generado: 2026-04-01\n'
+    '> - Reporte local: no lo subas a git.\n'
+    '> - AVISO: hay versiones de Claude Code posteriores a la \u00faltima verificada (`@VM@`): `9.0.0`. El formato interno puede haber cambiado.\n'
+    '\n'
+    '## Resumen\n'
+    '\n'
+    '- Llamadas: 2 en 1 sesi\u00f3n (2.0 llamadas por sesi\u00f3n)\n'
+    '- Agentes distintos (por nombre y conjunto): 2\n'
+    '- Tokens (suma de las llamadas con estad\u00edsticas): 220 en 2 llamadas\n'
+    '- Repeticiones consecutivas (inferido): 0\n'
+    '- Llamadas en el rango de versi\u00f3n dudoso (2.1.310 a 2.1.327): 0 de 2 (0 %)\n'
+    '- Skills: 0 invocaciones en 0 sesiones\n'
+    '\n'
+    '## Llamadas por agente\n'
+    '\n'
+    '| Agente | Conjunto | Llamadas | Barra | Sesiones | Llamadas/sesi\u00f3n | Repeticiones (inferido) |\n'
+    '|---|---|---:|---|---:|---:|---:|\n'
+    '| `forge` | `SyncLayer` | 1 | \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 | 1 | 1.0 | 0 |\n'
+    '| `scout` | `SyncLayer` | 1 | \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 | 1 | 1.0 | 0 |\n'
+    '\n'
+    '## Tokens por llamada\n'
+    '\n'
+    '| Agente | Conjunto | n | Tokens (suma) | Barra | Mediana | p90 | Entrada (med.) | Salida (med.) | Cach\u00e9 escrita (med.) | Cach\u00e9 le\u00edda (med.) | Peticiones (med.) |\n'
+    '|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|\n'
+    '| `forge` | `SyncLayer` | 1 * | 200 | \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 | 200 * | 200 * | 100 | 50 | 20 | 30 | 1 |\n'
+    '| `scout` | `SyncLayer` | 1 * | 20 | \u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 | 20 * | 20 * | 10 | 5 | 2 | 3 | 1 |\n'
+    '\n'
+    '`*`: n < 10, pocas muestras. La mediana y el p90 dicen poco.\n'
+    '\n'
+    '## Duraci\u00f3n y herramientas\n'
+    '\n'
+    '| Agente | Conjunto | Duraci\u00f3n aprox. s (med.) | p90 | Herramientas (med.) | p90 |\n'
+    '|---|---|---:|---:|---:|---:|\n'
+    '| `forge` | `SyncLayer` | 60 * | 60 * | 3 * | 3 * |\n'
+    '| `scout` | `SyncLayer` | 5 * | 5 * | 0 * | 0 * |\n'
+    '\n'
+    '`*`: n < 10, pocas muestras. La mediana y el p90 dicen poco.\n'
+    '\n'
+    '## Modelo real\n'
+    '\n'
+    '| Agente | Conjunto | Modelo | Llamadas |\n'
+    '|---|---|---|---:|\n'
+    '| `forge` | `SyncLayer` | `claude-opus-4-1` | 1 |\n'
+    '| `scout` | `SyncLayer` | `claude-opus-4-1` | 1 |\n'
+    '\n'
+    '## Por conjunto\n'
+    '\n'
+    '| Conjunto | Agentes | Llamadas | Barra | Tokens/llamada (med.) | p90 | Duraci\u00f3n aprox. s (med.) | Herramientas (med.) |\n'
+    '|---|---:|---:|---|---:|---:|---:|---:|\n'
+    '| `SyncLayer` | 2 | 2 | \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 | 110 * | 200 * | 33 * | 2 * |\n'
+    '\n'
+    '`*`: n < 10, pocas muestras. La mediana y el p90 dicen poco.\n'
+    '\n'
+    '## Skills\n'
+    '\n'
+    'Sin invocaciones de skills en la ventana.\n'
+    '\n'
+    'No se atribuyen tokens a una skill: corre en el contexto de la sesi\u00f3n que la invoca.\n'
+    '\n'
+    '## Versiones de Claude Code\n'
+    '\n'
+    'Por rango de versi\u00f3n:\n'
+    '\n'
+    '| Rango | Llamadas | Tokens/llamada (med.) | p90 | Nota |\n'
+    '|---|---:|---:|---:|---|\n'
+    '| `<2.1.310` | 1 | 200 * | 200 * |  |\n'
+    '| `2.1.310-2.1.327` | 0 | - | - | dudoso: tokens posiblemente inflados por reintentos (corregido en 2.1.328) |\n'
+    '| `>=2.1.328` | 1 | 20 * | 20 * |  |\n'
+    '\n'
+    '`*`: n < 10, pocas muestras. La mediana y el p90 dicen poco.\n'
+    '\n'
+    'Comparar entre rangos es solo indicativo.\n'
+    '\n'
+    'Versiones vistas:\n'
+    '\n'
+    '| Versi\u00f3n | Llamadas | Nota |\n'
+    '|---|---:|---|\n'
+    '| `2.1.300` | 1 |  |\n'
+    '| `9.0.0` | 1 | no verificada (mayor que `@VM@`) |\n'
+    '\n'
+    '## Calidad de los datos\n'
+    '\n'
+    '| Concepto | Cantidad |\n'
+    '|---|---:|\n'
+    '| Llamadas le\u00eddas (todas las ventanas) | 2 |\n'
+    '| Llamadas en la ventana | 2 |\n'
+    '| Llamadas fuera de la ventana | 0 |\n'
+    '| Llamadas con estad\u00edsticas de tokens | 2 |\n'
+    '| Llamadas con una versi\u00f3n posterior a la verificada | 1 |\n'
+    '\n'
+    '## C\u00f3mo leer estos n\u00fameros\n'
+    '\n'
+    '- No mide la calidad del resultado de un agente ni el costo en dinero: una llamada con menos tokens no dice nada sobre su resultado.\n'
+    '- No muestra costos. Los tokens no son una factura (la cach\u00e9 le\u00edda se cobra distinto) y cualquier costo ser\u00eda una estimaci\u00f3n a precio de lista; aqu\u00ed no se calcula.\n'
+    '- Una llamada es un archivo de subagente (`agent-<id>.jsonl`). Los tokens por llamada suman entrada, salida, cach\u00e9 escrita y cach\u00e9 le\u00edda; una respuesta repartida en varias l\u00edneas se cuenta una vez (se deduplica por `message.id`).\n'
+    '- La duraci\u00f3n es aproximada: \u00faltima marca de tiempo menos la primera. Incluye esperas de herramientas y de permisos.\n'
+    '- Con n < 10 llamadas (marca `*`, pocas muestras) la mediana y el p90 dicen poco.\n'
+    '- Mediana: con n par, media de los dos centrales redondeada al entero (medio hacia arriba). p90: el valor en la posici\u00f3n ceil(0,9 n) de la lista ordenada. Los porcentajes se redondean al entero m\u00e1s cercano (medio hacia arriba); `<1 %` es un valor distinto de cero que redondea a 0.\n'
+    '- Las repeticiones son una inferencia, no un reintento confirmado (ver abajo).\n'
+    '- Las versiones 2.1.310 a 2.1.327 de Claude Code pueden inflar los tokens por reintentos y no se corrige num\u00e9ricamente. Comparar entre rangos de versi\u00f3n es solo indicativo.\n'
+    '- Los n\u00fameros dependen de un formato interno de Claude Code que no est\u00e1 garantizado y puede cambiar sin aviso.\n'
+    '- Solo se leen las carpetas de transcripciones elegidas para este proyecto: las sesiones abiertas desde una subcarpeta o un worktree viven en otra carpeta y no se incluyen salvo que se indique.\n'
+    '\n'
+    '### Repeticiones (inferido)\n'
+    '\n'
+    '- Las repeticiones son una se\u00f1al inferida por horas de inicio y fin, no un reintento confirmado.\n'
+    '- Una llamada puede marcarse aunque corra en paralelo con otra anterior del mismo agente: solo se mira la anterior inmediata por hora de inicio (A1 0-100, A2 10-20, A3 30-40: se marca A3).\n'
+    '- Las llamadas sin hora de inicio no participan en la cadena ni la rompen.\n'
+    '- La primera llamada de la ventana no se marca, aunque su anterior quedara fuera de la ventana.\n'
+    '- Las llamadas sin meta nunca se marcan, pero rompen la cadena de los dem\u00e1s agentes.\n'
+    '- En flujos secuenciales leg\u00edtimos (el mismo agente en pasos distintos de un plan) sobreestima.\n'
+    '\n'
+    '### Skills\n'
+    '\n'
+    '- Una l\u00ednea corrupta en medio de una sesi\u00f3n principal o de un subagente se descarta y puede esconder una invocaci\u00f3n de Skill: el conteo de skills puede ser menor que el real.\n'
+    '- Las skills que el usuario invoca con /nombre no generan un bloque tool_use de Skill y no se cuentan: solo se cuentan las que invoca el modelo.\n'
+    '\n'
+    '## Pie\n'
+    '\n'
+    '- report_schema: 1\n'
+    '- herramienta: tools/usage_report.py\n'
+    '- ultima_version_verificada: `@VM@`\n'
+    '- proyecto: p-0a1b2c3d\n'
+    '\n'
+    '- Este archivo no contiene contenido de conversaciones ni rutas, pero revela volumen de uso. Es local: no lo subas a git ni lo compartas sin revisarlo.\n'
+    '- El alias `p-<8 hex>` es un hash sin sal del nombre de la carpeta del proyecto: quien conozca la ruta puede recalcularlo. No es anonimato.\n'
+    '- Los nombres de skills de usuario y el prefijo de un plugin (`plugin:<prefijo>`) salen tal cual: pueden revelar nombres privados.\n'
+    '- Un agente de proyecto con el mismo nombre que uno de SyncLayer cuenta como SyncLayer.\n'
+)
+GOLDEN_PROJECT_REPORT = GOLDEN_PROJECT_REPORT_TEMPLATE.replace("@VM@", ur.VERIFIED_MAX)
+
+
+def golden_calls():
+    return [mk(1, session="s1", input_tokens=100, output_tokens=50, cache_creation_tokens=20,
+               cache_read_tokens=30, tools=3, versions=("2.1.300",), **span(60)),
+            mk(2, agent="scout", session="s1", versions=("9.0.0",), tools=0, **span(5, hour=11))]
+
+
+class ReportGolden(unittest.TestCase):
+    def test_small_report_matches_the_golden_text_byte_for_byte(self):
+        text = render(golden_calls(), generated=datetime.date(2026, 4, 1))
+        self.assertEqual(text, GOLDEN_PROJECT_REPORT)
+        self.assertEqual(text.encode("utf-8"), GOLDEN_PROJECT_REPORT.encode("utf-8"))
+
+    def test_golden_does_not_depend_on_the_current_verified_max(self):
+        # si C4 sube VERIFIED_MAX, el golden sigue valiendo mientras 9.0.0 siga siendo posterior
+        with mock.patch.object(ur, "VERIFIED_MAX", "3.5.0"):
+            text = render(golden_calls(), generated=datetime.date(2026, 4, 1))
+        self.assertEqual(text, GOLDEN_PROJECT_REPORT_TEMPLATE.replace("@VM@", "3.5.0"))
+
+    def test_golden_changes_with_each_input(self):
+        base = render(golden_calls(), generated=datetime.date(2026, 4, 1))
+        self.assertNotEqual(render(golden_calls(), generated=datetime.date(2026, 4, 2)), base)
+        self.assertNotEqual(render(golden_calls(), alias="p-00000000", generated=datetime.date(2026, 4, 1)), base)
+        self.assertNotEqual(render(golden_calls()[:1], generated=datetime.date(2026, 4, 1)), base)
+
+
+class ReportPurity(unittest.TestCase):
+    """Todo lo que `render_project_report` puede alcanzar (funciones, clases y constantes del modulo, por
+    nombre). Lista BLANCA y cerrada: un nombre nuevo hace fallar la prueba y obliga a revisarlo."""
+    REACHABLE = frozenset((
+        "render_project_report", "_header_section", "_summary_section", "_agent_sections", "_group_section",
+        "_skills_section", "_version_section", "_quality_section", "_guide_section", "_footer_section",
+        "_notices", "_window_text", "_versions_header", "_read_incidents", "_read_count", "_range_calls",
+        "_bar", "_num", "_tenths", "_percent", "_plural", "_code", "_small", "_table",
+        "_capped_table", "_raw_table", "_legend", "_read_info", "_unwarned_incidents", "_bullets", "_is_date",
+        "_range_of", "_recent_codes", "is_unverified", "version_key", "LEGEND_SMALL", "READ_INCIDENT_LABELS",
+        "READ_INFO_LABELS", "READ_WARNED",
+        "ALIAS_RE", "BAR_EMPTY", "BAR_FULL", "BAR_WIDTH", "HOW_TO_READ", "KNOWN_WARNINGS", "LABEL_MAIN_READ",
+        "MAX_CELL_CHARS", "MAX_SHOWN_VERSIONS", "MAX_TABLE_ROWS", "MAX_VERSION_ROWS", "MSG_REPORT_ALIAS",
+        "MSG_REPORT_DATE", "MSG_REPORT_METRICS", "MSG_WINDOW_INVALID", "NOTE_DOUBTFUL_RANGE", "NOTE_NO_RANGE",
+        "PRIVACY_NOTES", "REPORT_MARKER", "REPORT_SCHEMA", "SMALL_MARK", "TOOL_NAME", "UNKNOWN_WARNING",
+        "REPEAT_LIMITATIONS", "SKILL_LIMITATIONS", "READ_QUALITY_LABELS", "SMALL_N", "VERIFIED_MAX",
+        "RANGE_AFTER", "RANGE_BEFORE", "RANGE_DOUBTFUL", "RANGE_NONE", "_DOUBTFUL_FROM", "_DOUBTFUL_TO",
+        "_VERSION_PARTS_RE", "WARN_ID_CAP", "WARN_ID_REPEATED", "WARN_NO_MESSAGE_ID",
+        "WARN_SKILL_ID_CAP", "WARN_SKILL_ID_REPEATED", "WARN_MAIN_HARDLINK", "WARN_MAIN_CAP",
+        "WARN_MAIN_UNREADABLE",
+        # tipos de las metricas (isinstance)
+        "UsageMetrics", "ScopeMetrics", "DataQuality", "Dist", "TokenStats", "SkillMetrics", "SkillQuality",
+        "Window",
+    ))
+    CALLABLE_OK = frozenset((
+        "ValueError", "any", "append", "astimezone", "dataclass", "date", "divmod", "groups", "int", "isinstance",
+        "isoformat", "join", "len", "list", "match", "max", "min", "replace", "sorted", "sum", "tuple",
+    ))
+
+    def test_report_reaches_only_pure_code(self):
+        helper = AggregationDeterminismAndPurity()
+        tree = helper._module_tree()
+        top = {}
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                top[node.name] = node
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        top[target.id] = node
+        seen, todo = set(), ["render_project_report"]
+        while todo:
+            name = todo.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            for n in ast.walk(top[name]):
+                if isinstance(n, ast.Name) and n.id in top:
+                    todo.append(n.id)
+        self.assertEqual(seen, set(self.REACHABLE))
+        for name in AggregationDeterminismAndPurity.READER_IO_FUNCTIONS:
+            self.assertNotIn(name, seen)
+        for name in seen:
+            node = top[name]
+            if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                continue
+            for n in ast.walk(node):
+                self.assertNotIsInstance(n, (ast.Import, ast.ImportFrom), name)
+                if isinstance(n, ast.Name):
+                    self.assertNotIn(n.id, AggregationDeterminismAndPurity.FORBIDDEN, name)
+                if isinstance(n, ast.Attribute):
+                    self.assertNotIn(n.attr, AggregationDeterminismAndPurity.FORBIDDEN, name)
+                if isinstance(n, ast.Call):
+                    callee = n.func.id if isinstance(n.func, ast.Name) else (
+                        n.func.attr if isinstance(n.func, ast.Attribute) else None)
+                    self.assertIsNotNone(callee, name)
+                    self.assertIn(callee, set(self.REACHABLE) | self.CALLABLE_OK, "%s llama a %s" % (name, callee))
+        # `utc_today` (la unica que lee el reloj) no la alcanza el generador
+        self.assertNotIn("utc_today", seen)
 
 
 if __name__ == "__main__":

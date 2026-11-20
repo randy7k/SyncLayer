@@ -2,6 +2,15 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 2, T5)
+
+- `tools/usage_report.py`: `render_project_report`, generador puro (sin E/S ni reloj) del reporte de
+  uso de un proyecto en Markdown: resumen, tablas por agente con columna `Conjunto`, tokens (suma,
+  mediana y p90), duración y herramientas, modelo real, conjuntos, skills y versiones de Claude Code
+  con el rango 2.1.310 a 2.1.327 marcado como dudoso, calidad de los datos, «Cómo leer estos
+  números» y pie de privacidad. Barras de texto, texto en español con tildes, UTF-8 sin BOM.
+- `docs/plans/2026-11-19-fase2-reporte-de-uso.md`: notas de la revisión de T5 para T6 y T7.
+
 ### Añadido (Fase 2, T4)
 
 - `tools/usage_report.py`: conteo de uso de skills desde la sesión principal y los subagentes (sólo
