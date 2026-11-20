@@ -434,17 +434,17 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-19** (T2 de la Fase 2 cerrada: lector defensivo de subagentes).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-19** (T3 de la Fase 2 cerrada: agregación y métricas).
 
 ### Avance global
 
-**El proyecto completo va en 24%.** Cuenta las cinco fases con el mismo peso; las fases 2 a 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)), así que el número sube cuando se desglosen en sub-fases.
+**El proyecto completo va en 26%.** Cuenta las cinco fases con el mismo peso; las fases 2 a 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)), así que el número sube cuando se desglosen en sub-fases.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | **24%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **26%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
-| **2. Reporte de uso de agentes** | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | **20%** | 2 de 10 | Plan aprobado, en curso ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
+| **2. Reporte de uso de agentes** | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **30%** | 3 de 10 | Plan aprobado, en curso ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
 | **3. Esfuerzo configurable (5 niveles)** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **4. Nombres de agentes configurables** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
@@ -482,7 +482,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-20 | T1 de la Fase 2: `inspect` (sólo estructura, filtros cerrados) y transcripciones sintéticas; revisada por `auditor` y `shield` | ✅ |
 | 2026-11-20 | Compuerta G1: `inspect` corrido sobre los datos reales ([resultado](docs/plans/2026-11-20-fase2-g1-resultado.md)); supuestos confirmados, dos ajustes propuestos | ✅ |
 | 2026-11-20 | T2 de la Fase 2: lector defensivo de subagentes (deduplicación por `message.id`, hardlinks de Claude Code aceptados, conjuntos `plugin:<prefijo>`); revisada por `auditor` | ✅ |
-| **Ahora** | **T3 de la Fase 2**: agregación y métricas (ventana UTC, mediana, p90, desglose por versión, repeticiones inferidas) | 🔄 |
+| 2026-11-20 | T3 de la Fase 2: agregación y métricas puras (ventana UTC, mediana, p90, desglose por rango de versión, repeticiones inferidas con clave interna por agente); revisada por `auditor` | ✅ |
+| **Ahora** | **T4 de la Fase 2**: conteo de skills (`input.skill` confirmado en G1) y los Minor pendientes de T3 | 🔄 |
 | Luego | T2 a T8, cierre del núcleo, T9 (hook opcional) y desglosar las fases 3 a 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).

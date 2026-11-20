@@ -686,3 +686,17 @@ Salen de la revisión de `auditor` sobre T2 y prevalecen donde contradigan el te
 9. **Prueba de claves (`keys_used_by`):** que también falle ante `.items()`, `.values()`, `.keys()` y subíndices o `.get` con un argumento `Name` fuera de una lista de nombres permitidos.
 10. **`read_calls(project_dir=...)` sin carpeta coincidente** devuelve vacío: T7 debe convertirlo en exit 1 con la pista de `--transcripts-dir` (§3.3).
 11. **`CHK_TS`** (exit 3 si una línea `user`/`assistant` no trae `timestamp`) no está confirmado con datos reales: verificarlo en C4; si falla con datos sanos, relajarlo.
+
+## Notas de la revisión de T3 que entran en T4 (2026-11-20)
+
+Minor aprobados por `auditor` que se cierran junto con T4 (en el lector o su prueba), sin esperar a T8:
+
+1. `agent_key` debe calcularse sobre el nombre canónico: `agentType ""` y `general-purpose` son el mismo agente (digest de `agent_raw or DEFAULT_AGENT`).
+2. `NO_META_KEY` debe ser un centinela fuera del espacio de digests (p. ej. `None` o una cadena no hexadecimal), no un digest que un `agentType` fabricado pueda reproducir.
+3. La prueba del umbral con llamadas sin hora usa 18 correctas, para que la mutación «sumar no dañadas sin hora» falle.
+4. El caso permitido `for name in TOKEN_FIELDS:` de `unsafe_key_access` estaba dentro de un comentario y no se ejecutaba: separarlo.
+5. `OWN_PATHS` acepta `content` y nombres sueltos: permitir `content` sólo como iterable de `for block in content` y añadir al detector `str`, `repr`, `format`, f-strings, `%` y `Starred` sobre rutas ajenas.
+6. `agent_key`, `call_id` y `session`: blake2b con `key` aleatoria por ejecución (generada en `read_calls`), y prohibir en T5 a T7 serializar un `CallRecord` (`asdict`, `vars`, `pickle`); prueba de que el resultado agregado no los contiene.
+7. `make_window` valida tipos antes de restar o comparar (`ValueError` claro con `datetime`, `None` o cadena).
+8. Comentarios desajustados: el de «Contadores de la LECTURA completa…» va sobre `READ_QUALITY_LABELS`; la cabecera de la sección habla de `agent_key`, no de «(agente, conjunto)».
+9. Rendimiento (no bloqueante): `version_range` se calcula ~16 veces por llamada; un caché por llamada lo reduce.

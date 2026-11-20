@@ -720,6 +720,8 @@ BUILTIN_AGENTS = frozenset((
 DEFAULT_AGENT = "general-purpose"
 OTHER_AGENT = "(otro agente)"
 NO_META_AGENT = "(sin-meta)"
+# Clave interna de las llamadas sin meta: una constante, para que nunca se tomen por "el mismo agente".
+NO_META_KEY = hashlib.blake2b(b"\0sin-meta", digest_size=8).hexdigest()
 # Alias de modelo que el meta puede traer en lugar de un id completo (lista cerrada).
 # "inherit" NO esta: no es un modelo (el subagente hereda el del padre), se trata como ausente.
 MODEL_ALIASES = frozenset(("opus", "sonnet", "haiku", "fable"))
@@ -804,6 +806,11 @@ class CallRecord:
     etiquetas de listas cerradas. Los identificadores son resumenes (blake2b de 64 bits) para
     agrupar en memoria; no se escriben en ningun reporte.
 
+    `agent_key`: resumen blake2b de 8 bytes del `agentType` CRUDO del meta (NO_META_KEY sin meta).
+    Es la identidad interna del agente: las etiquetas visibles (`agent`, `agent_group`) juntan
+    agentes distintos ("(otro agente)", "plugin:<prefijo>"), la clave no. Solo T3 la usa (repeticiones
+    y numero de agentes por conjunto); no entra en `repr`/`str` ni en ningun reporte.
+
     `damage` (None | "linea intermedia corrupta" | "ilegible" | "tope") marca una llamada EXCLUIDA
     de las estadisticas de tokens (propiedad `excluded`). Con "linea intermedia corrupta" la
     llamada conserva `tools`, `start`, `end`, `models`, `versions` y `has_usage`: solo se vacian
@@ -821,6 +828,7 @@ class CallRecord:
     session: str            # resumen de la sesion, solo para agrupar
     agent: str              # nombre visible (lista cerrada) o "(otro agente)" / "(sin-meta)"
     agent_group: str        # SyncLayer | integrado | plugin:<prefijo> | plugin:(no-valido) | otros | sin-meta
+    agent_key: str = dataclasses.field(repr=False)   # identidad interna del agente (ver arriba)
     status: str             # correcta | sin_usage | sin_meta | danada
     damage: object          # None | "linea intermedia corrupta" | "ilegible" | "tope"
     has_meta: bool
@@ -850,8 +858,11 @@ class CallRecord:
 
     @property
     def usable(self) -> bool:
-        """Entra en las estadisticas de tokens: tiene usage y el archivo no esta danado."""
-        return self.has_usage and self.damage is None
+        """Entra en las estadisticas de tokens (sumas, medianas, p90): tiene usage, el archivo no
+        esta danado y aporta al menos una peticion. Un archivo cuyos message.id ya conto otro
+        archivo (agente reanudado) queda con requests = 0 y tokens 0: tiene `has_usage` pero no es
+        `usable`, para que sus ceros no bajen las medianas. Sigue sin estar `excluded`."""
+        return self.has_usage and self.damage is None and self.requests > 0
 
     @property
     def excluded(self) -> bool:
@@ -872,6 +883,7 @@ class ReadResult:
         self.versions = collections.Counter()  # version filtrada -> archivos
         self.schema_versions = collections.Counter()  # version -> archivos que fallan una comprobacion
         self._seen_ids = set()                 # digests de message.id ya sumados (entre archivos)
+        self._seen_inodes = set()              # (st_dev, st_ino) de los hardlinks (nlink > 1) ya leidos
 
     @property
     def usage_without_message_id(self) -> bool:
@@ -1033,7 +1045,11 @@ def _drop_repeated_ids(acc: _CallAcc, res: ReadResult) -> list:
 
     Decision: el segundo archivo (orden del recorrido) NO suma una peticion cuyo message.id ya
     conto otro archivo (agentes reanudados repiten el historial), pero se cuenta en
-    "message.id repetido entre archivos" y avisa. Un archivo danado no registra sus ids (sus
+    "message.id repetido entre archivos" y avisa. La peticion se atribuye al archivo que se recorre
+    PRIMERO (carpetas, sesiones y archivos por nombre, orden alfabetico), NO al de inicio mas
+    temprano: atribuir al mas temprano exigiria conservar los ids de cada archivo hasta el final
+    y rehacer las sumas, y no es barato. El total no cambia; si cambia el reparto entre agentes,
+    proyectos y ventana cuando el id repetido cae en llamadas distintas (el aviso lo senala). Un archivo danado no registra sus ids (sus
     tokens no cuentan). Pasado MAX_IDS_GLOBAL no se recuerdan ids nuevos."""
     entries = list(acc.usage_no_id)
     seen = res._seen_ids
@@ -1062,6 +1078,14 @@ def _read_call(sub_dir, name, kinds, folder_name, sid, res: ReadResult) -> None:
             st = os.fstat(f.fileno())
             # se anotan antes de leer: valen aunque la lectura falle despues
             hardlink = st.st_nlink > 1
+            if hardlink and st.st_ino:
+                # el mismo inodo con dos nombres dentro de projects/ es UNA transcripcion: el nombre
+                # que se recorre primero crea la llamada; el otro se cuenta aparte y no suma nada
+                ident = (st.st_dev, st.st_ino)
+                if ident in res._seen_inodes:
+                    res.quality["hardlinks duplicados dentro de projects"] += 1
+                    return
+                res._seen_inodes.add(ident)
             try:
                 fallback_time = datetime.datetime.fromtimestamp(st.st_mtime, tz=datetime.timezone.utc)
             except (OSError, OverflowError, ValueError):
@@ -1113,7 +1137,9 @@ def _read_call(sub_dir, name, kinds, folder_name, sid, res: ReadResult) -> None:
     else:
         q["usage sin message.id"] += len(acc.usage_no_id)
         entries = _drop_repeated_ids(acc, res)
-    sums = [sum(e[i] for e in entries) for i in range(4)]
+    sums = [0, 0, 0, 0]
+    for entry in entries:
+        sums = [total + value for total, value in zip(sums, entry)]
     line_models = acc.models
     meta_label = _model_label(meta_model, True) if meta_model is not None else None
     if line_models:
@@ -1149,6 +1175,7 @@ def _read_call(sub_dir, name, kinds, folder_name, sid, res: ReadResult) -> None:
         project="p-" + hashlib.sha256(folder_name.lower().encode("utf-8", "surrogatepass")).hexdigest()[:8],
         session=_digest(folder_name + "\0" + sid).hex(),
         agent=agent, agent_group=group, status=status, damage=damage,
+        agent_key=_digest(agent_raw).hex() if (present and not meta_bad) else NO_META_KEY,
         has_meta=present and not meta_bad, has_usage=has_usage,
         models=models,
         model=("mixto" if len(models) > 1 else models[0]) if models else "(desconocido)",
@@ -1248,7 +1275,13 @@ def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True) -> 
     Lanza EnvError (entorno) o SchemaError (esquema desconocido, o danados sobre el umbral si
     check_damage). No escribe nada. Las llamadas salen en el orden del recorrido (carpetas,
     sesiones y archivos por nombre): la salida es determinista. Una sesion sin transcripciones
-    de subagentes no produce llamadas; el reporte de sesiones sale de las llamadas."""
+    de subagentes no produce llamadas; el reporte de sesiones sale de las llamadas.
+
+    Con check_damage=False el 5 % de danadas no se comprueba aqui: T3 (aggregate_calls) lo mide
+    sobre las llamadas de la ventana. Un message.id repetido entre archivos se atribuye al
+    archivo que se recorre primero (ver _drop_repeated_ids). Dos nombres del mismo inodo dentro
+    de projects/ (hardlinks) son una sola llamada. Al terminar se liberan los conjuntos de ids e
+    inodos de ReadResult (None)."""
     projects = os.path.join(claude_dir, "projects")
     reason = _projects_dir_state(projects)
     if reason is not None:
@@ -1268,6 +1301,8 @@ def read_calls(claude_dir: str, project_dir=None, check_damage: bool = True) -> 
                 res.quality["nombres no validos omitidos"] += 1
             elif wanted is None or name.lower() == wanted:
                 _read_project_folder(os.path.join(projects, name), name, res)
+    res._seen_ids = None      # memoria: ya no se necesitan al terminar la lectura
+    res._seen_inodes = None
     check_schema(res)
     if check_damage:
         check_damaged(res.calls)
@@ -1377,6 +1412,481 @@ def render_inspect(st: _Stats) -> str:
         if rest:
             out.append("(otros valores): " + str(rest))
     return "\n".join(out) + "\n"
+
+
+# --- Agregacion y metricas (T3) ---
+#
+# Funciones PURAS: reciben llamadas ya leidas (un ReadResult o una lista de CallRecord) y una
+# ventana, y devuelven dataclasses inmutables con solo numeros y etiquetas de listas cerradas
+# (nombres de agente, conjuntos, modelos y versiones ya filtrados por el lector). No hacen E/S
+# (ni siquiera leen el reloj: `utc_today` lo lee el llamador y lo inyecta) y no devuelven
+# contenido, rutas, identificadores de llamada ni de sesion. El alias de proyecto `p-<8 hex>` es
+# un dato interno que solo T6 muestra.
+#
+# Definiciones (3.5 del plan, con las notas de T2 a T3):
+#   - Ventana: fechas UTC con ambos extremos inclusivos. Una llamada pertenece a la ventana por su
+#     primera marca de tiempo (`start`); sin `start` se usa `fallback_time` (mtime, APROXIMADA);
+#     sin ninguna de las dos solo entra con la ventana "todo" (`--all`). Un instante cuenta por su
+#     fecha UTC: 00:00:00 de `since` entra; 23:59:59.999999 de `until` entra; el instante siguiente
+#     no. Una hora con zona se lleva a UTC antes; una hora sin zona se toma como UTC.
+#   - El 5 % de danadas (check_damaged) se mide sobre las llamadas de la ventana MAS las danadas sin
+#     ninguna hora (ni start ni fallback_time), que no pueden ubicarse y quedarian fuera del umbral
+#     (criterio conservador: suman al numerador y al denominador; las no danadas sin hora, no).
+#   - Tokens, sumas, medianas y p90: solo llamadas `usable` (usage, no danadas, requests > 0).
+#     Duracion, herramientas y modelos: todas las no `excluded` (incluidas las sin usage).
+#   - Mediana: con n par, media de los dos centrales redondeada al entero, medio hacia arriba.
+#   - p90: rango mas cercano, el valor en la posicion ceil(0,9 n) (de 1 a n) de la lista ordenada;
+#     determinista, sin interpolar. `small` marca n < 10 ("n pequeno").
+#   - Duracion: ultima menos primera marca de tiempo, en segundos enteros (medio hacia arriba).
+#   - Repeticiones consecutivas (INFERIDO, no es un reintento confirmado): dentro de una sesion se
+#     ordenan TODAS las llamadas con inicio y fin por (inicio, fin, id); una llamada cuenta si la
+#     anterior en ese orden es del mismo (agente, conjunto) y termino ESTRICTAMENTE antes de que
+#     esta empezara. Las paralelas y las separadas por otro agente no cuentan. Cuenta la llamada
+#     posterior, y se atribuye a su agente. Una llamada danada que conservo sus horas participa.
+#     "Mismo agente" = misma `agent_key` (resumen del agentType CRUDO), no la misma etiqueta
+#     visible: dos agentes de un mismo plugin, o dos agentes de usuario, no se repiten entre si.
+#     Las llamadas SIN meta (clave constante) participan en la cadena (rompen la de otros) pero
+#     nunca se marcan: sin meta no hay identidad de agente. Es una senal INFERIDA con limites
+#     conocidos (REPEAT_LIMITATIONS, que T5 vuelca en "Como leer estos numeros").
+#   - Rango de version de Claude Code de una llamada: sus lineas pueden traer varias versiones. Si
+#     alguna cae en 2.1.310-2.1.327 (tokens posiblemente inflados) la llamada va al rango dudoso;
+#     si no, va al rango de su version MAS ALTA. Sin ninguna version numerica: RANGE_NONE (una sola
+#     fila para "sin version" y "version no reconocible"; los contadores de calidad `without_version`
+#     y `unrecognized_version` las separan). El numero de llamadas con versiones en varios rangos
+#     se informa en la calidad de datos.
+#   - Agrupacion: siempre por (agente, conjunto): "(otro agente)" lo comparten usuario y plugins
+#     con prefijo no valido, que son conjuntos distintos.
+
+WINDOW_DAYS = 30
+SMALL_N = 10          # con menos llamadas, mediana y p90 dicen poco
+RANGE_BEFORE = "<2.1.310"
+RANGE_DOUBTFUL = "2.1.310-2.1.327"
+RANGE_AFTER = ">=2.1.328"
+RANGE_NONE = "sin version reconocible"   # sin version o con versiones que no son numericas
+VERSION_RANGES = (RANGE_BEFORE, RANGE_DOUBTFUL, RANGE_AFTER, RANGE_NONE)
+_DOUBTFUL_FROM = (2, 1, 310)
+_DOUBTFUL_TO = (2, 1, 327)
+
+# Contadores de la LECTURA completa (no de la ventana) que se copian al resultado, en orden fijo.
+# Limitaciones de la senal "repeticiones consecutivas": texto fijo para "Como leer estos numeros" (T5).
+REPEAT_LIMITATIONS = (
+    "Las repeticiones son una senal inferida por horas de inicio y fin, no un reintento confirmado.",
+    "Una llamada puede marcarse aunque corra en paralelo con otra anterior del mismo agente: solo se"
+    " mira la anterior inmediata por hora de inicio (A1 0-100, A2 10-20, A3 30-40: se marca A3).",
+    "Las llamadas sin hora de inicio no participan en la cadena ni la rompen.",
+    "La primera llamada de la ventana no se marca, aunque su anterior quedara fuera de la ventana.",
+    "Las llamadas sin meta nunca se marcan, pero rompen la cadena de los demas agentes.",
+    "En flujos secuenciales legitimos (el mismo agente en pasos distintos de un plan) sobreestima.",
+)
+
+MSG_TODAY_REQUIRED = "aggregate_calls necesita `today` (o `window`): no lee el reloj"
+MSG_WINDOW_RANGE = "la ventana sale del rango de fechas admitido"
+MSG_WINDOW_INVALID = "ventana invalida: since y until deben ser fechas (datetime.date), ambas o ninguna, y since <= until"
+
+READ_QUALITY_LABELS = (
+    "message.id repetido entre archivos",
+    "message.id sin deduplicar entre archivos (tope)",
+    "usage sin message.id",
+    "hardlinks duplicados dentro de projects",
+    "metas rechazadas por enlace duro",
+    "archivos con ultima linea truncada",
+    "lineas corruptas",
+    "lineas oversize descartadas",
+    "lineas que no son objeto",
+    "lineas synthetic excluidas",
+    "archivos omitidos por tope de tamano",
+    "archivos ilegibles",
+    "meta ilegible",
+    "meta sobredimensionado",
+    "enlaces omitidos",
+    "nombres no validos omitidos",
+    "carpetas ilegibles",
+)
+
+
+def utc_today():
+    """Fecha actual en UTC. Es lo unico que lee el reloj: el llamador la inyecta (`today`)."""
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+@dataclasses.dataclass(frozen=True)
+class Window:
+    """Ventana de fechas UTC, ambos extremos inclusivos. since = until = None: sin ventana."""
+    since: object   # datetime.date o None
+    until: object
+
+    def __post_init__(self):
+        """ValueError si no son dos fechas (datetime.date, no datetime) con since <= until, o ninguna."""
+        if self.since is None and self.until is None:
+            return
+        for value in (self.since, self.until):
+            if not isinstance(value, datetime.date) or isinstance(value, datetime.datetime):
+                raise ValueError(MSG_WINDOW_INVALID)
+        if self.since > self.until:
+            raise ValueError(MSG_WINDOW_INVALID)
+
+    @property
+    def is_all(self) -> bool:
+        return self.since is None and self.until is None
+
+    def contains(self, moment) -> bool:
+        """True si el instante (con zona; sin zona se toma como UTC) cae en la ventana."""
+        if self.is_all:
+            return True
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=datetime.timezone.utc)
+        try:
+            day = moment.astimezone(datetime.timezone.utc).date()
+        except OverflowError:
+            return False   # fuera del calendario al llevarlo a UTC: cae fuera de cualquier ventana
+        return self.since <= day <= self.until
+
+
+def make_window(today, since=None, until=None, all_time=False, days: int = WINDOW_DAYS) -> Window:
+    """Ventana por defecto: las `days` fechas UTC que terminan en `today` (since = until - days + 1).
+    `since`/`until` son datetime.date. ValueError si all_time se combina con fechas, si la ventana
+    queda invertida o si sale del rango de fechas de Python (cerca de date.min)."""
+    if all_time:
+        if since is not None or until is not None:
+            raise ValueError("all_time es incompatible con since/until")
+        return Window(None, None)
+    if until is None:
+        until = today
+    if since is None:
+        try:
+            since = until - datetime.timedelta(days=days - 1)
+        except OverflowError:
+            raise ValueError(MSG_WINDOW_RANGE) from None
+    if since > until:
+        raise ValueError("ventana invertida")
+    return Window(since, until)
+
+
+@dataclasses.dataclass(frozen=True)
+class Dist:
+    """Distribucion de una lista de enteros. n = 0: median y p90 son None."""
+    n: int
+    total: int
+    median: object
+    p90: object
+    small: bool     # 0 < n < SMALL_N
+
+
+def distribution(values) -> Dist:
+    data = sorted(values)
+    n = len(data)
+    if n == 0:
+        return Dist(0, 0, None, None, False)
+    mid = n // 2
+    median = data[mid] if n % 2 else (data[mid - 1] + data[mid] + 1) // 2
+    rank = -(-9 * n // 10)   # ceil(0,9 n) con enteros
+    return Dist(n, sum(data), median, data[rank - 1], n < SMALL_N)
+
+
+@dataclasses.dataclass(frozen=True)
+class TokenStats:
+    """Tokens por llamada de las llamadas `usable` (n). Cada campo es una Dist por llamada; su
+    `total` es la suma sobre las llamadas."""
+    n: int
+    input_tokens: Dist
+    output_tokens: Dist
+    cache_creation_tokens: Dist
+    cache_read_tokens: Dist
+    total: Dist
+    requests: Dist
+
+
+@dataclasses.dataclass(frozen=True)
+class VersionRow:
+    range: str
+    calls: int
+    tokens: TokenStats
+
+    @property
+    def inflated(self) -> bool:
+        """Rango con tokens posiblemente inflados por reintentos (corregido en 2.1.328)."""
+        return self.range == RANGE_DOUBTFUL
+
+
+@dataclasses.dataclass(frozen=True)
+class ScopeMetrics:
+    """Metricas de un conjunto de llamadas (todo, un agente, un conjunto o un proyecto)."""
+    calls: int
+    excluded: int
+    sessions: int
+    calls_per_session_tenths: object   # llamadas / sesiones en decimas (redondeo al mas cercano); None sin sesiones
+    tokens: TokenStats
+    duration: Dist                      # segundos; llamadas no excluidas con inicio y fin
+    tools: Dist                         # llamadas no excluidas
+    models: tuple                       # ((modelo, llamadas), ...) de las no excluidas
+    repeats: int                        # INFERIDO: repeticiones consecutivas
+    versions: tuple                     # un VersionRow por rango, en el orden de VERSION_RANGES
+
+
+@dataclasses.dataclass(frozen=True)
+class AgentMetrics:
+    agent: str
+    group: str
+    metrics: ScopeMetrics
+
+
+@dataclasses.dataclass(frozen=True)
+class GroupMetrics:
+    group: str
+    agents: int
+    metrics: ScopeMetrics
+
+
+@dataclasses.dataclass(frozen=True)
+class ProjectMetrics:
+    project: str      # alias p-<8 hex>: dato interno, solo T6 lo muestra
+    metrics: ScopeMetrics
+
+
+@dataclasses.dataclass(frozen=True)
+class DataQuality:
+    """Conteos de calidad de datos sobre las llamadas de la ventana (salvo calls_read,
+    calls_outside_window y without_any_time, que miran todas las leidas)."""
+    calls_read: int
+    calls_in_window: int
+    calls_outside_window: int
+    without_start: int            # en la ventana, sin marca de tiempo de inicio
+    placed_by_fallback: int       # de ellas, ubicadas por fallback_time (hora APROXIMADA)
+    without_any_time: int         # sin start ni fallback_time (entre todas las leidas)
+    without_any_time_excluded: int  # de ellas, danadas: cuentan en el umbral de danadas de la ventana
+    excluded: int                 # danadas: fuera de tokens, duracion y herramientas
+    excluded_corrupt_line: int
+    excluded_unreadable: int
+    excluded_cap: int
+    without_usage: int            # no danadas y sin usage
+    all_ids_repeated: int         # con usage pero 0 peticiones propias (ids ya contados en otro archivo)
+    without_meta: int
+    tokens_calls: int             # llamadas que entran en las estadisticas de tokens
+    without_version: int          # sin ninguna version en sus lineas
+    unrecognized_version: int     # con versiones, ninguna numerica
+    multiple_ranges: int          # versiones en varios rangos
+    unverified_calls: int         # alguna version mayor que VERIFIED_MAX
+    hardlinks: int                # hardlinks aceptados (decision G1)
+    oversize_lines: int
+    model_mismatch: int
+
+
+@dataclasses.dataclass(frozen=True)
+class UsageMetrics:
+    window: Window
+    total: ScopeMetrics
+    agents: tuple             # AgentMetrics por (agente, conjunto): llamadas desc., agente, conjunto
+    groups: tuple             # GroupMetrics: llamadas desc., conjunto
+    projects: tuple           # ProjectMetrics: llamadas desc., alias
+    versions_seen: tuple      # ((version, llamadas), ...) por version numerica, ascendente
+    unverified_versions: tuple    # versiones vistas mayores que VERIFIED_MAX
+    verified_max: str
+    quality: DataQuality
+    read_quality: tuple       # ((etiqueta, n), ...) de la lectura completa (no de la ventana)
+    warnings: tuple           # avisos de texto fijo del lector (T5 los muestra en la cabecera)
+
+
+def _range_of(key) -> str:
+    if key < _DOUBTFUL_FROM:
+        return RANGE_BEFORE
+    if key <= _DOUBTFUL_TO:
+        return RANGE_DOUBTFUL
+    return RANGE_AFTER
+
+
+def _numeric_versions(call) -> list:
+    return [v for v in call.versions if _VERSION_PARTS_RE.match(v)]
+
+
+def version_range(call) -> str:
+    """Rango de version de una llamada (ver la cabecera de la seccion)."""
+    numeric = _numeric_versions(call)
+    if not numeric:
+        return RANGE_NONE
+    ranges = {_range_of(version_key(v)) for v in numeric}
+    if RANGE_DOUBTFUL in ranges:
+        return RANGE_DOUBTFUL
+    return _range_of(max(version_key(v) for v in numeric))
+
+
+def _spans_ranges(call) -> bool:
+    return len({_range_of(version_key(v)) for v in _numeric_versions(call)}) > 1
+
+
+def _call_moment(call):
+    """(instante, aproximado) con el que la llamada se ubica en la ventana; (None, False) sin hora."""
+    if call.start is not None:
+        return call.start, False
+    if call.fallback_time is not None:
+        return call.fallback_time, True
+    return None, False
+
+
+def _duration_seconds(call):
+    if call.start is None or call.end is None:
+        return None
+    micros = (call.end - call.start) // datetime.timedelta(microseconds=1)
+    return max(0, (micros + 500_000) // 1_000_000)
+
+
+def token_stats(calls) -> TokenStats:
+    used = [c for c in calls if c.usable]
+    return TokenStats(
+        n=len(used),
+        input_tokens=distribution([c.input_tokens for c in used]),
+        output_tokens=distribution([c.output_tokens for c in used]),
+        cache_creation_tokens=distribution([c.cache_creation_tokens for c in used]),
+        cache_read_tokens=distribution([c.cache_read_tokens for c in used]),
+        total=distribution([c.total_tokens for c in used]),
+        requests=distribution([c.requests for c in used]),
+    )
+
+
+def repeat_flags(calls) -> frozenset:
+    """call_id de las llamadas que repiten a la anterior de su sesion (INFERIDO).
+
+    "Mismo agente" es la misma `agent_key` (agentType crudo), no la misma etiqueta visible. Una
+    llamada sin meta (NO_META_KEY) no se marca nunca, aunque la anterior tambien sea sin meta; si
+    participa en la cadena (rompe la de otros agentes). Solo entran las llamadas con `start` y
+    `end`: una sin `start` no participa ni rompe la cadena, y si la anterior cayo fuera de la
+    ventana (el llamador solo pasa las de la ventana) la primera de la ventana no se marca. Mira
+    solo la anterior inmediata por (start, end, call_id): A1 [0,100], A2 [10,20], A3 [30,40] marca
+    A3 aunque corre en paralelo con A1. Ver REPEAT_LIMITATIONS."""
+    by_session = collections.defaultdict(list)
+    for c in calls:
+        if c.start is not None and c.end is not None:
+            by_session[c.session].append(c)
+    flagged = set()
+    for items in by_session.values():
+        items.sort(key=lambda c: (c.start, c.end, c.call_id))
+        for prev, cur in zip(items, items[1:]):
+            if (cur.agent_key != NO_META_KEY and prev.agent_key == cur.agent_key
+                    and prev.end < cur.start):
+                flagged.add(cur.call_id)
+    return frozenset(flagged)
+
+
+def _scope(calls, flagged) -> ScopeMetrics:
+    live = [c for c in calls if not c.excluded]
+    sessions = len({c.session for c in calls})
+    durations = [d for d in (_duration_seconds(c) for c in live) if d is not None]
+    models = collections.Counter(c.model for c in live)
+    rows = []
+    for name in VERSION_RANGES:
+        in_range = [c for c in calls if version_range(c) == name]
+        rows.append(VersionRow(name, len(in_range), token_stats(in_range)))
+    return ScopeMetrics(
+        calls=len(calls),
+        excluded=len(calls) - len(live),
+        sessions=sessions,
+        calls_per_session_tenths=(20 * len(calls) + sessions) // (2 * sessions) if sessions else None,
+        tokens=token_stats(calls),
+        duration=distribution(durations),
+        tools=distribution([c.tools for c in live]),
+        models=tuple(sorted(models.items(), key=lambda kv: (-kv[1], kv[0]))),
+        repeats=sum(1 for c in calls if c.call_id in flagged),
+        versions=tuple(rows),
+    )
+
+
+def _data_quality(total_read, inside, outside, fallback_used, no_time, no_time_excluded) -> DataQuality:
+    def count(pred):
+        return sum(1 for c in inside if pred(c))
+
+    return DataQuality(
+        calls_read=total_read,
+        calls_in_window=len(inside),
+        calls_outside_window=outside,
+        without_start=count(lambda c: c.start is None),
+        placed_by_fallback=fallback_used,
+        without_any_time=no_time,
+        without_any_time_excluded=no_time_excluded,
+        excluded=count(lambda c: c.excluded),
+        excluded_corrupt_line=count(lambda c: c.damage == "linea intermedia corrupta"),
+        excluded_unreadable=count(lambda c: c.damage == "ilegible"),
+        excluded_cap=count(lambda c: c.damage == "tope"),
+        without_usage=count(lambda c: not c.excluded and not c.has_usage),
+        all_ids_repeated=count(lambda c: not c.excluded and c.has_usage and c.requests == 0),
+        without_meta=count(lambda c: c.agent_group == "sin-meta"),
+        tokens_calls=count(lambda c: c.usable),
+        without_version=count(lambda c: not c.versions),
+        unrecognized_version=count(lambda c: c.versions and not _numeric_versions(c)),
+        multiple_ranges=count(_spans_ranges),
+        unverified_calls=count(lambda c: c.unverified),
+        hardlinks=count(lambda c: c.hardlink),
+        oversize_lines=sum(c.oversize_lines for c in inside),
+        model_mismatch=count(lambda c: c.model_mismatch),
+    )
+
+
+def _by_key(calls, key):
+    groups = collections.defaultdict(list)
+    for c in calls:
+        groups[key(c)].append(c)
+    return groups
+
+
+def aggregate_calls(source, window=None, today=None, check_damage: bool = True) -> UsageMetrics:
+    """Metricas de uso. `source`: un ReadResult (idealmente de read_calls(check_damage=False)) o
+    cualquier iterable de CallRecord. Sin `window`, la de WINDOW_DAYS dias UTC que terminan en
+    `today`, que el llamador inyecta (T7 usa utc_today()): sin `window` ni `today` lanza ValueError
+    (MSG_TODAY_REQUIRED); aqui no se lee el reloj. Con check_damage, lanza SchemaError si mas del
+    5 % de las llamadas DE LA VENTANA, mas las danadas sin ninguna hora (fuera de la ventana pero
+    contadas por prudencia), esta danado. Pura: no hace E/S y el resultado no depende del orden de
+    entrada."""
+    if isinstance(source, ReadResult):
+        calls = list(source.calls)
+        warnings = tuple(source.warnings)
+        read_quality = tuple((label, int(source.quality[label])) for label in READ_QUALITY_LABELS)
+    else:
+        calls = list(source)
+        warnings = ()
+        read_quality = ()
+    if window is None:
+        if today is None:
+            raise ValueError(MSG_TODAY_REQUIRED)
+        window = make_window(today)
+    inside, fallback_used, no_time, lost = [], 0, 0, []
+    for c in calls:
+        moment, approximate = _call_moment(c)
+        if moment is None:
+            no_time += 1
+            if c.excluded:
+                lost.append(c)
+        if (moment is None and window.is_all) or (moment is not None and window.contains(moment)):
+            inside.append(c)
+            if approximate and not window.is_all:
+                fallback_used += 1
+    if check_damage:
+        # con --all las danadas sin hora ya estan en `inside`: no se cuentan dos veces
+        check_damaged(inside if window.is_all else inside + lost)
+    flagged = repeat_flags(inside)
+    agents = [AgentMetrics(agent, group, _scope(items, flagged))
+              for (agent, group), items in _by_key(inside, lambda c: (c.agent, c.agent_group)).items()]
+    agents.sort(key=lambda a: (-a.metrics.calls, a.agent, a.group))
+    groups = []
+    for group, items in _by_key(inside, lambda c: c.agent_group).items():
+        groups.append(GroupMetrics(group, len({c.agent_key for c in items}), _scope(items, flagged)))
+    groups.sort(key=lambda g: (-g.metrics.calls, g.group))
+    projects = [ProjectMetrics(project, _scope(items, flagged))
+                for project, items in _by_key(inside, lambda c: c.project).items()]
+    projects.sort(key=lambda p: (-p.metrics.calls, p.project))
+    seen = collections.Counter(v for c in inside for v in set(_numeric_versions(c)))
+    seen_sorted = tuple(sorted(seen.items(), key=lambda kv: (version_key(kv[0]), kv[0])))
+    return UsageMetrics(
+        window=window,
+        total=_scope(inside, flagged),
+        agents=tuple(agents),
+        groups=tuple(groups),
+        projects=tuple(projects),
+        versions_seen=seen_sorted,
+        unverified_versions=tuple(v for v, _ in seen_sorted if is_unverified(v)),
+        verified_max=VERIFIED_MAX,
+        quality=_data_quality(len(calls), inside, len(calls) - len(inside), fallback_used, no_time,
+                                 len(lost)),
+        read_quality=read_quality,
+        warnings=warnings,
+    )
 
 
 def _fail(message: str, code: int, path=None, show_paths=False) -> int:

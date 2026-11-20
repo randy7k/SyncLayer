@@ -2,6 +2,15 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 2, T3)
+
+- `tools/usage_report.py`: agregación pura sin E/S (`aggregate_calls`, `make_window`, `distribution`):
+  ventana UTC inclusiva de 30 fechas, mediana y p90 por rango más cercano, desglose de tokens por rango
+  de versión de Claude Code (anterior a 2.1.310, 2.1.310 a 2.1.327, desde 2.1.328), repeticiones
+  consecutivas inferidas con clave interna por agente, calidad de datos y avisos.
+- El lector ya no cuenta como `usable` una llamada con todos sus ids repetidos, deduplica hardlinks
+  por inodo dentro de `projects/` y libera los conjuntos de ids al terminar.
+
 ### Añadido (Fase 2, T2)
 
 - `tools/usage_report.py`: lector defensivo de subagentes (`read_calls`, `CallRecord`): deduplicación

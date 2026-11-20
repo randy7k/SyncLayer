@@ -1,10 +1,12 @@
 import ast
 import collections
 import contextlib
+import dataclasses
 import datetime
 import io
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -1343,6 +1345,62 @@ class ReaderHardlinksAndLimits(ReaderBase):
         self.assertEqual(res.calls[0].input_tokens, 7)
         self.assertEqual(res.quality["hardlinks aceptados"], 1)
 
+    def _two_names_of_one_inode(self):
+        tree = us.Tree(self.base)
+        first = tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")], meta=None)
+        self.hardlink(first, os.path.join(os.path.dirname(first), "agent-a2.jsonl"))
+        return tree
+
+    @staticmethod
+    def _fstat_of_read_call(ino=None, dev=None):
+        """os.fstat que solo miente cuando lo llama `_read_call` (el de `_open_regular` compara la
+        identidad con el lstat previo y no debe verse afectado). `dev` es una funcion del numero de
+        llamada (0, 1, ...)."""
+        real = os.fstat
+        counter = [0]
+
+        def lying(fd):
+            result = real(fd)
+            if sys._getframe(1).f_code.co_name != "_read_call":
+                return result
+            values = list(result)
+            if ino is not None:
+                values[1] = ino
+            if dev is not None:
+                values[2] = dev(counter[0])
+            counter[0] += 1
+            return os.stat_result(values)
+
+        return lying
+
+    def test_two_names_of_one_inode_are_one_call_and_the_other_is_counted_apart(self):
+        res = self.read(self._two_names_of_one_inode())
+        self.assertEqual(len(res.calls), 1)
+        self.assertEqual(res.quality["hardlinks duplicados dentro de projects"], 1)
+        self.assertEqual(res.quality["hardlinks aceptados"], 1)
+
+    def test_inode_zero_is_never_used_to_deduplicate(self):
+        # un sistema que no informa st_ino (0): dos hardlinks no se pueden identificar -> dos llamadas
+        tree = self._two_names_of_one_inode()
+        with mock.patch.object(ur.os, "fstat", self._fstat_of_read_call(ino=0)):
+            res = self.read(tree)
+        self.assertEqual(len(res.calls), 2)
+        self.assertEqual(res.quality["hardlinks duplicados dentro de projects"], 0)
+        self.assertEqual(res.quality["hardlinks aceptados"], 2)
+
+    def test_deduplication_key_includes_the_device(self):
+        tree = self._two_names_of_one_inode()
+        # mismo inodo en dos dispositivos distintos: son archivos distintos -> dos llamadas
+        with mock.patch.object(ur.os, "fstat", self._fstat_of_read_call(dev=lambda n: 100 + n)):
+            res = self.read(tree)
+        self.assertEqual(len(res.calls), 2)
+        self.assertEqual(res.quality["hardlinks duplicados dentro de projects"], 0)
+        # mismo inodo y mismo dispositivo simulado: una llamada
+        with mock.patch.object(ur.os, "fstat", self._fstat_of_read_call(dev=lambda n: 100)):
+            res = self.read(tree)
+        self.assertEqual(len(res.calls), 1)
+        self.assertEqual(res.quality["hardlinks duplicados dentro de projects"], 1)
+
     def test_hardlinked_file_with_foreign_content_fails_the_signature(self):
         tree = us.Tree(self.base)
         outer = os.path.join(self.base, "afuera.txt")
@@ -1661,6 +1719,80 @@ class ReaderDefensive(ReaderBase):
         self.assertLessEqual(used, keys | values | labels | set(ur.TOKEN_FIELDS))
         self.assertEqual(ur.TOKEN_FIELDS, ("input_tokens", "output_tokens", "cache_creation_input_tokens",
                                            "cache_read_input_tokens"))
+        # nada de iterar un diccionario de la transcripcion ni de accederlo con una clave en una
+        # variable, salvo los diccionarios propios del lector y `usage.get(name)` (name de TOKEN_FIELDS)
+        self.assertEqual(unsafe_key_access(src[start:end]), [])
+        self.assertIn("for name in TOKEN_FIELDS", src[start:end])
+
+    def test_unsafe_access_detector_catches_evasions(self):
+        for snippet in (
+            "for k, v in obj.items(): pass",
+            "x = list(obj.values())",
+            "x = obj.keys()",
+            "x = obj[k]",
+            "x = obj.get(k)",
+            "x = obj.get(k, 1)",
+            "x = a.b.pop(k)",
+            "x = obj.setdefault(k, 1)",
+            # evasiones del subindice: no basta con que la clave no sea un Name/Call/BinOp
+            "x = obj[x.y]",
+            "x = obj[a[0]]",
+            "x = obj[k if c else j]",
+            'x = obj[f"{k}"]',
+            "x = obj[k, 1]",
+            "x = obj[:k]",
+            "x = obj[1:k]",
+            "x = obj[int(k)]",
+            # el nombre suelto de un receptor propio ya no vale: solo la ruta completa
+            "for e in content:\n    e.items()",
+            "x = e[k]",
+            "x = schema[k]",
+            "x = usage_by_id[k]",
+            "x = other.usage_by_id[k]",
+            "x = e.get(k)",
+            # recorridos y copias de un diccionario de la transcripcion
+            "for k in obj: pass",
+            "x = [k for k in obj]",
+            "x = {k: 1 for k in obj}",
+            "x = dict(obj)",
+            "x = dict(**obj)",
+            "x = list(obj)",
+            "x = sorted(obj)",
+            "x = tuple(obj)",
+            "x = {**obj}",
+            "x = json.dumps(obj)",
+            "json.dump(obj, f)",
+            "for k in (obj or ()): pass",
+            # `name` solo vale dentro de `for name in TOKEN_FIELDS`
+            "x = usage.get(name)",
+            "for name in OTHER:\n    x = usage.get(name)",
+            "for name in TOKEN_FIELDS:\n    pass\nx = usage.get(name)",
+            "for key in TOKEN_FIELDS:\n    x = usage.get(key)",
+            "for name in TOKEN_FIELDS:\n    x = usage.get(name2)",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertTrue(unsafe_key_access(snippet), snippet)
+        for snippet in (
+            "for name in TOKEN_FIELDS:\n    x = usage.get(name)",   # el unico uso permitido de `name`\n            "for name in TOKEN_FIELDS:\n    y = usage[name]",
+            "x = kinds.get(meta_name)",            # ruta propia completa
+            "x = acc.usage_by_id.items()",
+            "x = list(acc.usage_by_id.values())",
+            "x = res.schema[check]",
+            "x = acc.usage_by_id[key]",
+            "x = dict(listing)",
+            "x = sorted(res.schema)",
+            "for c in calls: pass",
+            "x = items[1:]",                       # un corte con limites constantes
+            "x = ordered[:MAX_SHOWN_VERSIONS]",
+            "x = name[:-len('.jsonl')]",
+            "x = numeric[-1]",
+            'x = obj["type"]',                     # constante: lo revisa keys_used_by
+            'q["a" if c else "b"] += 1',           # un IfExp de constantes sigue siendo constante
+            "x = obj.get('type')",
+            "x = json.dumps(acc.usage_by_id)",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertEqual(unsafe_key_access(snippet), [], snippet)
 
     def test_key_extractor_detects_evasions(self):
         for snippet, expected in (
@@ -1679,6 +1811,133 @@ class ReaderDefensive(ReaderBase):
                 self.assertEqual(keys_used_by(snippet), expected)
         # un contador que se escribe (q["x"] += 1) no es una clave de transcripcion
         self.assertEqual(keys_used_by('q["llamadas leidas"] += 1\nr = 3'), set())
+
+
+# Contenedores PROPIOS del lector (no son lineas de la transcripcion): el acumulador por archivo, el
+# listado de directorio, los contadores de ReadResult, listas locales y las constantes del modulo.
+# Se aceptan SOLO por ruta completa: un nombre suelto como `e` o `schema` no vale, porque cualquier
+# variable que apunte a una linea de la transcripcion podria llamarse asi.
+OWN_PATHS = frozenset((
+    "acc.usage_by_id", "acc.usage_no_id", "acc.schema", "acc.versions", "acc.tools",
+    "res.schema", "res.versions", "res.schema_versions", "res.quality", "self.quality", "self.versions",
+    "kinds", "listing", "TOKEN_FIELDS", "numeric", "seen", "failing", "calls", "c.versions",
+    "line_models", "entries", "labels", "out", "ordered",
+    # lista de bloques de `message.content`: el lector la comprueba como `list` antes de recorrerla
+    "content",
+))
+# Una variable solo vale como clave dentro de estos bucles (variable, iterable): `name` recorre
+# TOKEN_FIELDS en `_token_tuple`. Fuera del bucle (o con otro iterable) se rechaza.
+ALLOWED_KEY_LOOPS = frozenset((("name", "TOKEN_FIELDS"),))
+# Constantes del modulo que valen como limite de un corte (`ordered[:MAX_SHOWN_VERSIONS]`).
+SLICE_CONSTANTS = frozenset(("MAX_SHOWN_VERSIONS",))
+_COPYING_CALLS = frozenset(("dict", "list", "tuple", "set", "frozenset", "sorted", "iter", "enumerate"))
+
+
+def _path(node):
+    """Ruta con puntos de un Name o de una cadena de Attribute sobre un Name; None si no es una."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return None
+
+
+def _const_like(node) -> bool:
+    """Constante, o una expresion cuyo valor solo puede ser una constante escrita en el codigo."""
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        return _const_like(node.operand)
+    if isinstance(node, ast.IfExp):
+        return _const_like(node.body) and _const_like(node.orelse)
+    if isinstance(node, ast.Tuple):
+        return all(_const_like(e) for e in node.elts)
+    return False
+
+
+def _bound_ok(node) -> bool:
+    """Limite de un corte: ausente, constante, constante del modulo o len(<constante>)."""
+    if node is None or _const_like(node):
+        return True
+    if isinstance(node, ast.Name):
+        return node.id in SLICE_CONSTANTS
+    if isinstance(node, ast.UnaryOp):
+        return _bound_ok(node.operand)
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "len"
+            and len(node.args) == 1 and isinstance(node.args[0], ast.Constant))
+
+
+def _iterated_paths(node):
+    """Rutas que un `for`, una comprension o una copia recorren; None marca algo que no es una ruta."""
+    path = _path(node)
+    if path is not None:
+        return [path]
+    if isinstance(node, ast.BoolOp):
+        return [p for v in node.values for p in _iterated_paths(v)]
+    if isinstance(node, ast.IfExp):
+        return _iterated_paths(node.body) + _iterated_paths(node.orelse)
+    return []
+
+
+def unsafe_key_access(source: str, own_paths=OWN_PATHS, allowed_loops=ALLOWED_KEY_LOOPS) -> list:
+    """Accesos a diccionarios que keys_used_by no puede revisar. Se rechaza, salvo que el receptor
+    sea una ruta propia COMPLETA (own_paths):
+      - `.items()`, `.values()`, `.keys()`;
+      - TODO subindice cuya clave no sea una constante (o un IfExp/tupla de constantes) o un corte con
+        limites constantes; y `.get`/`.pop`/`.setdefault` con un primer argumento que no sea constante;
+      - recorrer un diccionario: `for k in obj`, comprensiones, `dict(obj)`, `list(obj)`, `sorted(obj)`,
+        `{**obj}`, `dict(**obj)` y `json.dumps(obj)`.
+    Una variable solo vale como clave dentro de un bucle de allowed_loops."""
+    tree = ast.parse(source)
+    shielded = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.For) and isinstance(node.target, ast.Name)
+                and (node.target.id, _path(node.iter)) in allowed_loops):
+            shielded |= {id(n) for stmt in node.body for n in ast.walk(stmt)
+                         if isinstance(n, ast.Name) and n.id == node.target.id}
+
+    def key_ok(key) -> bool:
+        return _const_like(key) or (isinstance(key, ast.Name) and id(key) in shielded)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            recv = _path(node.func.value)
+            attr = node.func.attr
+            if attr in ("items", "values", "keys") and recv not in own_paths:
+                offenders.append("%s() sobre %s" % (attr, recv))
+            elif (attr in ("get", "pop", "setdefault") and node.args and recv not in own_paths
+                  and not key_ok(node.args[0])):
+                offenders.append("%s(<no constante>) sobre %s" % (attr, recv))
+            elif _path(node.func) in ("json.dumps", "json.dump"):
+                args = list(node.args) + [k.value for k in node.keywords]
+                if any(_path(a) not in own_paths for a in args):
+                    offenders.append("%s sobre algo que no es propio" % _path(node.func))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _COPYING_CALLS:
+            for arg in list(node.args) + [k.value for k in node.keywords]:
+                for path in _iterated_paths(arg):
+                    if path not in own_paths:
+                        offenders.append("%s(%s)" % (node.func.id, path))
+        elif isinstance(node, ast.Subscript):
+            recv = _path(node.value)
+            if isinstance(node.slice, ast.Slice):
+                ok = all(_bound_ok(b) for b in (node.slice.lower, node.slice.upper, node.slice.step))
+            else:
+                ok = key_ok(node.slice)
+            if not ok and recv not in own_paths:
+                offenders.append("subindice no constante sobre %s" % recv)
+        elif isinstance(node, (ast.For, ast.comprehension)):
+            for path in _iterated_paths(node.iter):
+                if path not in own_paths:
+                    offenders.append("recorrido de %s" % path)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if key is None and _path(value) not in own_paths:
+                    offenders.append("{**%s}" % _path(value))
+    return offenders
 
 
 def keys_used_by(source: str) -> set:
@@ -1799,13 +2058,18 @@ class ReaderAuditFixes(ReaderBase):
         self.assertEqual(sum(c.input_tokens for c in res.calls), 15)
         self.assertTrue(any("repetidos entre archivos" in w for w in res.warnings))
 
-    def test_file_fully_duplicated_keeps_has_usage_with_zero_requests(self):
+    def test_file_fully_duplicated_keeps_has_usage_with_zero_requests_but_is_not_usable(self):
+        # T3: `usable` exige requests > 0, asi un archivo con todos sus ids repetidos (0 peticiones,
+        # 0 tokens) no entra en medianas ni p90. has_usage sigue siendo True (tenia usage).
         tree = us.Tree(self.base)
         for n in ("a1", "a2"):
             tree.subagent("c--p", "s1", n, [us.assistant("dup", T0 + "1Z")])
         first, second = self.read(tree).calls
         self.assertEqual((second.requests, second.total_tokens, second.has_usage), (0, 0, True))
+        self.assertFalse(second.usable)
+        self.assertFalse(second.excluded)   # sigue contando para duracion y herramientas
         self.assertEqual(first.requests, 1)
+        self.assertTrue(first.usable)
 
     def test_damaged_file_does_not_register_its_ids(self):
         tree = us.Tree(self.base)
@@ -2035,6 +2299,965 @@ class ReaderAuditFixes(ReaderBase):
         self.assertEqual(res.quality["nombres no validos omitidos"], field(out, "nombres no validos omitidos"))
         self.assertEqual(res.quality["nombres no validos omitidos"], 4)
         self.assertEqual(res.quality["carpetas de proyecto leidas"], field(out, "carpetas de proyecto leidas"))
+
+
+class ReaderDedupAndRelease(ReaderBase):
+    """T3 previo: hardlinks repetidos dentro de projects/ y liberacion de memoria."""
+
+    def _linked_pair(self, tree, ids=("m1",)):
+        first = tree.subagent("c--p", "s1", "a1", [us.assistant(i, T0 + "1Z", usage_value=us.usage(7, 1, 1, 1))
+                                                   for i in ids])
+        sub2 = os.path.join(tree.folder("c--p"), "s2", "subagents")
+        os.makedirs(sub2)
+        self.hardlink(first, os.path.join(sub2, "agent-a2.jsonl"))
+        return first
+
+    def test_two_names_of_same_inode_inside_projects_are_one_call(self):
+        tree = us.Tree(self.base)
+        self._linked_pair(tree)
+        res = self.read(tree)
+        self.assertEqual(len(res.calls), 1)
+        self.assertEqual(res.quality["hardlinks duplicados dentro de projects"], 1)
+        self.assertEqual(res.quality["llamadas leidas"], 1)
+        self.assertEqual(res.quality["hardlinks aceptados"], 1)
+        self.assertEqual(res.calls[0].input_tokens, 7)   # no se cuenta dos veces
+        # el nombre que se recorre primero (orden alfabetico: s1 antes que s2) crea la llamada
+        self.assertEqual(res.calls[0].session, ur._digest("c--p\0s1").hex())
+
+    def test_hardlinked_pair_with_outside_link_is_also_deduplicated(self):
+        tree = us.Tree(self.base)
+        first = self._linked_pair(tree)
+        os.link(first, os.path.join(self.base, "afuera.jsonl"))   # nlink = 3
+        res = self.read(tree)
+        self.assertEqual(len(res.calls), 1)
+        self.assertEqual(res.quality["hardlinks duplicados dentro de projects"], 1)
+
+    def test_distinct_hardlinked_inodes_are_all_kept(self):
+        tree = us.Tree(self.base)
+        outer = us.Tree(os.path.join(self.base, "afuera"))
+        for i in (1, 2):
+            target = outer.subagent("c--x", "s9", "a%d" % i, [us.assistant("h%d" % i, T0 + "1Z")], meta=None)
+            sub = os.path.join(tree.folder("c--p"), "s%d" % i, "subagents")
+            os.makedirs(sub)
+            self.hardlink(target, os.path.join(sub, "agent-h%d.jsonl" % i))
+        res = self.read(tree)
+        self.assertEqual(len(res.calls), 2)
+        self.assertEqual(res.quality["hardlinks duplicados dentro de projects"], 0)
+        self.assertEqual(res.quality["hardlinks aceptados"], 2)
+
+    def test_duplicate_does_not_register_ids_or_meta(self):
+        tree = us.Tree(self.base)
+        self._linked_pair(tree)
+        res = self.read(tree)
+        self.assertEqual(res.quality["message.id repetido entre archivos"], 0)
+        self.assertEqual(res.warnings, [])
+
+    def test_read_result_releases_id_and_inode_sets(self):
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")])
+        res = self.read(tree)
+        self.assertIsNone(res._seen_ids)
+        self.assertIsNone(res._seen_inodes)
+        self.assertEqual(len(res.calls), 1)
+
+
+# --- T3: agregacion y metricas ---
+UTC = datetime.timezone.utc
+TODAY = datetime.date(2026, 3, 31)   # ventana por defecto: 2026-03-02 .. 2026-03-31 (30 fechas)
+
+
+def dt(day, hour=0, minute=0, second=0, micro=0, month=3):
+    return datetime.datetime(2026, month, day, hour, minute, second, micro, tzinfo=UTC)
+
+
+def span(seconds, day=10, hour=10):
+    """(start, end) de una llamada que dura `seconds` segundos."""
+    start = dt(day, hour)
+    return {"start": start, "end": start + datetime.timedelta(seconds=seconds)}
+
+
+def mk(n, **kw):
+    """CallRecord a mano. Por defecto: usable, 1 peticion, 20 tokens (10+5+2+3), 10 s, 2.1.330."""
+    fields = dict(
+        call_id="c%03d" % n, project="p-00000001", session="s1", agent="forge", agent_group="SyncLayer",
+        status="correcta", damage=None, has_meta=True, has_usage=True, models=("claude-opus-4-1",),
+        model="claude-opus-4-1", model_source="lineas", model_mismatch=False, input_tokens=10,
+        output_tokens=5, cache_creation_tokens=2, cache_read_tokens=3, requests=1, tools=0,
+        fallback_time=None, versions=("2.1.330",), hardlink=False, oversize_lines=0, background=None)
+    fields.update(span(10))
+    fields.update(kw)
+    if "agent_key" not in fields:
+        # clave interna del agente: sin meta, la constante; con meta, una por (agente, conjunto)
+        fields["agent_key"] = (ur.NO_META_KEY if fields["agent_group"] == "sin-meta"
+                               else "k:%s:%s" % (fields["agent"], fields["agent_group"]))
+    return ur.CallRecord(**fields)
+
+
+def no_usage(n, **kw):
+    fields = dict(status="sin_usage", has_usage=False, input_tokens=0, output_tokens=0,
+                  cache_creation_tokens=0, cache_read_tokens=0, requests=0)
+    fields.update(kw)
+    return mk(n, **fields)
+
+
+def damaged(n, **kw):
+    fields = dict(status="danada", damage="linea intermedia corrupta", input_tokens=0, output_tokens=0,
+                  cache_creation_tokens=0, cache_read_tokens=0, requests=0)
+    fields.update(kw)
+    return mk(n, **fields)
+
+
+def agg(source, **kw):
+    kw.setdefault("today", TODAY)
+    return ur.aggregate_calls(source, **kw)
+
+
+class Percentiles(unittest.TestCase):
+    def test_known_values_for_small_and_boundary_n(self):
+        # mediana con n par: media de los dos centrales, medio hacia arriba. p90: rango mas cercano,
+        # posicion ceil(0,9 n) de la lista ordenada (1 a n). "small" = n < 10.
+        cases = (
+            # n=1: mediana 7, posicion ceil(0,9)=1 -> 7
+            ([7], 7, 7, True),
+            # n=2: (1+4)/2=2,5 -> 3; posicion ceil(1,8)=2 -> 4
+            ([4, 1], 3, 4, True),
+            # n=9: mediana la 5.a = 5; posicion ceil(8,1)=9 -> 9
+            (list(range(9, 0, -1)), 5, 9, True),
+            # n=10: (5+6)/2=5,5 -> 6; posicion ceil(9,0)=9 -> 9 (no 10: es el limite)
+            (list(range(1, 11)), 6, 9, False),
+            # n=11: mediana la 6.a = 6; posicion ceil(9,9)=10 -> 10
+            (list(range(11, 0, -1)), 6, 10, False),
+            # n=2 con valores iguales: (2+2)/2 = 2
+            ([2, 2], 2, 2, True),
+            # n=2: (1+2)/2=1,5 -> 2
+            ([1, 2], 2, 2, True),
+            # n=10: nueve 5 y un 100: mediana (5+5)/2=5; posicion 9 -> 5 (el 100 queda fuera del p90)
+            ([5] * 9 + [100], 5, 5, False),
+        )
+        for values, median, p90, small in cases:
+            with self.subTest(values=values):
+                d = ur.distribution(values)
+                self.assertEqual((d.n, d.total, d.median, d.p90, d.small),
+                                 (len(values), sum(values), median, p90, small))
+
+    def test_empty_and_huge_values(self):
+        d = ur.distribution([])
+        self.assertEqual((d.n, d.total, d.median, d.p90, d.small), (0, 0, None, None, False))
+        big = 10 ** 15
+        d = ur.distribution([3 * big, big, big + 1])   # ordenado: big, big+1, 3 big
+        # mediana la 2.a = big+1; posicion ceil(2,7)=3 -> 3 big; total 5 big + 1
+        self.assertEqual((d.median, d.p90, d.total), (big + 1, 3 * big, 5 * big + 1))
+        d = ur.distribution([0, 0, 0])
+        self.assertEqual((d.median, d.p90, d.total), (0, 0, 0))
+
+    def test_input_order_and_input_list_untouched(self):
+        values = [5, 1, 9, 3]
+        before = list(values)
+        a = ur.distribution(values)
+        b = ur.distribution(sorted(values))
+        self.assertEqual(a, b)
+        self.assertEqual(values, before)
+
+
+class WindowRules(unittest.TestCase):
+    def test_default_window_is_30_utc_dates_ending_today(self):
+        w = ur.make_window(TODAY)
+        self.assertEqual((w.since, w.until), (datetime.date(2026, 3, 2), TODAY))
+        self.assertEqual((w.until - w.since).days + 1, 30)
+        # 1 de marzo menos 29 dias = 31 de enero (febrero de 2026 tiene 28)
+        w = ur.make_window(datetime.date(2026, 3, 1))
+        self.assertEqual(w.since, datetime.date(2026, 1, 31))
+
+    def test_boundaries_are_inclusive_by_date_in_utc(self):
+        w = ur.make_window(TODAY)
+        self.assertTrue(w.contains(dt(2, 0, 0, 0)))                       # primer instante de since
+        self.assertFalse(w.contains(dt(1, 23, 59, 59, 999999)))           # ultimo instante antes de since
+        self.assertTrue(w.contains(dt(31, 23, 59, 59, 999999)))           # ultimo instante de until
+        self.assertFalse(w.contains(dt(1, month=4)))                      # primer instante despues de until
+        # una hora con zona se lleva a UTC: 01:00+02:00 del 2 de marzo es 23:00Z del 1 -> fuera
+        east = datetime.timezone(datetime.timedelta(hours=2))
+        self.assertFalse(w.contains(datetime.datetime(2026, 3, 2, 1, 0, tzinfo=east)))
+        # 23:30-05:00 del 31 de marzo es 04:30Z del 1 de abril -> fuera
+        west = datetime.timezone(datetime.timedelta(hours=-5))
+        self.assertFalse(w.contains(datetime.datetime(2026, 3, 31, 23, 30, tzinfo=west)))
+        # sin zona se toma como UTC
+        self.assertTrue(w.contains(datetime.datetime(2026, 3, 2, 0, 0)))
+
+    def test_explicit_dates_all_and_errors(self):
+        d = datetime.date
+        self.assertEqual(ur.make_window(TODAY, since=d(2026, 3, 10)).until, TODAY)
+        self.assertEqual(ur.make_window(TODAY, until=d(2026, 3, 30)).since, d(2026, 3, 1))
+        one = ur.make_window(TODAY, since=d(2026, 3, 5), until=d(2026, 3, 5))
+        self.assertTrue(one.contains(dt(5, 12)))
+        self.assertFalse(one.contains(dt(6)))
+        w = ur.make_window(TODAY, all_time=True)
+        self.assertTrue(w.is_all)
+        self.assertTrue(w.contains(dt(1, month=1)))
+        with self.assertRaises(ValueError):
+            ur.make_window(TODAY, all_time=True, since=d(2026, 3, 1))
+        with self.assertRaises(ValueError):
+            ur.make_window(TODAY, since=d(2026, 3, 10), until=d(2026, 3, 9))
+
+    def test_utc_today_is_a_utc_date(self):
+        self.assertIsInstance(ur.utc_today(), datetime.date)
+
+    def test_dates_near_the_calendar_limits_are_a_clear_value_error(self):
+        d = datetime.date
+        # since = date.min + 5 dias - 29 dias desborda: OverflowError del calendario -> ValueError
+        with self.assertRaises(ValueError) as cm:
+            ur.make_window(d.min + datetime.timedelta(days=5))
+        self.assertEqual(str(cm.exception), ur.MSG_WINDOW_RANGE)
+        with self.assertRaises(ValueError):
+            ur.make_window(TODAY, until=d.min)
+        # el extremo superior no desborda: date.max como today da una ventana valida
+        w = ur.make_window(d.max)
+        self.assertEqual((w.until, (w.until - w.since).days), (d.max, 29))
+        self.assertTrue(w.contains(datetime.datetime(9999, 12, 31, 23, 59, tzinfo=UTC)))
+        # un instante que al llevarlo a UTC se sale del calendario cae fuera de toda ventana
+        # (no es un OverflowError): 23:59-05:00 del 31-12-9999 seria el 1-1-10000
+        far = datetime.timezone(datetime.timedelta(hours=-5))
+        self.assertFalse(w.contains(datetime.datetime(9999, 12, 31, 23, 59, tzinfo=far)))
+        east = datetime.timezone(datetime.timedelta(hours=5))
+        self.assertFalse(ur.make_window(TODAY).contains(datetime.datetime(1, 1, 1, 1, 0, tzinfo=east)))
+
+    def test_window_built_by_hand_is_validated_in_the_constructor(self):
+        d = datetime.date
+        for since, until in ((d(2026, 3, 1), None), (None, d(2026, 3, 1)), (d(2026, 3, 2), d(2026, 3, 1)),
+                             ("2026-03-01", d(2026, 3, 1)), (d(2026, 3, 1), 5),
+                             (datetime.datetime(2026, 3, 1), d(2026, 3, 2))):
+            with self.subTest(since=since, until=until):
+                with self.assertRaises(ValueError):
+                    ur.Window(since, until)
+        self.assertTrue(ur.Window(None, None).is_all)
+        self.assertTrue(ur.Window(d(2026, 3, 1), d(2026, 3, 1)).contains(dt(1, 12)))
+
+
+class AggregationWindow(unittest.TestCase):
+    def test_today_is_required_when_there_is_no_window_and_the_clock_is_never_read(self):
+        with self.assertRaises(ValueError) as cm:
+            ur.aggregate_calls([mk(0)])
+        self.assertEqual(str(cm.exception), ur.MSG_TODAY_REQUIRED)
+        with mock.patch.object(ur, "utc_today", side_effect=AssertionError("reloj")):
+            ur.aggregate_calls([mk(0)], today=TODAY)
+            ur.aggregate_calls([mk(0)], window=ur.make_window(TODAY))
+
+    def test_unreadable_calls_without_any_time_count_in_the_damage_threshold_of_a_window(self):
+        # caso reproducido: 10 ilegibles sin hora y ninguna correcta. Sin hora quedan fuera de la
+        # ventana, pero el umbral las cuenta (criterio conservador: en numerador y denominador)
+        lost = [damaged(i, damage="ilegible", start=None, end=None, fallback_time=None) for i in range(10)]
+        with self.assertRaises(ur.SchemaError) as cm:
+            agg(lost)
+        self.assertIn("10 de 10", cm.exception.message)
+        # las no danadas sin hora NO entran en el denominador: 1 danada sin hora + 19 correctas = 5 %
+        ok = [mk(100 + i) for i in range(19)]
+        one = [damaged(1, damage="ilegible", start=None, end=None, fallback_time=None)]
+        m = agg(ok + one)
+        self.assertEqual((m.total.calls, m.quality.without_any_time, m.quality.without_any_time_excluded), (19, 1, 1))
+        # 19 correctas + 2 danadas sin hora = 2 de 21 > 5 %
+        two = one + [damaged(2, damage="tope", start=None, end=None, fallback_time=None)]
+        with self.assertRaises(ur.SchemaError) as cm:
+            agg(ok + two)
+        self.assertIn("2 de 21", cm.exception.message)
+        # una correcta sin hora no suma al denominador: 19 + 1 danada sin hora + 1 correcta sin hora = 1 de 20
+        quiet = mk(200, start=None, end=None, fallback_time=None)
+        m = agg(ok + one + [quiet])
+        self.assertEqual((m.quality.without_any_time, m.quality.without_any_time_excluded), (2, 1))
+        # con fallback_time la danada se ubica en la ventana y cuenta una sola vez
+        located = [damaged(3, damage="ilegible", start=None, end=None, fallback_time=dt(15, 12))]
+        with self.assertRaises(ur.SchemaError) as cm:
+            agg(located + [damaged(4, damage="tope", start=None, end=None, fallback_time=dt(15, 12))] + ok[:5])
+        self.assertIn("2 de 7", cm.exception.message)
+        # --all: entran en la ventana, no se cuentan dos veces
+        with self.assertRaises(ur.SchemaError) as cm:
+            agg(lost, window=ur.make_window(TODAY, all_time=True))
+        self.assertIn("10 de 10", cm.exception.message)
+        # sin comprobacion no lanza y el dato queda expuesto
+        m = agg(lost, check_damage=False)
+        self.assertEqual((m.total.calls, m.quality.without_any_time, m.quality.without_any_time_excluded), (0, 10, 10))
+
+    def test_window_membership_and_quality_of_placement(self):
+        old = datetime.datetime(2026, 2, 1, tzinfo=UTC)
+        calls = [
+            mk(0, **span(10, day=10)),                                                  # dentro
+            mk(1, start=old, end=old),                                                  # fuera
+            mk(2, start=None, end=None, fallback_time=dt(15, 12)),                      # respaldo, dentro
+            mk(3, start=None, end=None, fallback_time=datetime.datetime(2026, 1, 5, tzinfo=UTC)),  # respaldo, fuera
+            mk(4, start=None, end=None, fallback_time=None),                           # sin ninguna hora
+        ]
+        m = agg(calls)
+        self.assertEqual(m.window.since, datetime.date(2026, 3, 2))
+        self.assertEqual(m.total.calls, 2)
+        q = m.quality
+        self.assertEqual((q.calls_read, q.calls_in_window, q.calls_outside_window), (5, 2, 3))
+        self.assertEqual((q.without_start, q.placed_by_fallback, q.without_any_time), (1, 1, 1))
+        # con --all entran todas, tambien la que no tiene hora; el respaldo ya no hace falta
+        m = agg(calls, window=ur.make_window(TODAY, all_time=True))
+        self.assertEqual(m.total.calls, 5)
+        self.assertEqual((m.quality.without_start, m.quality.placed_by_fallback, m.quality.without_any_time),
+                         (3, 0, 1))
+
+    def test_zero_calls_empty_window_and_single_call(self):
+        m = agg([])
+        self.assertEqual((m.total.calls, m.agents, m.groups, m.projects, m.warnings), (0, (), (), (), ()))
+        self.assertEqual((m.total.sessions, m.total.calls_per_session_tenths), (0, None))
+        self.assertEqual((m.total.tokens.n, m.total.tokens.total.median, m.total.duration.median), (0, None, None))
+        m = agg([mk(0, start=dt(1, month=1), end=dt(1, month=1))])
+        self.assertEqual((m.total.calls, m.quality.calls_read, m.quality.calls_outside_window), (0, 1, 1))
+        m = agg([mk(0)])
+        self.assertEqual((m.total.calls, m.total.tokens.n, m.total.tokens.total.median, m.total.tokens.total.p90,
+                          m.total.tokens.total.small), (1, 1, 20, 20, True))
+
+    def test_damage_ratio_is_measured_on_the_window_calls(self):
+        ok = [mk(i) for i in range(19)]
+        agg(ok + [damaged(100)])          # 1 de 20 = 5 %: no supera el umbral
+        with self.assertRaises(ur.SchemaError) as cm:
+            agg(ok + [damaged(100), damaged(101)])   # 2 de 21 > 5 %
+        cm.exception.message.encode("ascii")
+        # los danados FUERA de la ventana no cuentan
+        old = [damaged(200 + i, start=dt(1, month=1), end=dt(1, month=1)) for i in range(50)]
+        m = agg(ok + old)
+        self.assertEqual(m.total.calls, 19)
+        # con --all si cuentan: 50 de 69
+        with self.assertRaises(ur.SchemaError):
+            agg(ok + old, window=ur.make_window(TODAY, all_time=True))
+        # y se puede desactivar la comprobacion
+        m = agg(ok + [damaged(100), damaged(101)], check_damage=False)
+        self.assertEqual(m.quality.excluded, 2)
+
+
+class AggregationMetrics(unittest.TestCase):
+    def test_calls_sessions_and_calls_per_session(self):
+        calls = [mk(0, session="s1"), mk(1, session="s1"), mk(2, session="s2"),
+                 mk(3, agent="scout", session="s1")]
+        m = agg(calls)
+        forge = m.agents[0]
+        self.assertEqual((forge.agent, forge.group), ("forge", "SyncLayer"))
+        # forge: 3 llamadas en 2 sesiones = 1,5 -> 15 decimas
+        self.assertEqual((forge.metrics.calls, forge.metrics.sessions, forge.metrics.calls_per_session_tenths),
+                         (3, 2, 15))
+        # total: 4 llamadas en 2 sesiones distintas (s1, s2) = 2,0
+        self.assertEqual((m.total.calls, m.total.sessions, m.total.calls_per_session_tenths), (4, 2, 20))
+        # 7 llamadas / 3 sesiones = 2,33 -> 23 (redondeo al mas cercano)
+        seven = [mk(i, session="s%d" % (i % 3)) for i in range(7)]
+        self.assertEqual(agg(seven).total.calls_per_session_tenths, 23)
+
+    def test_calls_per_session_rounds_to_nearest_tenth_not_down(self):
+        # 7 / 4 = 1,75 -> 17,5 decimas -> 18 (medio hacia arriba; el suelo daria 17)
+        # 5 / 4 = 1,25 -> 12,5 decimas -> 13 (el suelo daria 12)
+        # 8 / 3 = 2,666 -> 26,7 -> 27 (el suelo daria 26); 4 / 3 = 1,333 -> 13,3 -> 13
+        for calls, sessions, expected in ((7, 4, 18), (5, 4, 13), (8, 3, 27), (4, 3, 13), (1, 1, 10), (3, 2, 15)):
+            with self.subTest(calls=calls, sessions=sessions):
+                items = [mk(i, session="s%d" % (i % sessions)) for i in range(calls)]
+                self.assertEqual(agg(items).total.calls_per_session_tenths, expected)
+
+    def test_excluded_unreadable_and_excluded_cap_are_told_apart(self):
+        calls = [mk(0), mk(1),
+                 damaged(2, damage="linea intermedia corrupta"),
+                 damaged(3, damage="ilegible"),
+                 damaged(4, damage="tope"), damaged(5, damage="tope"), damaged(6, damage="tope")]
+        q = agg(calls, check_damage=False).quality
+        # 1 corrupta, 1 ilegible, 3 tope: ninguna cadena se cuenta en la de otra
+        self.assertEqual((q.excluded, q.excluded_corrupt_line, q.excluded_unreadable, q.excluded_cap),
+                         (5, 1, 1, 3))
+        only = agg([mk(0), damaged(1, damage="ilegible")], check_damage=False).quality
+        self.assertEqual((only.excluded_unreadable, only.excluded_cap, only.excluded_corrupt_line), (1, 0, 0))
+        only = agg([mk(0), damaged(1, damage="tope")], check_damage=False).quality
+        self.assertEqual((only.excluded_unreadable, only.excluded_cap, only.excluded_corrupt_line), (0, 1, 0))
+
+    def test_groups_by_agent_and_group_never_by_name_alone(self):
+        calls = [
+            mk(0), mk(1),
+            mk(2, agent="(otro agente)", agent_group="otros"),
+            mk(3, agent="(otro agente)", agent_group="plugin:(no-valido)"),
+            mk(4, agent="general-purpose", agent_group="integrado"),
+        ]
+        m = agg(calls)
+        # orden: llamadas descendente, luego nombre y conjunto
+        self.assertEqual([(a.agent, a.group, a.metrics.calls) for a in m.agents], [
+            ("forge", "SyncLayer", 2),
+            ("(otro agente)", "otros", 1),
+            ("(otro agente)", "plugin:(no-valido)", 1),
+            ("general-purpose", "integrado", 1),
+        ])
+        self.assertEqual([(g.group, g.agents, g.metrics.calls) for g in m.groups], [
+            ("SyncLayer", 1, 2), ("integrado", 1, 1), ("otros", 1, 1), ("plugin:(no-valido)", 1, 1)])
+
+    def test_group_agent_count_uses_the_internal_agent_key(self):
+        calls = [
+            mk(0, agent="(otro agente)", agent_group="otros", agent_key="ua1"),
+            mk(1, agent="(otro agente)", agent_group="otros", agent_key="ua2"),
+            mk(2, agent="(otro agente)", agent_group="otros", agent_key="ua2"),
+            mk(3, agent="plugin:pl", agent_group="plugin:pl", agent_key="pa1"),
+            mk(4, agent="plugin:pl", agent_group="plugin:pl", agent_key="pa2"),
+            mk(5, agent="plugin:pl", agent_group="plugin:pl", agent_key="pa3"),
+            mk(6, agent="(sin-meta)", agent_group="sin-meta", has_meta=False),
+            mk(7, agent="(sin-meta)", agent_group="sin-meta", has_meta=False),
+            mk(8), mk(9, agent="scout"),
+        ]
+        m = agg(calls)
+        self.assertEqual({g.group: g.agents for g in m.groups},
+                         {"otros": 2, "plugin:pl": 3, "sin-meta": 1, "SyncLayer": 2})
+        # la fila por (agente, conjunto) sigue siendo una sola por etiqueta visible
+        self.assertEqual(len([a for a in m.agents if a.group == "otros"]), 1)
+
+    def test_tokens_use_only_usable_calls_but_duration_and_tools_use_non_excluded(self):
+        calls = [
+            mk(0, **span(10), tools=0),                                                    # usable: 20 tokens
+            no_usage(1, **span(30), tools=4),                                              # sin usage
+            damaged(2, **span(999), tools=9),                                              # excluida
+            mk(3, has_usage=True, requests=0, input_tokens=0, output_tokens=0,
+               cache_creation_tokens=0, cache_read_tokens=0, **span(0), tools=2),          # ids repetidos
+            mk(4, input_tokens=100, output_tokens=50, cache_creation_tokens=20, cache_read_tokens=30,
+               requests=3, **span(20), tools=0),                                           # usable: 200
+        ]
+        m = agg(calls, check_damage=False).total
+        self.assertEqual((m.calls, m.excluded), (5, 1))
+        t = m.tokens
+        self.assertEqual(t.n, 2)
+        # totales por llamada [20, 200]: mediana (20+200)/2=110, p90 posicion ceil(1,8)=2 -> 200, suma 220
+        self.assertEqual((t.total.median, t.total.p90, t.total.total), (110, 200, 220))
+        # entrada [10, 100]: (10+100)/2=55
+        self.assertEqual((t.input_tokens.median, t.input_tokens.total), (55, 110))
+        # salida [5, 50]: 27,5 -> 28; caches escrita [2, 20]: 11; leida [3, 30]: 16,5 -> 17
+        self.assertEqual((t.output_tokens.median, t.cache_creation_tokens.median, t.cache_read_tokens.median), (28, 11, 17))
+        # peticiones [1, 3]: mediana 2
+        self.assertEqual((t.requests.median, t.requests.total), (2, 4))
+        # duracion (no excluidas: 10, 30, 0, 20 -> ordenado 0,10,20,30): mediana (10+20)/2=15, p90 pos 4 -> 30
+        self.assertEqual((m.duration.n, m.duration.median, m.duration.p90), (4, 15, 30))
+        # herramientas (0, 4, 2, 0 -> ordenado 0,0,2,4): mediana (0+2)/2=1, p90 pos 4 -> 4
+        self.assertEqual((m.tools.n, m.tools.median, m.tools.p90), (4, 1, 4))
+        q = agg(calls, check_damage=False).quality
+        self.assertEqual((q.excluded, q.excluded_corrupt_line, q.without_usage, q.all_ids_repeated, q.tokens_calls),
+                         (1, 1, 1, 1, 2))
+
+    def test_duration_rounds_to_nearest_second_and_skips_calls_without_times(self):
+        calls = [
+            mk(0, start=dt(10, 10), end=dt(10, 10, 0, 1, 499999)),   # 1,499999 s -> 1
+            mk(1, start=dt(10, 10), end=dt(10, 10, 0, 1, 500000)),   # 1,5 s -> 2
+            mk(2, start=None, end=None, fallback_time=dt(10), tools=3),   # sin horas: no tiene duracion
+        ]
+        m = agg(calls).total
+        self.assertEqual((m.duration.n, m.duration.total), (2, 3))
+        self.assertEqual((m.tools.n, m.tools.total), (3, 3))
+
+    def test_models_distribution_of_non_excluded_calls(self):
+        calls = [
+            mk(0), mk(1),
+            mk(2, models=("claude-haiku-4-5", "claude-opus-4-1"), model="mixto"),
+            mk(3, models=(), model="(desconocido)", model_source=None),
+            damaged(4, model="claude-sonnet-4-5", models=("claude-sonnet-4-5",)),
+        ]
+        m = agg(calls, check_damage=False).total
+        self.assertEqual(m.models, (("claude-opus-4-1", 2), ("(desconocido)", 1), ("mixto", 1)))
+
+    def test_projects_are_grouped_and_ordered(self):
+        calls = [mk(0, project="p-aaaaaaaa", session="a1"), mk(1, project="p-aaaaaaaa", session="a1"),
+                 mk(2, project="p-aaaaaaaa", session="a2"), mk(3, project="p-bbbbbbbb", session="b1")]
+        m = agg(calls)
+        self.assertEqual([(p.project, p.metrics.calls, p.metrics.sessions) for p in m.projects],
+                         [("p-aaaaaaaa", 3, 2), ("p-bbbbbbbb", 1, 1)])
+        self.assertEqual(m.projects[0].metrics.tokens.total.total, 60)
+
+    def test_iterators_and_tuples_are_accepted(self):
+        calls = [mk(0), mk(1, agent="scout")]
+        self.assertEqual(agg(iter(calls)).total, agg(calls).total)
+        self.assertEqual(agg(tuple(calls)).agents, agg(calls).agents)
+
+
+class VersionBreakdown(unittest.TestCase):
+    def _calls(self):
+        # tokens por llamada = input (los otros tres campos en 0) para leer las sumas
+        def v(n, versions, tokens):
+            return mk(n, versions=versions, input_tokens=tokens, output_tokens=0, cache_creation_tokens=0,
+                      cache_read_tokens=0)
+        return [
+            v(0, ("2.1.309",), 100),
+            v(1, ("2.1.310",), 200),
+            v(2, ("2.1.327",), 300),
+            v(3, ("2.1.328",), 400),
+            v(4, ("2.1.340",), 500),
+            v(5, (), 600),
+            v(6, ("(otra version)",), 700),
+            v(7, ("2.1.309", "2.1.311"), 800),     # toca el rango dudoso -> dudoso
+            v(8, ("2.1.309", "2.1.330"), 900),     # sin rango dudoso: la mas alta -> desde 2.1.328
+            v(9, ("2.1.328-beta",), 1000),
+            v(10, ("2.1.327-rc1",), 1100),
+            v(11, ("2.1.315", "2.1.330"), 1200),   # dudoso aunque su version mas alta es posterior
+        ]
+
+    def test_ranges_tokens_and_quality(self):
+        with mock.patch.object(ur, "VERIFIED_MAX", "2.1.326"):
+            m = agg(self._calls())
+        rows = {r.range: r for r in m.total.versions}
+        self.assertEqual([r.range for r in m.total.versions],
+                         [ur.RANGE_BEFORE, ur.RANGE_DOUBTFUL, ur.RANGE_AFTER, ur.RANGE_NONE])
+        # antes de 2.1.310: v0 -> 1 llamada, 100 tokens
+        self.assertEqual((rows[ur.RANGE_BEFORE].calls, rows[ur.RANGE_BEFORE].tokens.total.total), (1, 100))
+        # 2.1.310-2.1.327: v1 + v2 + v7 + v10 + v11 = 200+300+800+1100+1200 = 3600 en 5 llamadas
+        self.assertEqual((rows[ur.RANGE_DOUBTFUL].calls, rows[ur.RANGE_DOUBTFUL].tokens.total.total), (5, 3600))
+        # desde 2.1.328: v3 + v4 + v8 + v9 = 400+500+900+1000 = 2800 en 4 llamadas
+        self.assertEqual((rows[ur.RANGE_AFTER].calls, rows[ur.RANGE_AFTER].tokens.total.total), (4, 2800))
+        # sin version: v5 + v6 = 600+700 = 1300 en 2 llamadas
+        self.assertEqual((rows[ur.RANGE_NONE].calls, rows[ur.RANGE_NONE].tokens.total.total), (2, 1300))
+        self.assertTrue(rows[ur.RANGE_DOUBTFUL].inflated)
+        self.assertFalse(rows[ur.RANGE_BEFORE].inflated or rows[ur.RANGE_AFTER].inflated)
+        self.assertEqual(sum(r.calls for r in m.total.versions), m.total.calls)
+        q = m.quality
+        self.assertEqual((q.without_version, q.unrecognized_version), (1, 1))
+        # varios rangos distintos: v7 (anterior y dudoso), v8 (anterior y posterior) y v11 (dudoso y posterior)
+        self.assertEqual(q.multiple_ranges, 3)
+        # mayores que 2.1.326: v2, v3, v4, v8, v9, v10, v11 -> 7 llamadas
+        self.assertEqual(q.unverified_calls, 7)
+        self.assertEqual(m.unverified_versions,
+                         ("2.1.327", "2.1.327-rc1", "2.1.328", "2.1.328-beta", "2.1.330", "2.1.340"))
+        self.assertEqual(m.verified_max, "2.1.326")
+        seen = dict(m.versions_seen)
+        self.assertEqual(seen["2.1.309"], 3)     # v0, v7, v8
+        self.assertEqual(seen["2.1.311"], 1)
+        self.assertEqual([k for k, _ in m.versions_seen][:4], ["2.1.309", "2.1.310", "2.1.311", "2.1.315"])
+        self.assertNotIn("(otra version)", seen)
+
+    def test_no_version_row_is_labelled_as_unrecognizable_and_counters_stay_apart(self):
+        # la fila reune llamadas sin version y con version no reconocible; la etiqueta lo dice y los
+        # contadores de calidad las separan
+        self.assertEqual(ur.RANGE_NONE, "sin version reconocible")
+        self.assertEqual(ur.VERSION_RANGES[-1], ur.RANGE_NONE)
+        calls = [mk(0, versions=()), mk(1, versions=()), mk(2, versions=("(otra version)",)),
+                 mk(3, versions=("2.1.330",))]
+        m = agg(calls)
+        rows = {r.range: r.calls for r in m.total.versions}
+        self.assertEqual(rows[ur.RANGE_NONE], 3)
+        self.assertEqual((m.quality.without_version, m.quality.unrecognized_version), (2, 1))
+        ur.RANGE_NONE.encode("ascii")
+
+    def test_each_scope_has_its_own_breakdown_and_a_new_version_is_unverified(self):
+        calls = [mk(0, versions=("9.9.9",)), mk(1, agent="scout", versions=("2.1.300",))]
+        m = agg(calls)
+        self.assertEqual(m.unverified_versions, ("9.9.9",))
+        self.assertEqual(m.quality.unverified_calls, 1)
+        rows = {r.range: r.calls for r in m.total.versions}
+        self.assertEqual((rows[ur.RANGE_BEFORE], rows[ur.RANGE_AFTER]), (1, 1))
+        forge = [a for a in m.agents if a.agent == "forge"][0]
+        self.assertEqual({r.range: r.calls for r in forge.metrics.versions}[ur.RANGE_AFTER], 1)
+
+    def test_excluded_calls_count_in_versions_calls_but_not_in_tokens(self):
+        m = agg([mk(0, versions=("2.1.300",)), damaged(1, versions=("2.1.300",))], check_damage=False)
+        row = [r for r in m.total.versions if r.range == ur.RANGE_BEFORE][0]
+        self.assertEqual((row.calls, row.tokens.n), (2, 1))
+
+
+class ConsecutiveRepeats(unittest.TestCase):
+    @staticmethod
+    def _t(a, b):
+        return {"start": dt(10, 10, 0, a), "end": dt(10, 10, 0, b)}
+
+    def repeats(self, calls):
+        return agg(calls).total.repeats
+
+    def test_sequential_same_agent_counts_the_later_call(self):
+        self.assertEqual(self.repeats([mk(0, **self._t(0, 10)), mk(1, **self._t(11, 20))]), 1)
+
+    def test_three_in_a_row_count_two(self):
+        self.assertEqual(self.repeats([mk(0, **self._t(0, 1)), mk(1, **self._t(2, 3)), mk(2, **self._t(4, 5))]), 2)
+
+    def test_parallel_calls_do_not_count(self):
+        self.assertEqual(self.repeats([mk(0, **self._t(0, 10)), mk(1, **self._t(5, 15))]), 0)
+
+    def test_touching_calls_do_not_count(self):
+        # la anterior debe terminar ESTRICTAMENTE antes de que empiece la siguiente
+        self.assertEqual(self.repeats([mk(0, **self._t(0, 10)), mk(1, **self._t(10, 20))]), 0)
+
+    def test_other_agent_in_between_breaks_the_chain(self):
+        calls = [mk(0, **self._t(0, 10)), mk(1, agent="scout", **self._t(11, 12)), mk(2, **self._t(13, 20))]
+        self.assertEqual(self.repeats(calls), 0)
+
+    def test_parallel_pair_then_a_later_call(self):
+        # A [0,10], B [2,12] en paralelo; C [13,14]: la anterior de C es B (termino en 12) -> cuenta
+        calls = [mk(0, **self._t(0, 10)), mk(1, **self._t(2, 12)), mk(2, **self._t(13, 14))]
+        self.assertEqual(self.repeats(calls), 1)
+
+    def test_different_sessions_do_not_chain(self):
+        calls = [mk(0, session="s1", **self._t(0, 10)), mk(1, session="s2", **self._t(11, 20))]
+        self.assertEqual(self.repeats(calls), 0)
+
+    def test_same_agent_name_in_other_group_is_not_a_repeat(self):
+        calls = [mk(0, agent="(otro agente)", agent_group="otros", **self._t(0, 1)),
+                 mk(1, agent="(otro agente)", agent_group="plugin:(no-valido)", **self._t(2, 3))]
+        self.assertEqual(self.repeats(calls), 0)
+
+    def test_order_independent_attributed_to_the_agent_and_calls_without_times_skipped(self):
+        calls = [mk(0, **self._t(0, 1)), mk(1, **self._t(2, 3)), mk(2, agent="scout", **self._t(4, 5)),
+                 mk(3, start=None, end=None, fallback_time=dt(10))]
+        for order in (calls, calls[::-1], [calls[2], calls[0], calls[3], calls[1]]):
+            m = agg(order)
+            self.assertEqual({a.agent: a.metrics.repeats for a in m.agents}, {"forge": 1, "scout": 0})
+            self.assertEqual(m.total.repeats, 1)
+
+    def test_damaged_call_that_kept_its_times_still_takes_part(self):
+        m = agg([mk(0, **self._t(0, 1)), damaged(1, **self._t(2, 3))], check_damage=False)
+        self.assertEqual(m.total.repeats, 1)
+
+    def test_same_agent_means_same_internal_key_not_same_visible_label(self):
+        def plugin(n, key, a, b):
+            return mk(n, agent="plugin:pl", agent_group="plugin:pl", agent_key=key, **self._t(a, b))
+
+        def other(n, key, a, b):
+            return mk(n, agent="(otro agente)", agent_group="otros", agent_key=key, **self._t(a, b))
+
+        # dos agentes distintos del mismo plugin, seguidos: no es repeticion
+        self.assertEqual(self.repeats([plugin(0, "pa", 0, 1), plugin(1, "pb", 2, 3)]), 0)
+        # el mismo agente dos veces: si
+        self.assertEqual(self.repeats([plugin(0, "pa", 0, 1), plugin(1, "pa", 2, 3)]), 1)
+        # dos agentes de usuario distintos bajo `(otro agente)`: no; el mismo: si
+        self.assertEqual(self.repeats([other(0, "ua", 0, 1), other(1, "ub", 2, 3)]), 0)
+        self.assertEqual(self.repeats([other(0, "ua", 0, 1), other(1, "ua", 2, 3)]), 1)
+        # A B A con A y B del mismo conjunto: B rompe la cadena
+        self.assertEqual(self.repeats([other(0, "ua", 0, 1), other(1, "ub", 2, 3), other(2, "ua", 4, 5)]), 0)
+        # se atribuye al agente por etiqueta visible: el agregado por (agente, conjunto) lo suma
+        m = agg([other(0, "ua", 0, 1), other(1, "ua", 2, 3), other(2, "ub", 4, 5)])
+        self.assertEqual({(a.agent, a.group): a.metrics.repeats for a in m.agents}, {("(otro agente)", "otros"): 1})
+
+    def test_calls_without_meta_are_never_marked_as_repeats(self):
+        # decision: sin meta no hay identidad de agente (pueden ser agentes distintos), asi que una
+        # llamada sin meta nunca se marca; si participa en la cadena y rompe la de otros agentes
+        def nometa(n, a, b):
+            return mk(n, agent="(sin-meta)", agent_group="sin-meta", has_meta=False, **self._t(a, b))
+
+        self.assertEqual(self.repeats([nometa(0, 0, 1), nometa(1, 2, 3), nometa(2, 4, 5)]), 0)
+        calls = [mk(0, **self._t(0, 1)), nometa(1, 2, 3), mk(2, **self._t(4, 5))]
+        self.assertEqual(self.repeats(calls), 0)        # la llamada sin meta rompe la cadena de forge
+        self.assertEqual(self.repeats([mk(0, **self._t(0, 1)), mk(1, **self._t(2, 3)), nometa(2, 4, 5)]), 1)
+
+    def test_tie_on_start_and_end_is_broken_by_call_id(self):
+        # X (forge, id mayor) e Y (scout, id menor) empiezan y terminan a la vez; Z (scout) viene
+        # despues. Con desempate por call_id el orden es Y, X, Z: la anterior de Z es X (forge): 0.
+        # Sin el desempate, el orden de entrada (X, Y, Z) daria 1.
+        x = mk(0, call_id="c9", agent="forge", **self._t(0, 10))
+        y = mk(1, call_id="c1", agent="scout", **self._t(0, 10))
+        z = mk(2, call_id="c5", agent="scout", **self._t(20, 30))
+        for order in ([x, y, z], [z, y, x], [y, z, x], [x, z, y]):
+            self.assertEqual(self.repeats(order), 0)
+
+    def test_adjacency_is_an_inferred_signal_with_documented_limits(self):
+        # A1 [0,100], A2 [10,20], A3 [30,40] del mismo agente: A3 se marca aunque corre en paralelo
+        # con A1 (la anterior inmediata es A2, que ya termino); A2 no (A1 aun no termina)
+        def secs(a, b):
+            base = dt(10, 10)
+            return {"start": base + datetime.timedelta(seconds=a), "end": base + datetime.timedelta(seconds=b)}
+
+        calls = [mk(1, **secs(0, 100)), mk(2, **secs(10, 20)), mk(3, **secs(30, 40))]
+        self.assertEqual(agg(calls).total.repeats, 1)
+        flagged = ur.repeat_flags(calls)
+        self.assertEqual(flagged, frozenset(["c003"]))
+        # una llamada sin `start` no rompe la cadena (ni siquiera participa)
+        calls = [mk(0, **self._t(0, 1)), mk(1, start=None, end=None, fallback_time=dt(10), agent="scout"),
+                 mk(2, **self._t(2, 3))]
+        self.assertEqual(agg(calls).total.repeats, 1)
+        # la llamada cuya anterior quedo fuera de la ventana no se marca
+        old = datetime.datetime(2026, 1, 1, tzinfo=UTC)
+        calls = [mk(0, start=old, end=old + datetime.timedelta(seconds=1)), mk(1, **self._t(2, 3))]
+        self.assertEqual(agg(calls).total.repeats, 0)
+        self.assertEqual(agg(calls, window=ur.make_window(TODAY, all_time=True)).total.repeats, 1)
+        # sobreestima los flujos secuenciales legitimos: dos revisiones por el mismo agente en pasos
+        # distintos de un plan cuentan igual que un reintento
+        self.assertEqual(self.repeats([mk(0, **self._t(0, 1)), mk(1, **self._t(50, 51))]), 1)
+
+    def test_limitations_text_for_the_report_is_fixed_ascii_and_covers_each_limit(self):
+        self.assertIsInstance(ur.REPEAT_LIMITATIONS, tuple)
+        self.assertEqual(len(ur.REPEAT_LIMITATIONS), 6)
+        for line in ur.REPEAT_LIMITATIONS:
+            line.encode("ascii")
+        joined = " ".join(ur.REPEAT_LIMITATIONS)
+        for needle in ("inferida", "paralelo", "sin hora de inicio", "fuera de la ventana", "sin meta",
+                       "secuenciales"):
+            self.assertIn(needle, joined)
+
+
+class AggregationDeterminismAndPurity(unittest.TestCase):
+    def _many(self):
+        rnd = random.Random(7)
+        agents = (("forge", "SyncLayer"), ("scout", "SyncLayer"), ("(otro agente)", "otros"),
+                  ("plugin:pl", "plugin:pl"))
+        calls = []
+        for i in range(40):
+            name, group = agents[i % 4]
+            calls.append(mk(i, agent=name, agent_group=group, project="p-0000000%d" % (i % 3),
+                            session="s%d" % (i % 5), input_tokens=rnd.randrange(1, 5000),
+                            tools=rnd.randrange(0, 9),
+                            versions=(rnd.choice(("2.1.300", "2.1.315", "2.1.330")),),
+                            model=rnd.choice(("claude-opus-4-1", "mixto")),
+                            **span(rnd.randrange(0, 120), day=1 + i % 28)))
+        return calls
+
+    def test_same_input_same_output_in_any_order(self):
+        calls = self._many()
+        base = agg(calls)
+        rnd = random.Random(1)
+        for _ in range(4):
+            shuffled = list(calls)
+            rnd.shuffle(shuffled)
+            other = agg(shuffled)
+            self.assertEqual(other, base)
+            self.assertEqual(repr(other), repr(base))
+        self.assertEqual(repr(agg(calls)), repr(base))
+
+    def test_aggregation_does_no_io(self):
+        calls = self._many()
+
+        def boom(*a, **k):
+            raise AssertionError("E/S en la agregacion")
+
+        with mock.patch("builtins.open", boom), mock.patch.object(os, "stat", boom),                 mock.patch.object(os, "lstat", boom), mock.patch.object(os, "scandir", boom),                 mock.patch.object(os, "listdir", boom), mock.patch.object(os, "open", boom),                 mock.patch.object(os, "fstat", boom):
+            agg(calls)
+            agg(calls, window=ur.make_window(TODAY, all_time=True))
+            agg(self._many()[:0], window=ur.make_window(TODAY))
+
+    # Todo lo que `aggregate_calls` puede alcanzar (funciones, clases y constantes del modulo, por
+    # nombre). Lista BLANCA y cerrada: un nombre nuevo hace fallar la prueba y obliga a revisarlo.
+    PURE_REACHABLE = frozenset((
+        "aggregate_calls", "make_window", "Window", "Dist", "distribution", "TokenStats", "VersionRow",
+        "ScopeMetrics", "AgentMetrics", "GroupMetrics", "ProjectMetrics", "DataQuality", "UsageMetrics",
+        "_range_of", "_numeric_versions", "version_range", "_spans_ranges", "_call_moment",
+        "_duration_seconds", "token_stats", "repeat_flags", "_scope", "_data_quality", "_by_key",
+        "check_damaged", "_schema_message", "_versions_text", "_recent_first", "is_unverified",
+        "version_key", "SchemaError", "ReadResult",
+        "MAX_DAMAGED_PERCENT", "MAX_SHOWN_VERSIONS", "RANGE_AFTER", "RANGE_BEFORE", "RANGE_DOUBTFUL",
+        "RANGE_NONE", "READ_QUALITY_LABELS", "SMALL_N", "VERIFIED_MAX", "VERSION_RANGES", "WINDOW_DAYS",
+        "WARN_ID_CAP", "WARN_ID_REPEATED", "WARN_NO_MESSAGE_ID", "_DOUBTFUL_FROM", "_DOUBTFUL_TO",
+        "_VERSION_PARTS_RE", "MSG_TODAY_REQUIRED", "MSG_WINDOW_RANGE", "MSG_WINDOW_INVALID", "NO_META_KEY",
+    ))
+    # Nombres de funcion que el codigo alcanzable puede llamar (ademas de los de PURE_REACHABLE).
+    CALLABLE_OK = frozenset((
+        # integrados
+        "ValueError", "bool", "frozenset", "int", "isinstance", "len", "list", "max", "min", "set", "sorted",
+        "str", "sum", "tuple", "zip", "any", "all", "range", "dict", "enumerate", "reversed",
+        # metodos de contenedores, de re y de las fechas
+        "Counter", "defaultdict", "add", "append", "sort", "items", "values", "get", "match", "join",
+        "timedelta", "astimezone", "replace", "date", "contains", "__init__", "__post_init__", "field",
+        "dataclass", "super", "format", "isoformat", "groups",
+    ))
+    FORBIDDEN = frozenset((
+        "now", "utcnow", "fromtimestamp", "__import__", "importlib", "io", "getattr", "setattr",
+        "hasattr", "Path", "tempfile", "open", "os", "sys", "subprocess", "shutil", "pathlib", "print",
+        "input", "eval", "exec", "compile", "globals", "locals", "vars", "stat", "lstat", "fstat",
+        "scandir", "listdir", "read", "write", "readline", "time", "environ", "getenv", "socket",
+    ))
+    # Funciones del lector que hacen E/S: la agregacion no puede alcanzarlas ni de forma indirecta.
+    READER_IO_FUNCTIONS = ("_read_call", "_enum_sessions", "_read_project_folder", "derive_folder_name",
+                           "read_calls", "_read_session", "_open_regular", "_list_dir", "_read_meta",
+                           "_scan_project_folder", "_iter_objects", "utc_today", "_default_claude_dir")
+
+    @staticmethod
+    def _module_tree():
+        with open(SCRIPT, "rb") as f:
+            return ast.parse(f.read().decode("utf-8"))
+
+    def _reachable(self):
+        top = {}
+        for node in self._module_tree().body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                top[node.name] = node
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        top[target.id] = node
+        seen, todo = set(), ["aggregate_calls"]
+        while todo:
+            name = todo.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            for n in ast.walk(top[name]):
+                if isinstance(n, ast.Name) and n.id in top:
+                    todo.append(n.id)
+        return seen, top
+
+    def test_aggregation_reaches_only_pure_code(self):
+        seen, top = self._reachable()
+        self.assertEqual(seen, set(self.PURE_REACHABLE))
+        for name in self.READER_IO_FUNCTIONS:
+            self.assertNotIn(name, seen)
+        for name in seen:
+            node = top[name]
+            if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                continue   # constantes del modulo (p. ej. un re.compile al importar): no se ejecutan por llamada
+            params = {a.arg for a in ast.walk(node) if isinstance(a, ast.arg)}   # `key(c)`, `pred(c)`
+            params |= {f.name for f in ast.walk(node) if isinstance(f, ast.FunctionDef)}   # `count` anidada
+            for n in ast.walk(node):
+                self.assertNotIsInstance(n, (ast.Import, ast.ImportFrom), name)
+                if isinstance(n, ast.Name):
+                    self.assertNotIn(n.id, self.FORBIDDEN, name)
+                if isinstance(n, ast.Attribute):
+                    self.assertNotIn(n.attr, self.FORBIDDEN, name)
+                if isinstance(n, ast.Call):
+                    callee = n.func.id if isinstance(n.func, ast.Name) else (
+                        n.func.attr if isinstance(n.func, ast.Attribute) else None)
+                    self.assertIsNotNone(callee, name)
+                    self.assertIn(callee, set(self.PURE_REACHABLE) | self.CALLABLE_OK | params,
+                                  "%s llama a %s" % (name, callee))
+        # `utc_today` (la unica que lee el reloj) existe pero no la alcanza ninguna funcion pura
+        self.assertIn("utc_today", {n.name for n in self._module_tree().body if isinstance(n, ast.FunctionDef)})
+
+    def test_purity_check_itself_rejects_forbidden_calls(self):
+        # autoprueba: el mismo criterio sobre trozos con E/S debe fallar
+        for snippet in ("import io", "x = getattr(a, 'b')", "p = Path('.')", "t = tempfile.mkdtemp()",
+                        "d = datetime.datetime.now()", "m = __import__('os')", "importlib.import_module('os')",
+                        "open('x')", "os.fstat(3)", "os.open('x', 0)"):
+            names = set()
+            for n in ast.walk(ast.parse(snippet)):
+                if isinstance(n, (ast.Import, ast.ImportFrom)):
+                    names.add("import")
+                if isinstance(n, ast.Name):
+                    names.add(n.id)
+                if isinstance(n, ast.Attribute):
+                    names.add(n.attr)
+            self.assertTrue(names & (self.FORBIDDEN | {"import"}), snippet)
+
+    def test_results_are_frozen_and_hold_no_call_or_session_identifiers(self):
+        m = agg([mk(0, call_id="IDENT-CALL", session="IDENT-SESSION")])
+        text = repr(m)
+        self.assertNotIn("IDENT-CALL", text)
+        self.assertNotIn("IDENT-SESSION", text)
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            m.total.calls = 5
+
+
+class AggregationOverSyntheticTree(ReaderBase):
+    FOLDER_A = "c--Users-" + us.M_FOLDER + "-proj"
+
+    def _tree(self):
+        tree = us.Tree(self.base)
+        ts = "2026-03-10T10:00:%02dZ"
+        a1 = [us.user(ts % 0, version="2.1.309"),
+              us.assistant("m1", ts % 3, usage_value=us.usage(10, 5, 2, 3), version="2.1.309",
+                           blocks=[us.tool_use_block("t1", "Read"), us.tool_use_block("t2", "Bash")]),
+              us.assistant("m2", ts % 6, usage_value=us.usage(20, 10, 4, 6), version="2.1.309"),
+              us.assistant("m3", ts % 10, usage_value=us.usage(30, 15, 6, 9), version="2.1.309")]
+        tree.subagent(self.FOLDER_A, us.M_SESSION + "-1", "a1", a1)
+        tree.subagent(self.FOLDER_A, us.M_SESSION + "-1", "a2",
+                      [us.user(ts % 20), us.assistant("m4", ts % 30, usage_value=us.usage(1, 1, 1, 1))])
+        tree.subagent(self.FOLDER_A, us.M_SESSION + "-2", "a3", [us.assistant("m5", "2026-03-12T09:00:00Z")],
+                      meta={"agentType": "scout"})
+        tree.subagent(self.FOLDER_A, us.M_SESSION + "-2", "a4", [us.assistant("m6", "2026-03-12T09:05:00Z")],
+                      meta=None)
+        tree.subagent(self.FOLDER_A, us.M_SESSION + "-1", "a5",
+                      [us.assistant("m7", "2026-01-01T09:00:00Z", version="2.1.300")])   # fuera de la ventana
+        empty = tree.subagent(self.FOLDER_A, us.M_SESSION + "-3", "a6", [], meta={"agentType": "oracle"})
+        stamp = dt(15, 12).timestamp()
+        os.utime(empty, (stamp, stamp))
+        tree.subagent("c--otra", us.M_SESSION + "-9", "a7",
+                      [us.assistant("m8", "2026-03-20T08:00:00Z", version="2.1.311")],
+                      meta={"agentType": "pl:" + us.M_TYPE})
+        return tree
+
+    def test_hand_computed_metrics(self):
+        res = self.read(self._tree(), check_damage=False)
+        m = ur.aggregate_calls(res, today=TODAY)
+        q = m.quality
+        self.assertEqual((q.calls_read, q.calls_in_window, q.calls_outside_window), (7, 6, 1))
+        self.assertEqual((q.without_start, q.placed_by_fallback, q.without_usage, q.without_meta,
+                          q.tokens_calls, q.excluded, q.hardlinks), (1, 1, 1, 1, 5, 0, 0))
+        self.assertEqual((m.total.calls, m.total.sessions, m.total.calls_per_session_tenths), (6, 4, 15))
+        agents = {(a.agent, a.group): a.metrics for a in m.agents}
+        self.assertEqual(set(agents), {("forge", "SyncLayer"), ("scout", "SyncLayer"), ("oracle", "SyncLayer"),
+                                       ("(sin-meta)", "sin-meta"), ("plugin:pl", "plugin:pl")})
+        self.assertEqual([(a.agent, a.group) for a in m.agents][0], ("forge", "SyncLayer"))
+        forge = agents[("forge", "SyncLayer")]
+        # a1: input 10+20+30=60, salida 30, caches 12 y 18 -> 120 tokens, 3 peticiones; a2: 4 tokens, 1 peticion
+        self.assertEqual((forge.calls, forge.sessions, forge.calls_per_session_tenths), (2, 1, 20))
+        t = forge.tokens
+        # totales [4, 120]: mediana (4+120)/2=62; p90 posicion 2 -> 120. Entrada [1, 60]: (1+60)/2=30,5 -> 31
+        self.assertEqual((t.n, t.total.median, t.total.p90, t.input_tokens.median), (2, 62, 120, 31))
+        self.assertEqual((t.requests.median, t.requests.total), (2, 4))     # [1, 3] -> 2
+        self.assertEqual((forge.tools.median, forge.tools.p90), (1, 2))     # [0, 2]: (0+2)/2=1; posicion 2 -> 2
+        self.assertEqual((forge.duration.median, forge.duration.p90), (10, 10))   # a1 10 s, a2 10 s
+        self.assertEqual(forge.repeats, 1)     # a2 empieza (10:00:20) despues de que a1 termina (10:00:10)
+        self.assertEqual(forge.models, (("claude-opus-4-1", 2),))
+        rows = {r.range: r for r in m.total.versions}
+        self.assertEqual((rows[ur.RANGE_BEFORE].calls, rows[ur.RANGE_BEFORE].tokens.total.total), (1, 120))
+        self.assertEqual((rows[ur.RANGE_DOUBTFUL].calls, rows[ur.RANGE_DOUBTFUL].tokens.total.total), (1, 20))
+        self.assertEqual((rows[ur.RANGE_AFTER].calls, rows[ur.RANGE_AFTER].tokens.total.total), (3, 44))
+        self.assertEqual((rows[ur.RANGE_NONE].calls, rows[ur.RANGE_NONE].tokens.n), (1, 0))
+        self.assertEqual([(g.group, g.metrics.calls) for g in m.groups],
+                         [("SyncLayer", 4), ("plugin:pl", 1), ("sin-meta", 1)])
+        self.assertEqual([p.metrics.calls for p in m.projects], [5, 1])
+        self.assertEqual(m.projects[0].project, res.calls[0].project)
+        self.assertEqual(m.warnings, ())
+
+    def test_agent_key_tells_agents_of_one_plugin_apart_and_never_shows_the_raw_type(self):
+        tree = us.Tree(self.base)
+        ts = "2026-03-10T10:00:%02dZ"
+        raws = ("pl:" + us.M_TYPE + "1", "pl:" + us.M_TYPE + "2", "pl:" + us.M_TYPE + "2", us.M_TYPE + "3")
+        for i, raw in enumerate(raws):
+            tree.subagent("c--p", "s1", "a%d" % i,
+                          [us.assistant("m%d" % i, ts % (i * 10)), us.assistant("n%d" % i, ts % (i * 10 + 5))],
+                          meta={"agentType": raw})
+        tree.subagent("c--p", "s1", "z", [us.assistant("mz", ts % 50)], meta=None)
+        res = self.read(tree)
+        calls = res.calls
+        keys = {c.agent_group + "|" + c.agent_key for c in calls}
+        self.assertEqual(len(keys), 4)   # pl1, pl2 (x2), otros, sin-meta
+        plugin_calls = [c for c in calls if c.agent_group == "plugin:pl"]
+        self.assertEqual(len(plugin_calls), 3)
+        self.assertEqual(len({c.agent_key for c in plugin_calls}), 2)
+        for c, raw in zip([x for x in calls if x.agent_group != "sin-meta"], raws):
+            self.assertEqual(c.agent_key, ur._digest(raw).hex())
+        self.assertEqual([c.agent_key for c in calls if c.agent_group == "sin-meta"], [ur.NO_META_KEY])
+        # un agentType crudo y distinto de otro nunca comparte clave
+        self.assertNotEqual(plugin_calls[0].agent_key, plugin_calls[1].agent_key)
+        m = ur.aggregate_calls(res, today=TODAY)
+        self.assertEqual({g.group: g.agents for g in m.groups}, {"plugin:pl": 2, "otros": 1, "sin-meta": 1})
+        self.assertEqual(m.total.repeats, 1)          # a2 repite a a1; a1 no repite a a0 (otro agente del plugin)
+        # ni la clave ni el agentType crudo salen en repr/str de la llamada ni del resultado
+        for c in calls:
+            for text in (repr(c), str(c), repr(m)):
+                self.assertNotIn(c.agent_key, text)
+        self.assert_no_markers(m, *calls, [str(c) for c in calls])
+        self.assertNotIn("agent_key", repr(calls[0]))
+
+    def test_nothing_sensitive_in_the_result(self):
+        res = self.read(self._tree(), check_damage=False)
+        text = repr(ur.aggregate_calls(res, today=TODAY))
+        self.assert_no_markers(text)
+        for call in res.calls:
+            self.assertNotIn(call.call_id, text)
+            self.assertNotIn(call.session, text)
+        self.assertNotIn("c--otra", text)
+        text.encode("ascii")
+
+    def test_warnings_and_read_quality_come_from_the_read_result(self):
+        tree = us.Tree(self.base)
+        line = us.assistant("x", "2026-03-10T10:00:00Z")
+        del line["message"]["id"]
+        tree.subagent("c--p", "s1", "a1", [line])
+        tree.subagent("c--p", "s1", "a2", [us.assistant("dup", "2026-03-10T10:00:01Z")])
+        tree.subagent("c--p", "s1", "a3", [us.assistant("dup", "2026-03-10T10:00:02Z")])
+        res = self.read(tree)
+        m = ur.aggregate_calls(res, today=TODAY)
+        self.assertEqual(m.warnings, tuple(res.warnings))
+        self.assertEqual(len(m.warnings), 2)
+        rq = dict(m.read_quality)
+        self.assertEqual((rq["usage sin message.id"], rq["message.id repetido entre archivos"]), (1, 1))
+        self.assertEqual(rq["hardlinks duplicados dentro de projects"], 0)
+        # el archivo con todos sus ids repetidos tiene 0 peticiones: no entra en los tokens
+        self.assertEqual(m.quality.all_ids_repeated, 1)
+        self.assertEqual(m.total.tokens.n, 2)
+        # una lista de llamadas suelta no trae avisos
+        self.assertEqual(ur.aggregate_calls(res.calls, today=TODAY).warnings, ())
+
+    def test_hardlinks_are_counted_in_quality(self):
+        tree = us.Tree(self.base)
+        outer = us.Tree(os.path.join(self.base, "afuera"))
+        target = outer.subagent("c--x", "s9", "a9", [us.assistant("h1", "2026-03-10T10:00:00Z")], meta=None)
+        sub = os.path.join(tree.folder("c--p"), "s1", "subagents")
+        os.makedirs(sub)
+        self.hardlink(target, os.path.join(sub, "agent-h.jsonl"))
+        m = ur.aggregate_calls(self.read(tree), today=TODAY)
+        self.assertEqual(m.quality.hardlinks, 1)
+
+    def test_oversize_and_model_mismatch_quality(self):
+        q = agg([mk(0, oversize_lines=2), mk(1, model_mismatch=True)]).quality
+        self.assertEqual((q.oversize_lines, q.model_mismatch), (2, 1))
 
 
 class InspectHardlinkSessions(Base):
