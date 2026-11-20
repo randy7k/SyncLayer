@@ -22,6 +22,11 @@ diseño»).
 
 ## Fase 2: reporte de uso de agentes
 
+**Estado (2026-11-20).** Desglosada y en curso: el plan está en
+[`2026-11-19-fase2-reporte-de-uso.md`](2026-11-19-fase2-reporte-de-uso.md). T1 a T8 cerradas;
+siguen el cierre del núcleo y T9 (hook registrador, opcional). El texto
+que sigue es el pedido original de la etapa 1.
+
 **Pedido.** Ver cuánto se usa cada agente. Un `.md` por proyecto, dentro de cada uno, y un `.md`
 global para comparar eficiencia contra otros conjuntos de subagentes o skills.
 

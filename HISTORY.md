@@ -2,18 +2,34 @@
 
 ## [Sin publicar]
 
-### Añadido (Fase 2, T7)
+### Añadido (reporte de uso, Fase 2)
 
-- `tools/usage_report.py`: subcomandos `project` y `global`. Escriben sólo en destinos fijos
+- `tools/usage_report.py`: reporte de uso de subagentes a partir de las transcripciones locales
+  (`python -B tools/usage_report.py <inspect|project|global>`). Se ejecuta desde el clon; no se
+  instala ni lo toca el instalador. Compara llamadas, sesiones, tokens por llamada (mediana y p90),
+  duración aproximada, herramientas, modelo real, versión de Claude Code y skills; no mide calidad
+  ni costo ni afirma ahorro.
+- Subcomandos `project` y `global`: escriben sólo en destinos fijos
   (`<project-dir>/.synclayer/usage-report.md` con `.synclayer/.gitignore` exactamente `*`, y
   `<claude-dir>/synclayer-usage.md`); no existe `--out`. Escritura por temporal aleatorio
   `O_EXCL` en la misma carpeta y `os.replace`, con `lstat` repetido antes del reemplazo, marcador
-  leído de forma acotada, modo `0600`, UTF-8 sin BOM con LF y limpieza si algo falla. `--stdout`
-  imprime bytes UTF-8. `--transcripts-dir` (repetible) sólo admite nombres de carpeta de `projects/`.
-- El reporte de proyecto lleva «Carpetas de transcripciones leídas: N».
-- El mensaje final no imprime rutas salvo con `--show-paths`. El global avisa si
-  existe `.git` en `<claude-dir>` o en una carpeta padre; el de proyecto avisa si `usage-report.md` ya está versionado (lectura
-  de `.git/index`, sin llamar a git; límites en el código).
+  leído de forma acotada, modo `0600`, UTF-8 sin BOM con LF y limpieza si algo falla; enlaces,
+  junctions y destinos ajenos se rechazan. `--stdout` imprime bytes UTF-8. `--transcripts-dir`
+  (repetible) sólo admite nombres de carpeta de `projects/`. Ventana de 30 días UTC, o
+  `--since`/`--until`/`--all`. Códigos de salida 0, 1, 2 y 3 (130 con Ctrl+C); el 3 por esquema
+  desconocido sale del lector sobre todos los archivos leídos, el 3 por más del 5 % de archivos
+  dañados, de la agregación sobre la ventana.
+- Privacidad: nunca copia contenido de conversaciones, rutas, nombres de carpeta ni
+  identificadores de sesión. El global numera `proyecto 1..N` (sin hash) y es privado por defecto;
+  el de proyecto muestra su alias, recalculable por quien conozca la ruta.
+- Avisos de git por stderr (sin llamar a git): el global, si existe `.git` en `<claude-dir>` o una
+  carpeta padre; el de proyecto, si el reporte ya está versionado (lee `.git/index`; no detecta el
+  índice v4, sparse ni split). El mensaje final no imprime rutas salvo con `--show-paths`.
+- Reporte de proyecto con «Carpetas de transcripciones leídas: N».
+- `README.md`: secciones «Reporte de uso» y «Límites del reporte de uso» (Windows ACL y OneDrive,
+  rama POSIX sin verificar, TOCTOU residual). `docs/agentes.md`: cómo usar el reporte.
+- Siguientes: cierre del núcleo (`sentinel`, `shield`, `auditor` y la verificación real C4) y, opcional,
+  el hook registrador `usage_logger.py` (T9, ya planificado).
 
 ### Añadido (Fase 2, T6)
 

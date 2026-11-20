@@ -36,7 +36,8 @@ SyncLayer/
 ├── install.ps1        Instalador (Windows PowerShell 5.1)
 ├── install-manifest.json  Manifiesto: los doce archivos que se instalan y su hash
 ├── tools/
-│   └── build_manifest.py  Genera y comprueba el manifiesto
+│   ├── build_manifest.py  Genera y comprueba el manifiesto
+│   └── usage_report.py    Reporte de uso de subagentes (se ejecuta desde el clon)
 ├── agents/            Un archivo por agente (frontmatter + prompt)
 │   ├── oracle.md  scout.md  atlas.md  forge.md  sentinel.md
 │   └── auditor.md  shield.md  debugger.md  scribe.md
@@ -60,7 +61,10 @@ SyncLayer/
     ├── test_brand_agents.py
     ├── test_ico.py
     ├── test_install.py
-    └── test_manifest.py
+    ├── test_manifest.py
+    ├── test_usage_report.py
+    ├── test_usage_report_cli.py
+    └── usage_synth.py     Transcripciones sintéticas para las pruebas del reporte
 ```
 
 ## Assets de marca
@@ -92,9 +96,11 @@ Settings > Social preview.
 
 `install.ps1` copia a `~/.claude/` doce archivos, los que lista `install-manifest.json`:
 los nueve `agents/*.md`, `rules/agentes.md`, `hooks/agent_guard.py` y `docs/agentes.md`.
-No instala `docs/brand/`, `assets/`, `tests/` ni `tools/`. Sólo escribe esos doce
+No instala `docs/brand/`, `assets/`, `tests/` ni `tools/` (tampoco `tools/usage_report.py`:
+el reporte de uso se ejecuta desde el clon). Sólo escribe esos doce
 destinos, sus temporales, el archivo de estado y el respaldo; no borra nada y no toca
-archivos ajenos (`hooks/caveman-statusline.ps1`, `settings.json`, `CLAUDE.md`...).
+archivos ajenos (`hooks/caveman-statusline.ps1`, `settings.json`, `CLAUDE.md`...). El
+instalador no crea, lee ni borra `synclayer-usage.md`.
 Escribe los archivos con finales de línea LF, vengan del árbol de trabajo con CRLF o con LF.
 
 Instálalo sólo desde un clon cuyo commit hayas revisado (ver «Límites del instalador»). Desde la raíz del repositorio, en Windows PowerShell 5.1:
@@ -399,23 +405,145 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
   simbólico de archivo real creado con privilegio, la durabilidad ante un corte de energía y
   Windows 10 (nombres reservados).
 
+## Reporte de uso
+
+`tools/usage_report.py` cuenta cuánto se usa cada subagente a partir de las transcripciones
+locales de Claude Code (`<claude-dir>/projects/`). Sólo biblioteca estándar. Se ejecuta desde
+el clon; no se instala en `~/.claude/`.
+
+**Qué compara y qué no.** Compara llamadas, sesiones, tokens por llamada (mediana y p90),
+duración aproximada, herramientas por llamada, modelo real, versión de Claude Code y número de
+invocaciones de skills, por agente y por conjunto (`SyncLayer`, integrado, `plugin:<prefijo>`,
+otros). **No** mide la calidad del resultado, **no** mide el costo real (los tokens no son la
+factura; la caché leída se cobra distinto) y **no** afirma ahorro de tokens: dos conjuntos hacen
+trabajos distintos y menos tokens por llamada no significa mejor. A una skill no se le atribuyen
+tokens.
+
+```
+python -B tools/usage_report.py inspect [--claude-dir DIR] [--project-dir DIR] [--show-paths]
+python -B tools/usage_report.py project [--project-dir DIR] [--claude-dir DIR] [--transcripts-dir NOMBRE]...
+                                        [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths]
+python -B tools/usage_report.py global  [--claude-dir DIR] [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all]
+                                        [--stdout] [--show-paths]
+```
+
+| Parámetro | Por defecto | Efecto |
+|---|---|---|
+| `--claude-dir` | `~/.claude` | Carpeta de usuario. No se honra `CLAUDE_CONFIG_DIR`. |
+| `--project-dir` | `project`: carpeta actual. `inspect`: todos los proyectos | `project`: proyecto a reportar y donde se escribe su reporte. `inspect`: limita la lectura a ese proyecto. |
+| `--transcripts-dir NOMBRE` | ninguna extra (la carpeta derivada de `--project-dir` se lee siempre) | Sólo `project`. Repetible. Nombre de una carpeta de `projects/` (letras, dígitos y guiones; ni rutas ni `..`) que también se lee: sesiones abiertas desde una subcarpeta o un worktree viven en otra carpeta. Si no existe: exit 1. |
+| `--since`, `--until` | últimos 30 días hasta hoy (UTC) | Ventana `AAAA-MM-DD`, ambos extremos inclusive, en UTC. Sólo `--until Y`: de Y-29 a Y. Sólo `--since X`: de X a hoy. Sin ninguno, la ventana se mueve con el día. |
+| `--all` | apagado | Sin ventana. Incompatible con `--since` y `--until` (exit 2). |
+| `--stdout` | apagado | Imprime el reporte como bytes UTF-8 (sin BOM, con LF) en `sys.stdout.buffer` y no escribe ningún archivo. |
+| `--show-paths` | apagado | Permite rutas en los mensajes de stderr y en el mensaje final. Nunca afecta al contenido del reporte. |
+
+`inspect` imprime sólo estructura (nombres de clave de listas cerradas, tipos y conteos, y
+los histogramas filtrados de `type`, `version` y `model`); nunca contenido, rutas, nombres de
+carpeta ni identificadores de sesión, así que su salida se puede pegar en una conversación.
+Sirve para diagnosticar si el formato de las transcripciones cambió.
+
+**Códigos de salida**
+
+| Código | Significado |
+|---|---|
+| 0 | Correcto (incluido «sin llamadas en la ventana»). |
+| 1 | Entorno o datos: falta `projects/`, no hay transcripciones (o el proyecto no tiene), una carpeta de `--transcripts-dir` no existe, al escribir, `<project-dir>` (en `project`) o `<claude-dir>` (en `global`) ausente o enlace (con `--stdout` no se comprueban), `.gitignore` o destino ajeno, destino no escribible o abierto por otro proceso, error no previsto. No deja archivos ni la carpeta `.synclayer/` creada por esa corrida. |
+| 2 | Uso incorrecto: lo emite `argparse`, o ventana inválida (`--all` con fechas, `--since` posterior a `--until`). |
+| 3 | Esquema de transcripciones desconocido (se comprueba sobre todos los archivos leídos, no depende de la ventana) o más del 5 % de archivos de la ventana dañados. No escribe nada; el mensaje remite a `inspect`. (`inspect` imprime igual su salida.) |
+
+Una interrupción con Ctrl+C sale con 130. Un error no previsto imprime sólo el nombre de la
+clase de la excepción, nunca un traceback.
+
+**Destinos fijos.** No existe `--out`: la herramienta no escribe en rutas arbitrarias.
+
+| Reporte | Ruta | Contenido |
+|---|---|---|
+| Proyecto | `<project-dir>/.synclayer/usage-report.md` | Un proyecto. La carpeta `.synclayer/` se ignora sola: la herramienta crea `.synclayer/.gitignore` con exactamente `*` y salto de línea. |
+| Global | `<claude-dir>/synclayer-usage.md` | Todos los proyectos, comparados. |
+
+Ambos empiezan por el marcador `<!-- synclayer-usage-report v1 -->`. Si el destino existe y no
+empieza por el marcador, la herramienta no lo pisa (exit 1); si lo lleva, lo sobrescribe sin
+respaldo (es un derivado). Misma entrada, mismos argumentos y el mismo día (UTC) dan los mismos bytes: el reporte lleva `Generado: <fecha UTC>`.
+
+**Escritura.** Nunca se abre el destino para escribir: se crea un temporal de nombre aleatorio
+en la misma carpeta (`O_CREAT|O_EXCL`, modo `0600`), se escribe en binario (UTF-8 sin BOM, LF) y
+se reemplaza con `os.replace`; si algo falla, se borra el temporal. Se rechazan como enlace
+`.synclayer/`, el destino y la carpeta base (`<project-dir>` en `project`, `<claude-dir>` en
+`global`) si son enlaces simbólicos o junctions (exit 1); con `--stdout` no se comprueban. No se crean `<claude-dir>` ni `<project-dir>`. Un `.synclayer/.gitignore`
+que no sea exactamente `*` más salto de línea se rechaza y no se edita (por ejemplo, un `*`
+seguido de `!usage-report.md` volvería a mostrar el reporte en git). Una carpeta `.synclayer/`
+ya existente que no es de la herramienta se acepta. El mensaje final dice cuántas llamadas y
+sesiones se escribieron, sin ruta salvo con `--show-paths`.
+
+**Avisos de git** (por stderr; la herramienta escribe igual):
+
+- Global: si existe `.git` en `<claude-dir>` o en una carpeta padre (dotfiles), avisa de que el
+  reporte podría subirse. No lee el contenido de `.git`.
+- Proyecto: si `.synclayer/usage-report.md` ya está versionado, avisa (`.gitignore` no afecta a
+  archivos ya versionados; retíralo con `git rm --cached`). La detección lee `.git/index`
+  sin llamar a git.
+
+**Privacidad.** El reporte no contiene contenido de conversaciones, rutas, nombres de carpeta
+de `projects/`, identificadores de sesión ni ramas de git; la herramienta nunca copia contenido
+de las transcripciones. Los nombres que salen (agente, modelo, skill) pasan por listas
+permitidas. En concreto:
+
+- El global numera los proyectos `proyecto 1..N` por volumen de llamadas, sin hash ni alias; la
+  numeración puede cambiar entre ejecuciones.
+- El reporte de proyecto muestra su propio alias en el título y en el pie (`p-` más 8 hexadecimales del SHA-256
+  del nombre de la carpeta). **No es anonimización fuerte**: quien conozca o adivine la ruta del
+  proyecto puede recalcularlo.
+- Prefijos de plugin: `plugin:<prefijo>` revela el nombre de un plugin. El reporte de proyecto
+  (local) lo muestra validado sólo por alfabeto; el global lo muestra únicamente si coincide con
+  un prefijo visto en un agente y agrupa el resto como `plugin:(otro)`. En el global se agrupa como
+  `(otra skill)` toda skill fuera de una lista cerrada o de un plugin visto como agente (hoy las
+  listas de skills de SyncLayer e integradas están vacías, así que también las integradas), y los modelos se limitan a tramos de lista cerrada.
+- **El global es privado por defecto**: lleva el volumen de uso de cada proyecto. Revísalo
+  antes de compartirlo.
+
+**Cómo leer los números.** Una llamada es un archivo `agent-<id>.jsonl`; pertenece a la ventana
+por su primera marca de tiempo. Los tokens se deduplican por `message.id`. Las métricas de
+tokens se desglosan por rango de versión de Claude Code (anterior a 2.1.310, de 2.1.310 a
+2.1.327, desde 2.1.328): entre 2.1.310 y 2.1.327 los tokens pueden estar inflados por
+reintentos, y comparar entre rangos es sólo indicativo. Con menos de 10 llamadas, la mediana y
+el p90 dicen poco. La duración incluye esperas de herramientas y de permisos. Las repeticiones
+consecutivas son una inferencia por horas de inicio y fin, no un reintento confirmado. Cada
+reporte lleva estas advertencias en su sección «Cómo leer estos números».
+
+## Límites del reporte de uso
+
+- **Formato interno sin garantía.** Lee un formato de transcripciones que Claude Code no
+  documenta ni garantiza. Verificado con transcripciones reales hasta 2.1.326 (`VERIFIED_MAX`);
+  ante un esquema desconocido sale con exit 3 en lugar de adivinar.
+- **Sesiones de subcarpetas y worktrees** no se incluyen salvo con `--transcripts-dir`.
+- **`git add -f`** puede versionar el reporte igualmente; el aviso de git es una ayuda, no una
+  garantía.
+- **Detección de versionado en git.** No cubre el índice v4, ni los índices sparse o split; puede
+  dar un falso positivo si otra ruta versionada termina igual; en Windows depende de las
+  mayúsculas escritas en `--project-dir`; un repositorio bare con `--work-tree` no es detectable.
+- **Windows: ACL.** El archivo hereda la ACL de la carpeta de destino (puede ser una carpeta
+  compartida o de OneDrive); la herramienta no la modifica. El modo `0600` sólo rige en POSIX.
+- **Puntos de reanálisis y OneDrive.** Todo punto de reanálisis se trata como enlace: los
+  marcadores de OneDrive Files On-Demand podrían dar exit 1 «es un enlace» (falla cerrado). Un
+  `--claude-dir` que es enlace (dotfiles con stow) impide escribir el global; pasa la ruta real.
+- **Carrera residual (TOCTOU).** Entre la última comprobación y `os.replace` queda una ventana
+  de microsegundos que la biblioteca estándar no permite cerrar en Windows. Quien puede escribir
+  en esas carpetas ya puede escribir el reporte a mano.
+- **No verificado en este equipo:** la rama POSIX (`0600`, `fchmod`, `O_NOFOLLOW`), índices git
+  reales y OneDrive real.
+- **Hardlinks** de Claude Code (`nlink > 1`) se aceptan y se cuentan aparte; un proceso del mismo
+  usuario que plantara uno hacia otro archivo es un riesgo bajo, mitigado porque el lector sólo
+  toma claves numéricas, nombres de lista cerrada y exige la firma estructural.
+
 ## Pruebas
 
 ```
 python -B -m unittest discover -s tests
 ```
 
-464 pruebas, 109 saltadas (las de `install.ps1` contra pwsh, que no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`), sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1023 pruebas, 112 saltadas: 109 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
-
-### Reporte de uso (en curso, Fase 2)
-
-`python -B tools/usage_report.py project|global` genera el reporte de uso de subagentes a
-partir de las transcripciones locales (`--claude-dir`, `--project-dir`, `--transcripts-dir`,
-`--since`/`--until`/`--all`, `--stdout`, `--show-paths`). Escribe sólo en
-`<project-dir>/.synclayer/usage-report.md` y `<claude-dir>/synclayer-usage.md`; no hay `--out`.
-El mensaje final no imprime rutas sin `--show-paths`. La documentación completa llega con T8.
 
 ## Mantenimiento
 
@@ -442,17 +570,17 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-20** (T7 de la Fase 2 cerrada: subcomandos `project` y `global`).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-20** (T8 de la Fase 2 cerrada: documentación del reporte de uso).
 
 ### Avance global
 
-**El proyecto completo va en 34%.** Cuenta las cinco fases con el mismo peso; las fases 2 a 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)), así que el número sube cuando se desglosen en sub-fases.
+**El proyecto completo va en 36%.** Cuenta las cinco fases con el mismo peso; las fases 2 a 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)), así que el número sube cuando se desglosen en sub-fases.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **34%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | **36%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
-| **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | **70%** | 7 de 10 | Plan aprobado, en curso ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
+| **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **80%** | 8 de 10 | Plan aprobado, en curso ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
 | **3. Esfuerzo configurable (5 niveles)** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **4. Nombres de agentes configurables** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
@@ -495,8 +623,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-20 | T5 de la Fase 2: generador del reporte de proyecto en Markdown (tablas con barras de texto, aviso del rango de versión dudoso, texto con tildes); revisado por `auditor` | ✅ |
 | 2026-11-20 | T6 de la Fase 2: reporte global comparativo (conjuntos de agentes y skills, proyectos numerados sin alias, prefijos de skill limitados); revisado por `auditor` y `shield` | ✅ |
 | 2026-11-20 | T7 de la Fase 2: subcomandos `project` y `global` (escritura atómica con temporal aleatorio, rechazo de enlaces, `.gitignore` exacto, avisos de git sin subprocesos, `--stdout` en bytes UTF-8); revisada por `auditor` y `shield` | ✅ |
-| **Ahora** | **T8 de la Fase 2**: documentación completa del reporte de uso | 🔄 |
-| Luego | Cierre del núcleo (`sentinel`, `shield`, `auditor`, corrida real C4 del propietario), T9 (hook opcional) y desglosar las fases 3 a 5 (backlog) | ⬜ |
+| 2026-11-20 | T8 de la Fase 2: documentación completa del reporte de uso (README, CLAUDE.md, HISTORY.md, `docs/agentes.md`, manifiesto regenerado); revisada por `auditor` | ✅ |
+| **Ahora** | **Cierre del núcleo de la Fase 2**: `sentinel`, `shield` y `auditor` sobre el cambio completo; la corrida real C4 la hace el propietario | 🔄 |
+| Luego | T9 (hook opcional) y desglosar las fases 3 a 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
 
