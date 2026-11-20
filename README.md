@@ -434,7 +434,7 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-19** (exploración de la Fase 2 cerrada: no suma una unidad; antes, Fase 1 del instalador cerrada e instalada).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-19** (plan de la Fase 2 aprobado y desglosado en 10 unidades: el global no cambia porque las fases cuentan con el mismo peso).
 
 ### Avance global
 
@@ -444,7 +444,7 @@ Sin licencia definida todavía.
 |:--|:--|--:|:--|:--|
 | **Proyecto completo** | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | **20%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
-| **2. Reporte de uso de agentes** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Exploración cerrada ([resultado](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)); falta que `atlas` la desglose |
+| **2. Reporte de uso de agentes** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 10 | Plan aprobado, en curso ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
 | **3. Esfuerzo configurable (5 niveles)** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **4. Nombres de agentes configurables** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
@@ -478,8 +478,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-19 | Marca «Modular Grid System»: símbolo, wordmark, lockups, favicon, banner, social preview, catálogo, estrella, slides y hoja de marca | ✅ |
 | 2026-11-19 | Plan del instalador aprobado; T1 y T2 (manifiesto), T3 a T5 (`install.ps1`), T6 (documentación) y cierre (`sentinel`, `shield`, `auditor`): Fase 1 cerrada | ✅ |
 | 2026-11-19 | Instalador probado con `-DryRun` e instalado en el `~/.claude` real; integrado en `main` | ✅ |
-| **Ahora** | **Desglosar la Fase 2** (reporte de uso): `atlas` convierte la exploración en tasks y el propietario las aprueba | 🔄 |
-| Luego | Ejecutar la Fase 2 y desglosar las fases 3 a 5 (backlog) | ⬜ |
+| 2026-11-19 | Plan de la Fase 2 (reporte de uso) aprobado: 10 unidades (T1 a T9 y el cierre del núcleo) | ✅ |
+| **Ahora** | **T1 de la Fase 2**: `inspect` (sólo estructura) y transcripciones sintéticas; luego la compuerta G1 sobre datos reales | 🔄 |
+| Luego | T2 a T8, cierre del núcleo, T9 (hook opcional) y desglosar las fases 3 a 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
 
