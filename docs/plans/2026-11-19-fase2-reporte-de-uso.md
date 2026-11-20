@@ -1,6 +1,6 @@
 # Plan: Fase 2, reporte de uso de agentes (`tools/usage_report.py`)
 
-Fecha: 2026-11-19. Estado: propuesto, pendiente de aprobación del propietario.
+Fecha: 2026-11-19. Estado: aprobado.
 
 Fuentes: [`2026-11-19-fase2-reporte-de-uso-exploracion.md`](2026-11-19-fase2-reporte-de-uso-exploracion.md)
 (decisiones y riesgos) y [`2026-11-19-backlog-configuracion-y-reportes.md`](2026-11-19-backlog-configuracion-y-reportes.md)
@@ -58,8 +58,8 @@ resulta falso, la sesión principal corrige esta sección antes de lanzar T2.
 4. **[G1]** Una misma respuesta del modelo puede ocupar varias líneas (una por bloque de
    contenido) que repiten `message.id` y `usage`. Por eso se deduplica por `message.id`.
 5. **[G1]** El nombre de la carpeta de proyecto se obtiene de la ruta absoluta sustituyendo
-   por `-` cada carácter que no sea `[A-Za-z0-9]` (`c:\NotionGroup\SyncLayer` da
-   `c--NotionGroup-SyncLayer`). En Windows la letra de unidad puede variar de caja.
+   por `-` cada carácter que no sea `[A-Za-z0-9]` (`c:\proyectos\demo` da
+   `c--proyectos-demo`). En Windows la letra de unidad puede variar de caja.
 6. **[G1]** La herramienta `Skill` aparece en la sesión principal como bloque `tool_use` de
    nombre `Skill` con `input.skill` (cadena). Si no se confirma, T4 se descarta (ver 4).
 7. **[G1]** Los subagentes en segundo plano dejan el mismo par de archivos que los demás.
@@ -753,3 +753,20 @@ Para T8 (documentar) y C4:
 4. **TOCTOU residual** entre la última comprobación y `os.replace`: ventana de microsegundos, sin solución con la biblioteca estándar en Windows (no hay apertura por descriptor de carpeta).
 5. **ACL en Windows** se hereda de la carpeta (OneDrive o carpeta compartida): documentarlo en el README.
 6. **Sin verificar en este equipo:** rama POSIX (`0600` con umask 0, `fchmod` real, `O_NOFOLLOW`), índices git reales, OneDrive real. Las pruebas «sin aviso de git» suben carpetas padre reales: fallarían en una máquina con `.git` en el home o en `%TEMP%`.
+
+## Notas del cierre del núcleo (2026-11-20)
+
+**Desvío aceptado.** Los reportes llevan `Generado: <fecha UTC>` en la cabecera. Va contra el supuesto 9
+(«el reporte no lleva hora de generación») y contra §3.6: dos ejecuciones dan los mismos bytes sólo el mismo día.
+
+**Pendientes para C4 (corrida con datos reales) y T9:**
+
+- (a) Una línea sana con `usage: null` daría exit 3 por `CHK_USAGE_OBJ` («usage presente y no es objeto»):
+  verificar con datos reales si Claude Code la escribe así.
+- (b) `--since` en el futuro sin `--until` da exit 2 (ventana invertida, porque `until` es hoy).
+- (c) POSIBLE: Claude Code podría truncar con un hash los nombres de carpeta de proyecto de ruta muy larga, y
+  `derive_folder_name` no lo replica. Confirmar en C4; mitigación: `--transcripts-dir`.
+- (d) Rendimiento: G1 midió más de 2 minutos con `inspect`; el objetivo de C4 es 60 s.
+- (e) `BrokenPipeError` con `--stdout | head` da exit 1 «error no previsto»; sin probar.
+- (f) La nota 4 de T3 (atribuir un `message.id` repetido al archivo más temprano) sigue sin aplicar: hoy se
+  atribuye al primero que se recorre.

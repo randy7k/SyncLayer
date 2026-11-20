@@ -64,6 +64,7 @@ SyncLayer/
     ├── test_manifest.py
     ├── test_usage_report.py
     ├── test_usage_report_cli.py
+    ├── test_usage_report_edges.py
     └── usage_synth.py     Transcripciones sintéticas para las pruebas del reporte
 ```
 
@@ -438,9 +439,10 @@ python -B tools/usage_report.py global  [--claude-dir DIR] [--since AAAA-MM-DD] 
 | `--show-paths` | apagado | Permite rutas en los mensajes de stderr y en el mensaje final. Nunca afecta al contenido del reporte. |
 
 `inspect` imprime sólo estructura (nombres de clave de listas cerradas, tipos y conteos, y
-los histogramas filtrados de `type`, `version` y `model`); nunca contenido, rutas, nombres de
-carpeta ni identificadores de sesión, así que su salida se puede pegar en una conversación.
-Sirve para diagnosticar si el formato de las transcripciones cambió.
+los histogramas filtrados de `type`, `version` y `model`); no imprime mensajes, prompts, rutas,
+nombres de carpeta ni identificadores de sesión. Los ids de `version` y `model` salen como texto
+si pasan un patrón (un id de modelo personalizado puede salir tal cual): revisa la salida antes de
+pegarla en una conversación. Sirve para diagnosticar si el formato de las transcripciones cambió.
 
 **Códigos de salida**
 
@@ -483,10 +485,13 @@ sesiones se escribieron, sin ruta salvo con `--show-paths`.
   archivos ya versionados; retíralo con `git rm --cached`). La detección lee `.git/index`
   sin llamar a git.
 
-**Privacidad.** El reporte no contiene contenido de conversaciones, rutas, nombres de carpeta
-de `projects/`, identificadores de sesión ni ramas de git; la herramienta nunca copia contenido
-de las transcripciones. Los nombres que salen (agente, modelo, skill) pasan por listas
-permitidas. En concreto:
+**Privacidad.** El reporte no copia mensajes, prompts, argumentos de herramientas, rutas, nombres
+de carpeta de `projects/`, identificadores de sesión ni ramas de git. Los nombres que salen
+(agente, modelo, skill) pasan por listas permitidas o por patrones: el reporte de proyecto copia
+nombres de skill escritos por el modelo e ids de modelo que pasan un patrón (hasta 64 caracteres
+por celda, aunque la skill no exista), así que puede llevar texto elegido por el modelo; es
+local. El global agrupa como `(otra skill)`, `(otro modelo)` y `(otro agente)` lo que no es de
+una lista conocida. En concreto:
 
 - El global numera los proyectos `proyecto 1..N` por volumen de llamadas, sin hash ni alias; la
   numeración puede cambiar entre ejecuciones.
@@ -528,7 +533,10 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
   `--claude-dir` que es enlace (dotfiles con stow) impide escribir el global; pasa la ruta real.
 - **Carrera residual (TOCTOU).** Entre la última comprobación y `os.replace` queda una ventana
   de microsegundos que la biblioteca estándar no permite cerrar en Windows. Quien puede escribir
-  en esas carpetas ya puede escribir el reporte a mano.
+  en esas carpetas ya puede escribir el reporte a mano. Lo mismo vale para la limpieza tras un
+  fallo (`_remove_created_folder`): repite el `lstat` de `.synclayer` antes de cada borrado y sólo
+  borra los nombres que esa corrida intentó escribir, pero la comprobación y el borrado son por
+  ruta y exigen poder escribir en la carpeta del proyecto.
 - **No verificado en este equipo:** la rama POSIX (`0600`, `fchmod`, `O_NOFOLLOW`), índices git
   reales y OneDrive real.
 - **Hardlinks** de Claude Code (`nlink > 1`) se aceptan y se cuentan aparte; un proceso del mismo
@@ -541,7 +549,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1023 pruebas, 112 saltadas: 109 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1049 pruebas, 112 saltadas: 109 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 
@@ -570,17 +578,17 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-20** (T8 de la Fase 2 cerrada: documentación del reporte de uso).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-20** (cierre del núcleo de la Fase 2 cerrado: `sentinel`, `shield` y `auditor`).
 
 ### Avance global
 
-**El proyecto completo va en 36%.** Cuenta las cinco fases con el mismo peso; las fases 2 a 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)), así que el número sube cuando se desglosen en sub-fases.
+**El proyecto completo va en 38%.** Cuenta las cinco fases con el mismo peso; las fases 3 a 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)), así que el número sube cuando se desglosen en sub-fases.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | **36%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | **38%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
-| **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **80%** | 8 de 10 | Plan aprobado, en curso ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
+| **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | **90%** | 9 de 10 | Núcleo cerrado; falta T9, opcional, y la corrida real C4 del propietario, que no resta ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
 | **3. Esfuerzo configurable (5 niveles)** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **4. Nombres de agentes configurables** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
@@ -624,7 +632,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-20 | T6 de la Fase 2: reporte global comparativo (conjuntos de agentes y skills, proyectos numerados sin alias, prefijos de skill limitados); revisado por `auditor` y `shield` | ✅ |
 | 2026-11-20 | T7 de la Fase 2: subcomandos `project` y `global` (escritura atómica con temporal aleatorio, rechazo de enlaces, `.gitignore` exacto, avisos de git sin subprocesos, `--stdout` en bytes UTF-8); revisada por `auditor` y `shield` | ✅ |
 | 2026-11-20 | T8 de la Fase 2: documentación completa del reporte de uso (README, CLAUDE.md, HISTORY.md, `docs/agentes.md`, manifiesto regenerado); revisada por `auditor` | ✅ |
-| **Ahora** | **Cierre del núcleo de la Fase 2**: `sentinel`, `shield` y `auditor` sobre el cambio completo; la corrida real C4 la hace el propietario | 🔄 |
+| 2026-11-20 | Cierre del núcleo de la Fase 2: `sentinel` (22 casos del plan con prueba, 19 pruebas de borde), `shield` sin Critical, High ni Medium, `auditor` sin Critical ni Important; textos de privacidad corregidos | ✅ |
+| **Ahora** | **C4, del propietario**: `project --stdout --all` y `global --stdout` sobre datos reales; luego decisión sobre T9 | 🔄 |
 | Luego | T9 (hook opcional) y desglosar las fases 3 a 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).

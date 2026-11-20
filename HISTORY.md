@@ -19,8 +19,9 @@
   `--since`/`--until`/`--all`. Códigos de salida 0, 1, 2 y 3 (130 con Ctrl+C); el 3 por esquema
   desconocido sale del lector sobre todos los archivos leídos, el 3 por más del 5 % de archivos
   dañados, de la agregación sobre la ventana.
-- Privacidad: nunca copia contenido de conversaciones, rutas, nombres de carpeta ni
-  identificadores de sesión. El global numera `proyecto 1..N` (sin hash) y es privado por defecto;
+- Privacidad: no copia mensajes, prompts, argumentos, rutas, nombres de carpeta ni
+  identificadores de sesión; sí copia nombres de skill escritos por el modelo e ids de modelo que
+  pasan listas cerradas o patrones (hasta 64 caracteres por celda). El global numera `proyecto 1..N` (sin hash) y es privado por defecto;
   el de proyecto muestra su alias, recalculable por quien conozca la ruta.
 - Avisos de git por stderr (sin llamar a git): el global, si existe `.git` en `<claude-dir>` o una
   carpeta padre; el de proyecto, si el reporte ya está versionado (lee `.git/index`; no detecta el

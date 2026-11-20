@@ -4897,7 +4897,7 @@ class ReportShape(unittest.TestCase):
         self.assertIn("- herramienta: tools/usage_report.py", foot)
         self.assertIn("- ultima_version_verificada: `" + ur.VERIFIED_MAX + "`", foot)
         self.assertIn("- proyecto: " + ALIAS, foot)
-        self.assertIn("no contiene contenido de conversaciones ni rutas, pero revela volumen de uso", foot)
+        self.assertIn("no copia mensajes, prompts, argumentos de herramientas ni rutas", foot)
         self.assertIn("hash sin sal", foot)
         self.assertIn("No es anonimato", foot)
         self.assertIn("quien conozca o adivine el nombre de la carpeta puede recalcularlo", foot)
@@ -5994,7 +5994,7 @@ GOLDEN_PROJECT_REPORT_TEMPLATE = (
     '- ultima_version_verificada: `@VM@`\n'
     '- proyecto: p-0a1b2c3d\n'
     '\n'
-    '- Este archivo no contiene contenido de conversaciones ni rutas, pero revela volumen de uso. Es local: no lo subas a git ni lo compartas sin revisarlo.\n'
+    '- Este archivo no copia mensajes, prompts, argumentos de herramientas ni rutas. S\u00ed copia nombres de skill que escribe el modelo y ids de modelo que pasan un patr\u00f3n (hasta 64 caracteres por celda, aunque la skill no exista): pueden llevar texto elegido por el modelo. Es local y revela volumen de uso: no lo subas a git ni lo compartas sin revisarlo.\n'
     '- El alias `p-<8 hex>` es un hash sin sal del nombre de la carpeta del proyecto: quien conozca o adivine el nombre de la carpeta puede recalcularlo. No es anonimato.\n'
     '- Los nombres de skills de usuario salen tal cual: pueden revelar nombres privados. El prefijo de una skill de plugin (`plugin:<prefijo>`) sale de texto que escribe el modelo: puede ser cualquier cadena `[a-z0-9-]{1,32}`, no solo un nombre de plugin.\n'
     '- Los nombres de modelo salen de las transcripciones con un patrón amplio (`claude-` y tramos de palabra de hasta 12 caracteres): un id de modelo personalizado puede salir tal cual.\n'
@@ -7285,7 +7285,7 @@ GOLDEN_GLOBAL_REPORT_TEMPLATE = (
     '- ultima_version_verificada: `@VM@`\n'
     '- alcance: global (todos los proyectos le\u00eddos)\n'
     '\n'
-    '- Este archivo es privado por defecto: no contiene contenido de conversaciones, rutas, nombres de carpeta ni alias de proyecto, pero revela el volumen de uso de cada proyecto. Comp\u00e1rtelo solo despu\u00e9s de revisarlo.\n'
+    '- Este archivo es privado por defecto: no copia mensajes, prompts, argumentos, rutas, nombres de carpeta ni alias de proyecto, y agrupa como `(otra skill)`, `(otro modelo)` y `(otro agente)` lo que no es de una lista conocida, pero revela el volumen de uso de cada proyecto. Comp\u00e1rtelo solo despu\u00e9s de revisarlo.\n'
     '- Los proyectos se numeran por volumen en cada ejecuci\u00f3n: la numeraci\u00f3n puede cambiar entre ejecuciones y no se puede cruzar con el alias del reporte de proyecto. Con un alias de 32 bits, dos carpetas distintas pueden dar el mismo alias interno (improbable): se cuentan como un solo proyecto y la cabecera lo avisa.\n'
     '- El prefijo de un agente de plugin (`plugin:<prefijo>`) lo escribe Claude Code. El prefijo de una skill de plugin sale de texto que escribe el modelo: solo se muestra si ese prefijo tambi\u00e9n apareci\u00f3 como agente en esta lectura; el resto se agrupa como `plugin:(otro)`. Los nombres de skills de usuario no salen: se agrupan como `(otra skill)`.\n'
     '- Los nombres de modelo que no son de una lista cerrada (familias conocidas, n\u00fameros y fechas) salen como `(otro modelo)`. En los conjuntos `otros` y `plugin:(no-valido)` y en los conjuntos de skills con nombres agrupados no se muestra cu\u00e1ntos agentes ni cu\u00e1ntas skills distintos hay (`-`).\n'

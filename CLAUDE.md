@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1023 pruebas, 112 saltadas (109 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1049 pruebas, 112 saltadas (109 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -94,7 +94,8 @@ archivo, sólo biblioteca estándar, que se ejecuta desde el clon. Capas: lector
 transcripciones (`read_calls`), agregación pura (`aggregate_calls`, `make_window`),
 generadores puros de Markdown (`render_project_report`, `render_global_report`) y la CLI con
 escritura (`project`, `global`) más `inspect` de diagnóstico. Pruebas:
-`tests/test_usage_report.py` y `tests/test_usage_report_cli.py`.
+`tests/test_usage_report.py`, `tests/test_usage_report_cli.py` y `tests/test_usage_report_edges.py`
+(bordes de punta a punta: ventana, exit 1/2/3/130, nombres raros, mensajes sin fuga).
 
 `docs/agentes.md` es la guía humana. `docs/brand/` define la marca (estrategia, voz, identidad
 visual); el copy oficial va en inglés y no declara capacidades que el repositorio no tenga.
@@ -118,8 +119,8 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   `tests/test_agent_guard.py`.
 - Todo cambio en `install.ps1` empieza con una prueba que falla en `tests/test_install.py`.
 - Todo cambio en `tools/usage_report.py` empieza con una prueba que falla en
-  `tests/test_usage_report.py` (lector, métricas, generadores) o `tests/test_usage_report_cli.py`
-  (subcomandos y escritura). Ningún agente ejecuta la herramienta contra el `~/.claude` real.
+  `tests/test_usage_report.py` (lector, métricas, generadores) `tests/test_usage_report_cli.py`
+  (subcomandos y escritura) o `tests/test_usage_report_edges.py` (bordes de punta a punta). Ningún agente ejecuta la herramienta contra el `~/.claude` real.
 - El código de `tools/usage_report.py` es ASCII (las tildes del reporte van como escapes
   `\u00xx`); el texto de los reportes va en español con tildes.
 - `install.ps1` va en ASCII puro y sin BOM: Windows PowerShell 5.1 lee como ANSI un archivo

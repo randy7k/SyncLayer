@@ -1577,5 +1577,129 @@ class ReviewRoundFixes(CliBase):
         unlink.assert_not_called()
 
 
+class FinalRoundFixes(CliBase):
+    """Cierre del nucleo de la Fase 2: hardlinks, limpieza estrecha y textos de privacidad verdaderos."""
+
+    def _hardlink(self, src, dst):
+        try:
+            os.link(src, dst)
+        except (OSError, NotImplementedError, AttributeError):
+            self.skipTest("el sistema no deja crear enlaces duros")
+
+    def test_hardlinked_destination_gives_the_kind_message_not_the_unreadable_one(self):
+        tree, proj = self.project_tree()
+        self.assertEqual(self.project(tree, proj)[0], 0)
+        self._hardlink(self.report_path(proj), os.path.join(self.base, "segundo nombre.md"))
+        old = self.read_bytes(self.report_path(proj))
+        code, out, err = self.project(tree, proj)
+        self.assertEqual(code, 1)
+        self.assertIn(ur.MSG_DEST_HARDLINK, err)
+        self.assertNotIn(ur.MSG_DEST_UNREADABLE, err)
+        self.assertEqual(self.read_bytes(self.report_path(proj)), old)
+        self.assertEqual(temps_under(proj), [])
+        # el global, igual
+        self.assertEqual(self.glob(tree)[0], 0)
+        dest = os.path.join(tree.claude_dir, "synclayer-usage.md")
+        self._hardlink(dest, os.path.join(self.base, "otro nombre.md"))
+        code, out, err = self.glob(tree)
+        self.assertEqual(code, 1)
+        self.assertIn(ur.MSG_DEST_HARDLINK, err)
+        self.assertNotIn(ur.MSG_DEST_UNREADABLE, err)
+
+    def test_hardlinked_gitignore_is_refused_with_the_gitignore_message(self):
+        tree, proj = self.project_tree()
+        sdir = os.path.join(proj, ".synclayer")
+        os.makedirs(sdir)
+        gi = os.path.join(sdir, ".gitignore")
+        with open(gi, "wb") as f:
+            f.write(b"*\n")
+        self._hardlink(gi, os.path.join(self.base, "gi segundo.txt"))
+        code, out, err = self.project(tree, proj)
+        self.assertEqual(code, 1)
+        self.assertIn("gitignore", err)
+        self.assertFalse(os.path.exists(self.report_path(proj)))
+
+    def test_cleanup_only_deletes_the_names_this_run_wrote(self):
+        # .synclayer recien creada; el .gitignore falla al reemplazarse y alguien planto usage-report.md:
+        # ese archivo no lo escribio esta corrida y no se borra (la carpeta queda, no esta vacia)
+        tree, proj = self.project_tree()
+        sdir = os.path.join(proj, ".synclayer")
+        real = os.replace
+
+        def fake(src, dst):
+            if os.path.basename(dst) == ".gitignore":
+                with open(os.path.join(sdir, "usage-report.md"), "wb") as f:
+                    f.write(b"plantado")
+                raise PermissionError(13, "x")
+            return real(src, dst)
+
+        with mock.patch.object(ur.os, "replace", fake):
+            code, out, err = self.project(tree, proj)
+        self.assertEqual(code, 1)
+        self.assertEqual(self.read_bytes(os.path.join(sdir, "usage-report.md")), b"plantado")
+
+    def test_cleanup_repeats_the_lstat_of_the_folder_before_each_unlink(self):
+        # tras el primer borrado, `.synclayer` pasa a verse como enlace: no se borra nada mas
+        tree, proj = self.project_tree()
+        sdir = os.path.join(proj, ".synclayer")
+        real_replace, real_lstat, real_unlink = os.replace, os.lstat, os.unlink
+        state = {"unlinked": False}
+        norm = os.path.normcase(os.path.abspath(sdir))
+
+        def fake_replace(src, dst):
+            if os.path.basename(dst) == "usage-report.md":
+                with open(os.path.join(sdir, "usage-report.md"), "wb") as f:
+                    f.write(b"plantado")
+                raise PermissionError(13, "x")
+            return real_replace(src, dst)
+
+        def fake_unlink(path, *a, **k):
+            real_unlink(path, *a, **k)
+            if os.path.basename(path) == ".gitignore":
+                state["unlinked"] = True
+
+        def fake_lstat(path, *a, **k):
+            if state["unlinked"] and os.path.normcase(os.path.abspath(os.fspath(path))) == norm:
+                return os.stat_result((stat.S_IFLNK | 0o777,) + (0,) * 9)
+            return real_lstat(path, *a, **k)
+
+        with mock.patch.object(ur.os, "replace", fake_replace), mock.patch.object(ur.os, "unlink", fake_unlink), \
+                mock.patch.object(ur.os, "lstat", fake_lstat):
+            code, out, err = self.project(tree, proj)
+        self.assertEqual(code, 1)
+        self.assertTrue(state["unlinked"])
+        self.assertEqual(self.read_bytes(os.path.join(sdir, "usage-report.md")), b"plantado")
+
+    def test_privacy_texts_do_not_claim_there_is_no_content(self):
+        for notes in (ur.PRIVACY_NOTES, ur.GLOBAL_PRIVACY_NOTES):
+            joined = " ".join(notes)
+            self.assertNotIn("no contiene contenido de conversaciones", joined)
+            self.assertIn("no copia mensajes, prompts", joined)
+        project = ur.PRIVACY_NOTES[0]
+        self.assertIn("nombres de skill que escribe el modelo", project)
+        self.assertIn("ids de modelo que pasan un patrón", project)
+        self.assertIn("64 caracteres por celda", project)
+        self.assertIn("aunque la skill no exista", project)
+        self.assertIn("Es local", project)
+        glob = ur.GLOBAL_PRIVACY_NOTES[0]
+        self.assertIn("agrupa", glob)
+        self.assertIn("(otra skill)", glob)
+        self.assertIn("(otro modelo)", glob)
+
+    def test_inspect_text_does_not_claim_content_free_output(self):
+        header = ur.render_inspect(ur._Stats()).split("\n")[1]
+        self.assertNotIn("Nunca valores de contenido", header)
+        self.assertIn("revise antes de pegar", header)
+        self.assertNotIn("segura de pegar", ur.__doc__)
+
+    def test_module_docstring_lists_every_exit_code(self):
+        doc = ur.__doc__
+        start = doc.index("Codigos de salida")
+        block = doc[start:start + 900]
+        for code in ("0 correcto", "1 entorno", "2 uso incorrecto", "3 esquema", "130"):
+            self.assertIn(code, block)
+        self.assertIn("5 %", block)
+
+
 if __name__ == "__main__":
     unittest.main()

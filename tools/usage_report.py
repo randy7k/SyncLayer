@@ -14,13 +14,17 @@ documenta las garantias de escritura. `project` y `global` devuelven 1 si no hay
 
 El subcomando `inspect` imprime SOLO estructura (nombres de claves de una
 lista cerrada, tipos y conteos agregados) para confirmar el formato de las transcripciones.
-Nunca imprime valores de contenido (solo `version` y `model` filtrados salen como texto), prompts, rutas, nombres de carpeta ni identificadores de
-sesion, asi que su salida es segura de pegar en una conversacion. Una clave que no esta en
+No imprime mensajes, prompts, rutas, nombres de carpeta ni identificadores de sesion. Si imprime como
+texto los ids de `version` y `model` que pasan un patron (un id de modelo personalizado puede salir
+tal cual): revise la salida antes de pegarla en una conversacion. Una clave que no esta en
 la lista cerrada se cuenta como "(clave desconocida)" sin mostrar su nombre ni su valor.
 
-Codigos de salida: 0 correcto; 1 entorno o datos (falta projects/, sin transcripciones,
-error no previsto); 2 uso incorrecto (lo emite argparse); 3 demasiados archivos danados
-(la salida de inspect se imprime igual: es la herramienta de diagnostico).
+Codigos de salida: 0 correcto; 1 entorno o datos (falta projects/, sin transcripciones, destino
+ajeno, enlace o junction, error no previsto); 2 uso incorrecto (lo emite argparse, tambien una
+ventana invalida); 3 esquema desconocido (una comprobacion de formato falla en algun archivo de
+todos los leidos) o mas del 5 % de las llamadas danadas (sobre los archivos de la ventana; en
+`inspect`, sobre todos, y su salida se imprime igual: es la herramienta de diagnostico); 130
+interrumpido con Ctrl+C. Con 1 o 3 no se escribe nada y no queda `.synclayer/` ni temporales.
 
 Lectura defensiva: no se siguen enlaces simbolicos ni junctions, las lineas tienen un tope de
 tamano (MAX_LINE_BYTES) y se descartan sin cargarlas, y un error no previsto imprime solo el
@@ -1719,7 +1723,8 @@ def render_inspect(st: _Stats) -> str:
     out = [
         "synclayer-usage-inspect v1",
         "Solo estructura: nombres de claves de una lista cerrada, tipos y conteos. "
-        "Nunca valores de contenido; solo `version` y `model` filtrados salen como texto.",
+        "Sin mensajes, prompts ni rutas; `version` y `model` salen como texto si pasan un patron: "
+        "revise antes de pegar.",
         "",
         "== Resumen ==",
     ]
@@ -2475,8 +2480,10 @@ HOW_TO_READ = (
     " una subcarpeta o un worktree viven en otra carpeta y no se incluyen salvo que se indique.",
 )
 PRIVACY_NOTES = (
-    "Este archivo no contiene contenido de conversaciones ni rutas, pero revela volumen de uso. Es local: no"
-    " lo subas a git ni lo compartas sin revisarlo.",
+    "Este archivo no copia mensajes, prompts, argumentos de herramientas ni rutas. S\u00ed copia nombres de skill"
+    " que escribe el modelo y ids de modelo que pasan un patr\u00f3n (hasta 64 caracteres por celda, aunque la"
+    " skill no exista): pueden llevar texto elegido por el modelo. Es local y revela volumen de uso: no lo subas a"
+    " git ni lo compartas sin revisarlo.",
     "El alias `p-<8 hex>` es un hash sin sal del nombre de la carpeta del proyecto: quien conozca o adivine el"
     " nombre de la carpeta puede recalcularlo. No es anonimato.",
     "Los nombres de skills de usuario salen tal cual: pueden revelar nombres privados. El prefijo de una skill de"
@@ -3117,8 +3124,9 @@ GLOBAL_SKILLS_NOTE = (
     " si tambi\u00e9n apareci\u00f3 como agente, y el resto se agrupa como `plugin:(otro)`. En los conjuntos con nombres"
     " agrupados la columna `Skills` no se muestra (`-`).")
 GLOBAL_PRIVACY_NOTES = (
-    "Este archivo es privado por defecto: no contiene contenido de conversaciones, rutas, nombres de carpeta ni alias"
-    " de proyecto, pero revela el volumen de uso de cada proyecto. Comp\u00e1rtelo solo despu\u00e9s de revisarlo.",
+    "Este archivo es privado por defecto: no copia mensajes, prompts, argumentos, rutas, nombres de carpeta ni alias"
+    " de proyecto, y agrupa como `(otra skill)`, `(otro modelo)` y `(otro agente)` lo que no es de una lista"
+    " conocida, pero revela el volumen de uso de cada proyecto. Comp\u00e1rtelo solo despu\u00e9s de revisarlo.",
     "Los proyectos se numeran por volumen en cada ejecuci\u00f3n: la numeraci\u00f3n puede cambiar entre ejecuciones y no se"
     " puede cruzar con el alias del reporte de proyecto. Con un alias de 32 bits, dos carpetas distintas pueden dar el"
     " mismo alias interno (improbable): se cuentan como un solo proyecto y la cabecera lo avisa.",
@@ -3553,6 +3561,7 @@ MSG_DEST_FOREIGN = ("el destino ya existe y no empieza por el marcador de un rep
                     "sobrescribe un archivo ajeno")
 MSG_DEST_KIND = "el destino es un enlace, una junction o no es un archivo regular: no se sigue"
 MSG_DEST_UNREADABLE = "no se puede leer el destino para comprobar el marcador"
+MSG_DEST_HARDLINK = "el destino tiene mas de un enlace duro (otro nombre apunta al mismo archivo): no se sobrescribe"
 MSG_TMP_CREATE = "no se pudo crear el archivo temporal en la carpeta de destino"
 MSG_WRITE = "no se pudo escribir el reporte"
 MSG_REPLACE = "no se pudo reemplazar el destino (otro proceso puede tenerlo abierto)"
@@ -3628,6 +3637,8 @@ def _check_destination(path: str) -> bool:
     try:
         with _open_regular(path) as f:
             head = f.read(MARKER_READ)
+    except LinkRefused:   # subclase de OSError: va antes, para no decir "ilegible" de un archivo con enlace duro
+        raise EnvError(MSG_DEST_HARDLINK) from None
     except OSError:
         raise EnvError(MSG_DEST_UNREADABLE) from None
     first = head.split(b"\n", 1)[0]
@@ -3685,22 +3696,33 @@ def _write_atomic(folder: str, name: str, data: bytes, guards, verify) -> None:
         raise
 
 
-def _remove_created_folder(sdir: str, before) -> None:
-    """Borra .synclayer y sus dos archivos SOLO si esta corrida creo la carpeta y sigue siendo la misma."""
-    try:
-        now = os.lstat(sdir)
-        if _kind(now) != "dir" or (before is not None and _identity_changed(before, now)):
+def _remove_created_folder(sdir: str, before, names) -> None:
+    """Borra .synclayer SOLO si esta corrida la creo y sigue siendo la misma, y dentro de ella solo los
+    nombres de `names` (los que esta corrida intento escribir). El lstat de la carpeta se repite justo antes
+    de cada unlink y del rmdir: si dejo de ser la misma carpeta normal se para. Limite: comprobacion y borrado
+    son por ruta (no hay unlink por descriptor de carpeta en Windows): queda una ventana entre ambos para quien
+    pueda escribir en la carpeta del proyecto, que ya podria borrar o plantar esos archivos."""
+    def same_folder() -> bool:
+        try:
+            now = os.lstat(sdir)
+        except OSError:
+            return False
+        return _kind(now) == "dir" and not (before is not None and _identity_changed(before, now))
+
+    for name in names:
+        if not same_folder():
             return
-        for name in (GITIGNORE_NAME, PROJECT_REPORT):
-            path = os.path.join(sdir, name)
-            try:
-                if _kind(os.lstat(path)) == "file":
-                    os.unlink(path)
-            except OSError:
-                pass
-        os.rmdir(sdir)
-    except OSError:
-        pass
+        path = os.path.join(sdir, name)
+        try:
+            if _kind(os.lstat(path)) == "file":
+                os.unlink(path)
+        except OSError:
+            pass
+    if same_folder():
+        try:
+            os.rmdir(sdir)
+        except OSError:
+            pass
 
 
 def _remove_own_gitignore(sdir: str) -> None:
@@ -3729,6 +3751,7 @@ def _write_project_report(project_dir: str, data: bytes) -> None:
         _check_destination(dest)
     created = False      # esta corrida creo .synclayer (se marca ANTES de verificarla: un Ctrl+C ahi no la deja)
     wrote_gitignore = False
+    attempted = []       # nombres que esta corrida intento escribir, en orden (los unicos que la limpieza borra)
     try:
         if sst is None:
             try:
@@ -3740,11 +3763,13 @@ def _write_project_report(project_dir: str, data: bytes) -> None:
         guards = [(project_dir, pst, WHAT_PROJECT), (sdir, sst, WHAT_SYNCLAYER)]
         if not has_gitignore:
             wrote_gitignore = True   # antes de escribir: si algo falla a medias se intenta retirar
+            attempted.append(GITIGNORE_NAME)
             _write_atomic(sdir, GITIGNORE_NAME, GITIGNORE_BODY, guards, lambda: _check_gitignore(sdir))
+        attempted.append(PROJECT_REPORT)
         _write_atomic(sdir, PROJECT_REPORT, data, guards, lambda: _check_destination(dest))
     except BaseException:
         if created:
-            _remove_created_folder(sdir, sst)
+            _remove_created_folder(sdir, sst, attempted)
         elif wrote_gitignore:
             _remove_own_gitignore(sdir)
         raise
