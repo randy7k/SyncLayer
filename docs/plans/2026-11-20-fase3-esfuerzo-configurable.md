@@ -693,3 +693,24 @@ Cada una tiene un valor por defecto, que es lo que el plan implementa si no hay 
   archivo.
 - **P8. Versión mínima de Claude Code.** Por defecto: el README pide comprobar `effort:` con
   `claude --debug`, sin número. Alternativa: `scout` busca la versión en G1 y se escribe.
+
+## Consulta de `scout` para G1 (2026-11-20, por documentación; no sustituye a G1)
+
+Fuentes: `code.claude.com/docs` (sub-agents, model-config, env-vars, errors) y el changelog; páginas leídas por tramos, algunas sin leer del todo.
+
+- **`effort:` en subagentes está documentado** con los cinco niveles (`low`, `medium`, `high`, `xhigh`, `max`; los disponibles dependen del modelo). El changelog lo da por funcionando: 2.1.267 arregló que se ignorara en subagentes, y 2.1.78 lo añadió para agentes de plugin. No hay entrada «Added» para agentes de usuario. Con 2.1.328 está cubierto en cualquier caso. Parámetro `effort` de la herramienta Agent: 2.1.292. `CLAUDE_CODE_SUBAGENT_EFFORT`: 2.1.316 en el changelog y 2.1.315 en la página de variables (discrepancia menor).
+- **Niveles:** Opus 5.5, Sonnet 5.5, Haiku 5.5 y Fable admiten los cinco; Opus 4.6 y Sonnet 4.6 no tienen `xhigh`. Un nivel no soportado baja al más alto soportado igual o inferior (regla documentada para la sesión; aplicarla al agente es inferencia). Sin aviso documentado.
+- **NO documentado:** el efecto de un `effort:` inválido (`extreme`, vacío, `Medium`, número) y de un `model:` desconocido en el frontmatter de un agente (sólo hay reglas generales de modelo y de la sesión). Un campo desconocido se ignora y `claude --debug` lo nombra (`does not recognize or apply`, v2.1.296 o posterior). «Invalid `--agents` configuration» sólo aplica a `--agents`, no a los `.md`. Por eso el instalador escribe sólo valores de lista cerrada.
+- **Variables:** `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` documenta sólo el valor `1`; que `0` o `false` la dejen inactiva es inferencia por la regla general de booleanas. `CLAUDE_CODE_EFFORT_LEVEL` acepta los cinco niveles, `auto` y `unset`; vacío o sólo espacios no está documentado.
+- **Verificar modelo y esfuerzo:** `/tasks` (v2.1.242 o posterior) nombra el modelo y el esfuerzo de cada subagente. `claude --debug` sólo documenta campos no reconocidos y archivos omitidos. `/effort status` es de la sesión, no del subagente.
+- **Recarga en caliente (V1):** la página de sub-agents dice que Claude Code vigila `~/.claude/agents/` y `.claude/agents/` y que la siguiente delegación usa la definición nueva «sin reiniciar»; hace falta reiniciar para `.claude/agents/` de directorios añadidos con `--add-dir`. Sin verificar en la práctica.
+- **Pista no oficial, no tomarla como hecho:** issues de GitHub (anthropics/claude-code #81677 y #82259) dicen que `claude --agent` ignora el `effort:` del frontmatter, mientras que los subagentes lanzados con la herramienta Agent sí lo respetan. SyncLayer usa subagentes, pero conviene confirmarlo en G1.
+
+### Procedimiento G1 mínimo (propietario)
+
+1. Crear `.claude/agents/zz-nivel-prueba.md` en un proyecto de prueba (no toca `~/.claude`) con `name: zz-nivel-prueba`, una `description`, `model: sonnet` y `effort: low`; en el cuerpo, que responda «ok».
+2. Antes de abrir Claude Code, comprobar que `CLAUDE_CODE_EFFORT_LEVEL` y `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` no están definidas: anulan lo que se prueba.
+3. Abrir `claude --debug` en ese proyecto.
+4. Pedir «Usa el subagente zz-nivel-prueba» y, mientras corre, ejecutar `/tasks`: la fila debe nombrar el modelo (`sonnet`) y el esfuerzo (`low`).
+5. En `~/.claude/debug/<session-id>.txt` buscar `does not recognize or apply` y `zz-nivel-prueba`: si no hay línea de campo no reconocido, los campos se leyeron como válidos (conclusión por ausencia).
+6. Repetir con `opus` y `haiku`. Repetir con `effort: xhigh` y un modelo 4.6 (debería mostrar `high`), con un `effort:` inválido y con un `model:` inexistente, para cubrir los casos no documentados. Anotar la versión de Claude Code y el resultado en una sección «Resultado de G1» de este plan.
