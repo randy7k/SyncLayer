@@ -36,6 +36,8 @@ ejecución de planes. Deshabilitarlo es opcional.
 | DEBUGGER | Causa raíz | `opus` | Read, Grep, Glob, Bash |
 | SCRIBE | Documentación | `sonnet` | Read, Grep, Glob, Edit, Write |
 
+La columna de modelo es la del nivel 5 (el repositorio tal cual); con los niveles 1 a 4 el modelo real de seis agentes puede ser otro: ver `synclayer-config.json`.
+
 Ningún agente tiene acceso a los conectores MCP (correo, Teams, SharePoint, etc.):
 la lista `tools` de cada uno es explícita.
 

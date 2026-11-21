@@ -41,7 +41,7 @@
     },
     {
       "path": "docs/agentes.md",
-      "sha256": "1fc23b146c17766b23d70e0d2c4be8845c068c4e16293d14d0b0c8a126a257bb"
+      "sha256": "c357e8024b358945fec4d211c9425e0a722d25def6094d3a55a23a1e563b0528"
     },
     {
       "path": "hooks/agent_guard.py",

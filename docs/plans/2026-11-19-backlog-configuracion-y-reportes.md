@@ -54,10 +54,8 @@ preguntas abiertas. Sin código.
 
 **Estado (2026-11-20).** Plan aprobado:
 [`2026-11-20-fase3-esfuerzo-configurable.md`](2026-11-20-fase3-esfuerzo-configurable.md), rama
-`feat/esfuerzo-configurable`. T1, T2, T3 y T6 cerradas. T4 (renderizado de `model:` y `effort:`)
-implementada sin correr la compuerta G1 del propietario (decisión suya), en revisión. T5 (cambios de
-nivel, ediciones a mano y `-Force`) implementada. T7 y el cierre pendientes (T7 abierta hasta el
-cierre de la fase). Los niveles 1 a 4 se aplican; el efecto real
+`feat/esfuerzo-configurable`. T1 a T6 cerradas (T4 sin correr la compuerta G1, por decisión del
+propietario). T7 y el cierre en curso. La compuerta G1 sigue pendiente del propietario y no bloquea. Los niveles 1 a 4 se aplican; el efecto real
 de `effort:` en Claude Code no está verificado en una máquina real.
 
 **Pedido.** Subir o bajar el consumo según los tokens que queden: por ejemplo, que `atlas`

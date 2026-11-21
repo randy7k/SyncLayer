@@ -1,5 +1,5 @@
 """Pruebas de la tabla de niveles (Fase 3, T1): la de install.ps1 ($LevelRows), la del README y las
-reglas R1 a R5 con las que se construyo. La tabla aun no se usa para escribir nada.
+reglas R1 a R5 con las que se construyo. Desde T4 la tabla se usa para renderizar los niveles 1 a 4 (ConvertTo-LevelBytes).
 
 Casos del plan: 1 (install.ps1 contra README), 2 (lista cerrada), 3 (R2, R3, R4), 4 (nivel 5 contra
 agents/*.md), 5 (los seis agentes reales son renderizables) y 40 (install.ps1 estatico). Las
@@ -329,10 +329,12 @@ class RealAgentsRender(unittest.TestCase):
         withe = b"---\nmodel: sonnet\neffort: high\n---\n"
         self.assertEqual(lr.render_expected(withe, "haiku", "medium"), b"---\nmodel: haiku\neffort: medium\n---\n")
         self.assertEqual(lr.render_expected(withe, "haiku", "-"), b"---\nmodel: haiku\neffort: high\n---\n")
-        # model: indentado no cuenta.
-        indented = b"---\nhooks:\n  model: z\nmodel: sonnet\n---\n"
+        # model: indentado no cuenta (la sangria va despues de model:; antes se rechaza: hueco envolvente).
+        indented = b"---\nmodel: sonnet\nhooks:\n  model: z\n---\n"
         self.assertEqual(lr.render_expected(indented, "opus", "-"),
-                         b"---\nhooks:\n  model: z\nmodel: opus\n---\n")
+                         b"---\nmodel: opus\nhooks:\n  model: z\n---\n")
+        with self.assertRaises(ValueError):
+            lr.render_expected(b"---\nhooks:\n  model: z\nmodel: sonnet\n---\n", "opus", "-")
         for bad in (b"---\nname: x\n---\n", b"---\nmodel: a\nmodel: b\n---\n",
                     b"---\nmodel: a\neffort: low\neffort: low\n---\n", b"---\nmodel: a\n",
                     b"\xef\xbb\xbf---\nmodel: a\n---\n", b"\n---\nmodel: a\n---\n"):

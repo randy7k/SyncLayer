@@ -2,6 +2,26 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 3, cierre: T7)
+
+Estado final de la fase de esfuerzo configurable (plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`).
+La documentación (T7) está completa; el cierre (`sentinel`, `shield`, `auditor`) se hizo.
+
+- Niveles 1 a 5 en `<Target>/synclayer-config.json` (campo `level`, sin archivo = 5). El nivel 5 es el
+  repositorio; del 1 al 4 el instalador escribe el `model:` y el `effort:` de `atlas`, `forge`, `sentinel`,
+  `scribe`, `scout` y `oracle` según la tabla del README. `auditor`, `shield`, `debugger` y el resto quedan
+  con los bytes del origen.
+- Estado de esquema 2 (hash del origen, hash de lo escrito y nivel por archivo) con migración desde el
+  esquema 1; la clasificación compara con lo que se escribiría y con lo ya escrito.
+- Renderizado por líneas que falla cerrado ante un frontmatter que no entiende; avisos por `stderr` de las
+  dos variables de entorno que anulan el nivel; `Nivel anterior:` y la frase del exit 3; transiciones de
+  nivel, ediciones a mano y `-Force` con pruebas.
+- Límites documentados en el README («Niveles» y «Límites del instalador»): el hash del manifiesto no cubre
+  los bytes renderizados, la sintaxis laxa de PowerShell 5.1, el estado desfasado tras un fallo parcial y
+  el efecto real de `effort:` sin verificar. No hay medición de ahorro ni de calidad por nivel.
+- Del propietario, pendientes y fuera del conteo: la compuerta G1 (comprobar `effort:` en Claude Code real)
+  y V1 (recarga en caliente de los agentes).
+
 ### Añadido (Fase 3, T5: cambios de nivel, ediciones a mano y `-Force`)
 
 - Tras `Nivel:`, el instalador imprime `Nivel anterior: M` sólo cuando el estado previo es válido, todas

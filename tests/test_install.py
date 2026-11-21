@@ -2611,6 +2611,20 @@ class InstallCases:
         ("valor con arroba", agent_md("atlas", "claude-fable-5-2", before=["k: @x"]), "indicador YAML"),
         ("valor con acento grave", agent_md("atlas", "claude-fable-5-2", before=["k: `x"]), "indicador YAML"),
         ("valor con comilla doble", agent_md("atlas", "claude-fable-5-2", before=['k: "x']), "indicador YAML"),
+        # Hueco envolvente (shield y auditor): una linea con sangria antes de model: o de effort: podria ser la
+        # continuacion de un valor abierto que model: cierra. Se rechaza cualquier sangria hasta la mayor de las dos.
+        ("comilla abierta que model: envuelve", agent_md("atlas", "sonnet", before=["xq:", '  "abc'], after=['q: r"']),
+         "con sangria antes de"),
+        ("corchete abierto que model: envuelve", agent_md("atlas", "sonnet", before=["xf:", "  [a,"], after=["b: ]"]),
+         "con sangria antes de"),
+        ("llave abierta que model: envuelve", agent_md("atlas", "sonnet", before=["xf:", "  {a: 1,"], after=["b: c}"]),
+         "con sangria antes de"),
+        ("lista de flujo en hooks: antes de model:", agent_md("atlas", "sonnet", before=["hooks:", "  PreToolUse: [ {a: 1},"],
+                                                             after=["b: 2 ]"]), "con sangria antes de"),
+        ("hooks: con hijos antes de model:", agent_md("atlas", "sonnet", before=["hooks:", "  PreToolUse:", "    - x"]),
+         "con sangria antes de"),
+        ("sangria entre model: y effort:", agent_md("atlas", "sonnet", after=["hooks:", "  a: b", "effort: max"]),
+         "con sangria antes de"),
     ]
 
     def test_t4_the_reference_renderer_rejects_the_same_defects(self):
@@ -2664,14 +2678,15 @@ class InstallCases:
 
     def test_t4_case25_indented_model_and_body_model_are_not_touched(self):
         files = dict(LEVEL_SAMPLE)
+        # Las lineas con sangria van DESPUES de model: (antes se rechazan: hueco envolvente).
         files["agents/atlas.md"] = agent_md("atlas", "claude-fable-5-2",
-                                            before=["meta:", "  model: indentado-antes", "  effort: indentado-antes"])
+                                            after=["meta:", "  model: indentado-despues", "  effort: indentado-despues"])
         self.make_level_source(files)
         self.set_level(3)
         self.install_ok()
         self.assert_level_installed(files, 3)
         got = read(self.target, "agents/atlas.md")
-        self.assertIn(b"\n  model: indentado-antes\n  effort: indentado-antes\nmodel: opus\neffort: medium\n", got)
+        self.assertIn(b"\nmodel: opus\neffort: medium\nmeta:\n  model: indentado-despues\n  effort: indentado-despues\ncolor: blue\n", got)
         self.assertIn(b"\nmodel: linea del cuerpo, no se toca\n", got)
         self.assertEqual(got.count(b"effort: medium"), 1)
 
@@ -3722,6 +3737,208 @@ class InstallCases:
         self.assertEqual(read(self.target, "agents/atlas.md"), level_expected(files, 3)["agents/atlas.md"].replace(b"\n", b"\r\n"))
         self.assert_state(3, level_hashes(files, 3))
         self.assertEqual(sorted(self.tree(backup)), [self.STATE])
+
+
+    # --- Cierre de la Fase 3 (sentinel): huecos de borde no cubiertos por los casos 1 a 40 ---
+
+    def test_g1_removing_the_config_after_level_3_returns_to_the_repository_bytes(self):
+        # Nivel por defecto (sin archivo) sobre un estado de nivel 3: es el nivel 5, no «el mismo nivel».
+        files = self.t5_first_install(3)
+        os.remove(os.path.join(self.target, self.CONFIG))
+        changed = self.t5_changed(files, 3, 5)
+        self.assertTrue(changed)
+        wanted = {rel: ("ACTUALIZAR" if rel in changed else "IGUAL") for rel in files}
+        code, out, err = self.run_install("-DryRun", "-BackupDir", os.path.join(self.tmp, "respaldo-dry"))
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Nivel: 5 (por defecto", out)
+        self.t5_assert_previous_level(out, 3)
+        self.assertEqual(self.states(out), wanted)
+        out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(self.states(out), wanted)
+        self.assert_level_installed(files, 5)
+        for rel, data in files.items():
+            self.assertEqual(read(self.target, rel), data, rel)
+
+    def test_g2_level_3_with_a_readonly_destination_exit1_in_both_modes_writes_nothing(self):
+        files = self.t5_first_install(5)
+        self.set_level(3)
+        self.make_readonly("agents/atlas.md")
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*(mode + ["-BackupDir", backup]))
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("solo lectura", err)
+                self.assertIn("atlas.md", err)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertFalse(os.path.exists(backup))
+        self.assertEqual(read(self.target, "agents/atlas.md"), files["agents/atlas.md"])
+
+    def test_g3_a_manifest_without_the_fixed_agents_installs_at_level_3(self):
+        files = {rel: data for rel, data in LEVEL_SAMPLE.items()
+                 if rel not in ("agents/auditor.md", "agents/shield.md", "agents/debugger.md")}
+        self.make_level_source(files)
+        self.set_level(3)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(len([l for l in out.splitlines() if l.startswith("Ajuste:")]), 6)
+        self.install_ok()
+        self.assert_level_installed(files, 3)
+        for name in ("auditor", "shield", "debugger"):
+            self.assertFalse(os.path.exists(os.path.join(self.target, "agents", name + ".md")))
+
+    def test_g4_reinstall_after_exit4_at_level_3_needs_force_for_the_corrupted_file_only(self):
+        files = self.make_level_source()
+        self.set_level(3)
+        atlas = os.path.join(self.target, "agents", "atlas.md").replace("'", "''")
+        self.patch_script("# Paso 8:", "[System.IO.File]::AppendAllText('%s', 'x')" % atlas)
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertFalse(os.path.exists(os.path.join(self.target, self.STATE)))
+        shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+        # sin estado, lo que difiere de lo esperado es MODIFICADO (regla vigente): solo atlas
+        code, out, err = self.run_install()
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out), {r: ("MODIFICADO" if r == "agents/atlas.md" else "IGUAL") for r in files})
+        backup = os.path.join(self.tmp, "respaldo")
+        self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(sorted(self.tree(backup)), [os.path.join("agents", "atlas.md")])
+        self.assert_level_installed(files, 3)
+
+    def test_g5_environment_warnings_and_exit_3_come_together_without_the_value(self):
+        files = self.t5_first_install(3)
+        edited = read(self.target, "agents/atlas.md").replace(b"\nmodel: ", b"\nmodel: manual-", 1)
+        write(self.target, "agents/atlas.md", edited)
+        secret = "SECRETO-98765"
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode, env_extra={ENV_FORCE: secret, ENV_EFFORT: secret})
+                self.assertEqual(code, 3, out + err)
+                self.assertEqual(len(self.env_warnings(err)), 2, err)
+                self.assertIn(self.PHRASE, err)
+                self.assertNotIn(secret, out + err)
+                self.assertEqual(read(self.target, "agents/atlas.md"), edited)
+
+    def test_g6_dryrun_with_every_state_at_once_at_level_3(self):
+        files = self.make_level_source()
+        old = dict(files)
+        old["agents/viejo.md"] = b"de una version anterior\n"
+        for rel, data in old.items():
+            write(self.target, rel, data)
+        self.write_state(old)
+        os.remove(os.path.join(self.target, "agents", "scribe.md"))
+        write(self.target, "agents/forge.md", b"editado a mano\n")
+        self.set_level(3)
+        changed = self.t5_changed(files, 5, 3)
+        self.assertIn("agents/atlas.md", changed)
+        self.assertIn("agents/scribe.md", changed)
+        self.assertNotIn("agents/forge.md", changed)
+        wanted = {rel: ("ACTUALIZAR" if rel in changed else "IGUAL") for rel in files}
+        wanted["agents/scribe.md"] = "NUEVO"
+        wanted["agents/forge.md"] = "MODIFICADO"
+        wanted["agents/viejo.md"] = "HUERFANO"
+        counts = {k: list(wanted.values()).count(k) for k in ("NUEVO", "IGUAL", "ACTUALIZAR", "MODIFICADO", "HUERFANO")}
+        before = self.t5_world()
+        code, out, err = self.run_install("-DryRun", "-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out), wanted)
+        self.assertIn("Resumen: NUEVO=%(NUEVO)d IGUAL=%(IGUAL)d ACTUALIZAR=%(ACTUALIZAR)d MODIFICADO=%(MODIFICADO)d "
+                      "HUERFANO=%(HUERFANO)d" % counts, out)
+        self.assertEqual(len([l for l in out.splitlines() if l.startswith("Ajuste:")]), 6)
+        self.t5_assert_previous_level(out, 5)
+        self.assertEqual(self.t5_world(), before)
+
+    # --- Cierre de la Fase 3: salida acotada, hueco envolvente y __type en el estado ---
+
+    def test_t6c_hostile_state_with_huge_key_or_path_gives_bounded_stderr(self):
+        # Entrada no confiable: una clave o una ruta de cientos de miles de caracteres no debe volcarse entera a stderr.
+        self.make_source()
+        for rel, data in SAMPLE.items():
+            write(self.target, rel, data)
+
+        def base():
+            return json.loads(lr.state_for(read(self.src, "install-manifest.json")))
+
+        def key():
+            s = base()
+            s["files"][0]["k" * 450000] = 1
+            return s
+
+        def path_not_allowed():
+            s = base()
+            s["files"][0]["path"] = "agents/" + "A" * 450000 + ".md"
+            return s
+
+        def path_with_dots():
+            s = base()
+            s["files"][0]["path"] = "x" * 450000 + ".."
+            return s
+
+        for name, build in (("clave desconocida en una entrada", key), ("ruta fuera de la lista", path_not_allowed),
+                            ("ruta con ..", path_with_dots)):
+            with self.subTest(case=name):
+                raw = self.dump_state(build())
+                self.assertGreater(len(raw), 400000)
+                self.assertLess(len(raw), 1048576)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, out + err)
+                self.assertIn("Se trata como ausente", err)
+                self.assertLess(len(err.encode("utf-8")), 1000, len(err))
+        # el mismo tope en el manifiesto del origen
+        for name, bad in (("ruta fuera de la lista", "agents/" + "A" * 450000 + ".md"), ("ruta con ..", "x" * 450000 + "..")):
+            with self.subTest(case="manifiesto: " + name):
+                m = json.loads(read(self.src, "install-manifest.json"))
+                m["files"][0]["path"] = bad
+                write(self.src, "install-manifest.json", json.dumps(m).encode("ascii"))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, out + err)
+                self.assertLess(len(err.encode("utf-8")), 1000, len(err))
+
+    def test_t6c_valid_hooks_block_after_model_is_still_rendered(self):
+        hooks = ["hooks:", "  PreToolUse:", '    - matcher: "Write"', "      hooks: [a, b]"]
+        for level in (3, 1):
+            with self.subTest(level=level):
+                files = dict(LEVEL_SAMPLE)
+                files["agents/atlas.md"] = agent_md("atlas", "claude-fable-5-2", after=hooks)
+                self.make_level_source(files)
+                self.set_level(level)
+                self.install_ok()
+                self.assert_level_installed(files, level)
+                got = read(self.target, "agents/atlas.md")
+                self.assertIn(("\n".join(hooks) + "\n").encode("ascii"), got)
+                shutil.rmtree(self.target)
+
+    def test_t6c_type_key_in_a_state_makes_it_absent_never_actualizar(self):
+        # ConvertFrom-Json de 5.1 descarta __type antes de la lista cerrada de claves: se rechaza en el texto (como en la
+        # configuracion). Control: el mismo estado sin __type da ACTUALIZAR; con __type, MODIFICADO (estado ausente).
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        old = dict(SAMPLE)
+        old["agents/alfa.md"] = b"alfa vieja\n"
+        for rel, data in old.items():
+            write(self.target, rel, data)
+        self.write_state(old)
+        clean = read(self.target, self.STATE).decode("ascii")
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(self.states(out)["agents/alfa.md"], "ACTUALIZAR", out + err)
+        variants = [
+            ("raiz", clean.replace("{\n", '{\n  "__type": "x",\n', 1)),
+            ("raiz escrito con escapes", clean.replace("{\n", '{\n  "\\u005f\\u005ftype": "x",\n', 1)),
+            ("raiz con una letra escapada", clean.replace("{\n", '{\n  "__t\\u0079pe": "x",\n', 1)),
+            ("en una entrada", clean.replace('"path": "agents/alfa.md",', '"__type": "x", "path": "agents/alfa.md",', 1)),
+        ]
+        schema1 = json.loads(read(self.src, "install-manifest.json"))
+        variants.append(("esquema 1", json.dumps(dict(schema1, __type="x"), indent=2)))
+        for name, text in variants:
+            with self.subTest(case=name):
+                self.assertNotEqual(text, clean)
+                write(self.target, self.STATE, text.encode("ascii"))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+                self.assertNotIn("ACTUALIZAR ", out)
+                self.assertIn("Se trata como ausente", err)
+                self.assertIn("__type", err)
 
 
 def _make_class(label, exe, reason):

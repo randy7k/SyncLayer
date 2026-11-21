@@ -154,7 +154,8 @@ def render_expected(data, model, effort):
     tiene la forma `clave:` seguida de espacio o de fin de linea; (3) ningun valor de primer nivel empieza por un
     indicador YAML (comillas, corchete, llave, barra, mayor, ampersand, asterisco, exclamacion, porcentaje, arroba
     o acento grave); ademas model: tiene la forma `model: <valor simple>` y effort: la forma `effort: <letras>`;
-    la linea siguiente a model: y a effort: es el cierre o empieza por una letra; y la salida tiene las claves de
+    la linea siguiente a model: y a effort: es el cierre o empieza por una letra; ninguna linea con sangria antes
+    de la mayor de las dos (hueco envolvente); y la salida tiene las claves de
     primer nivel de la entrada mas, como mucho, effort, sin repetidas."""
     text = data.replace(b"\r\n", b"\n").decode("iso-8859-1")
     lines = text.split("\n")
@@ -183,6 +184,10 @@ def render_expected(data, model, effort):
     for i in model_idx + effort_idx:
         if lines[i + 1] != "---" and not re.match(r"[A-Za-z]", lines[i + 1]):
             raise ValueError("continuacion de model: o effort: en la linea siguiente")
+    # Hueco envolvente: ninguna linea con sangria desde la 1 hasta la mayor de model: y effort: (despues se permite).
+    last_key = max(model_idx + effort_idx)
+    if any(lines[i].startswith(" ") for i in range(1, last_key)):
+        raise ValueError("linea con sangria antes de model: o effort:")
     out = list(lines)
     out[model_idx[0]] = "model: " + model
     if effort != NO_EFFORT:

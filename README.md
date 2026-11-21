@@ -464,12 +464,13 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
   `---` con espacios finales o una línea `...`, o una autocomprobación estructural que falla. En las
   líneas del frontmatter exige sólo caracteres ASCII imprimibles, que cada línea sin sangría tenga la
   forma `clave: valor` y que ningún valor empiece por un indicador YAML (comillas, corchetes, llaves,
-  `|`, `>`, `&`, asterisco, `!`, `%`, `@` o acento grave). El mismo defecto no detiene el nivel 5 ni a
+  `|`, `>`, `&`, asterisco, `!`, `%`, `@` o acento grave). También rechaza cualquier línea con sangría
+  anterior a la línea `model:` o a un `effort:` existente; las líneas con sangría posteriores, como
+  el bloque `hooks:` de `sentinel`, siguen permitidas. El mismo defecto no detiene el nivel 5 ni a
   un agente fijo.
-- Límite conocido del renderizado: una comilla o una lista abierta en una línea con sangría anterior a
-  `model:` puede envolver esa línea (por ejemplo, `xq:` seguida de `  "abc`). La estructura y el
-  bloque `hooks:` no cambian, pero el nivel no se aplicaría de verdad aunque `Ajuste:` lo diga. Exige un
-  origen anómalo que ya haya pasado el manifiesto; los nueve agentes del repositorio no lo tienen.
+- Un estado de esquema 2 forjado con un `level` distinto puede mostrar un `Nivel anterior:` que no
+  corresponde al disco. Es sólo informativo, y forjarlo exige poder escribir en `-Target`. Una clave
+  `__type` en el estado se trata como ausente (como en la configuración).
 - El efecto real de `effort:` en Claude Code, y el de un valor que el modelo no soporta, sólo están
   verificados por la documentación, no en una máquina real (la compuerta G1 no se corrió).
 - Según la documentación, un nivel de esfuerzo que el modelo no soporta baja al más alto soportado
@@ -781,7 +782,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1262 pruebas, 196 saltadas: 193 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1280 pruebas, 205 saltadas: 202 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 
@@ -789,9 +790,10 @@ reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sob
 
 Resumen; la guía completa está en [`docs/agentes.md`](docs/agentes.md).
 
-- **Cambiar el modelo:** hoy, editar a mano la línea `model:` del archivo del agente. El nivel de
-  `synclayer-config.json` aún no lo aplica (ver «Niveles»). Una edición a mano sale `MODIFICADO` al
-  reinstalar.
+- **Cambiar el modelo:** para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle`, la vía es
+  el nivel de `synclayer-config.json`, que se aplica al reinstalar (ver «Niveles»). Editar a mano
+  `model:` o `effort:` sale `MODIFICADO` (exit 3) y pide `-Force`. `auditor`, `shield` y `debugger`
+  no cambian con el nivel.
 - **Cambiar herramientas:** línea `tools:`. Sin ella, el agente hereda todas, incluidos
   los conectores MCP.
 - **Adaptar a un proyecto:** `.claude/agents/<nombre>.md` dentro del repo del proyecto
@@ -812,18 +814,18 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-21** (T5 de la Fase 3 cerrada: cambios de nivel, ediciones a mano y `-Force`).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-21** (Fase 3 cerrada: documentación de los niveles y cierre con `sentinel`, `shield` y `auditor`).
 
 ### Avance global
 
-**El proyecto completo va en 55%.** Cuenta las cinco fases con el mismo peso; las fases 4 y 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 3 está desglosada pero sin ninguna unidad cerrada, así que el número sube cuando se desglosen en sub-fases.
+**El proyecto completo va en 60%.** Cuenta las cinco fases con el mismo peso; las fases 4 y 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 3 está desglosada en unidades, así que el número sube cuando se desglosen las fases 4 y 5 en sub-fases.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | **55%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | **60%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
-| **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **75%** | 6 de 8 | Plan aprobado, en curso (T1 a T6 cerradas); antes de T4 el propietario corre la compuerta G1 ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
+| **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Plan aprobado, cerrada en la rama `feat/esfuerzo-configurable` (T1 a T7 y cierre); la compuerta G1 del propietario sigue pendiente (verificación en Claude Code real; no bloquea) ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
 | **4. Nombres de agentes configurables** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 
@@ -854,25 +856,23 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | Tabla y estado | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T1, T2) |
 | Configuración y renderizado | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 3 de 3 (T3, T4, T5) |
 | Avisos | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 1 de 1 (T6) |
-| Documentación y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 2 (T7, cierre) |
+| Documentación y cierre | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T7, cierre) |
 
 - **Tabla y estado**
   - ✅ Hecho: T1 tabla nivel por agente como datos en `install.ps1` (validada al arrancar) y en el README, con las pruebas que las mantienen iguales y las reglas R1 a R5.
   - ✅ Hecho también: T2 estado con esquema 2 (hash del origen, hash de lo escrito y nivel por archivo), lectura de los esquemas 1 y 2 con migración, clasificación contra lo escrito y comparaciones ordinales.
   - ⬜ Falta: nada.
 - **Configuración y renderizado**
-  - ✅ Hecho: nada.
   - ✅ Hecho: T3 lectura y validación de `<Target>/synclayer-config.json` (campo `level` de 1 a 5, ausente o `{}` = nivel 5; lectura única con tope de 64 KiB, rechazo de enlaces, claves de lista cerrada incluido `__type`), línea `Nivel:` y guardia temporal que impide aplicar un nivel 1 a 4.
   - ✅ Hecho también: T4 renderizado y aplicación de los niveles 1 a 4 (sólo `model:` y `effort:` de seis agentes, con valores de lista cerrada; falla cerrado ante un frontmatter que no entiende), clasificación contra lo que se escribiría y lo ya escrito, líneas `Ajuste:` y retirada de la guardia temporal. Se hizo sin la compuerta G1: el efecto real de `effort:` en Claude Code sólo está verificado por documentación.
   - ✅ Hecho también: T5 cambios de nivel, ediciones a mano y `-Force`: la tabla de situaciones tiene prueba (cambio de nivel con archivos intactos es `ACTUALIZAR`, una edición a mano es `MODIFICADO`, estado perdido se trata como ausente), línea `Nivel anterior:` y frase del exit 3.
   - ⬜ Falta: nada.
 - **Avisos**
-  - ✅ Hecho: nada.
   - ✅ Hecho: T6 (adelantada a T4 y T5 por decisión del propietario) aviso por `stderr` si el nivel es 1 a 4 y el entorno trae `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`; nunca imprime el valor y con nivel 5 no añade ninguna línea.
   - ⬜ Falta: nada.
 - **Documentación y cierre**
-  - ✅ Hecho: nada.
-  - ⬜ Falta: T7 documentación; cierre con `sentinel`, `shield` y `auditor`.
+  - ✅ Hecho: T7 documentación completa de los niveles (README, `CLAUDE.md`, `HISTORY.md`, `docs/agentes.md`, `rules/agentes.md`, manifiesto regenerado); cierre: `sentinel` (los 40 casos del plan con prueba y 6 pruebas de borde), `shield` sobre T2 a T6 sin Critical, High ni Medium, `auditor` sobre el cambio completo sin Critical.
+  - ⬜ Falta: nada del plan. Fuera del conteo y del propietario: la compuerta G1 (comprobar en Claude Code real que `effort:` se reconoce, con `/tasks`), V1 (recarga en caliente de agentes) y aplicar el instalador nuevo al `~/.claude` real.
 
 ### Línea de tiempo
 
@@ -904,7 +904,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-20 | T6 de la Fase 3 (adelantada): avisos de variables de entorno que anulan el nivel, sin imprimir su valor; revisada por `auditor` y `shield` | ✅ |
 | 2026-11-21 | T4 de la Fase 3: renderizado y aplicación de los niveles 1 a 4 (frontmatter de seis agentes, valores de lista cerrada, falla cerrado), guardia temporal retirada; revisada por `auditor` y `shield` en tres rondas; sin la compuerta G1 | ✅ |
 | 2026-11-21 | T5 de la Fase 3: cambios de nivel, ediciones a mano y `-Force` (casos 31 a 37 y cada fila de la tabla de situaciones, línea `Nivel anterior:` y frase del exit 3); revisada por `auditor` | ✅ |
-| **Ahora** | **Cierre de la Fase 3** (T7 completar la documentación, `sentinel`, `shield` y `auditor` sobre el cambio completo) y, del propietario, la compuerta G1 (`effort:` con `/tasks`, sin bloquear ya), del propietario, comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
+| 2026-11-21 | T7 y cierre de la Fase 3: documentación completa de los niveles; `sentinel` (40 casos y 6 pruebas de borde), `shield` sobre T2 a T6 y `auditor` sobre el cambio completo; se cerró además el hueco de las líneas con sangría antes de `model:` | ✅ |
+| **Ahora** | **Integrar la Fase 3** (merge a `main`, sin push) y, del propietario, la compuerta G1 (`effort:` con `/tasks`, sin bloquear ya), del propietario, comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
 | Luego | Desglosar las fases 4 y 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).

@@ -67,7 +67,7 @@ $ErrorActionPreference = 'Stop'
 $AllowedPattern = '^(agents/(?!(con|prn|aux|nul|com[1-9]|lpt[1-9])\.)[a-z0-9_-]+\.md|rules/agentes\.md|hooks/agent_guard\.py|docs/agentes\.md)\z'
 $StateName = 'synclayer-manifest.json'
 $ManifestName = 'install-manifest.json'
-# Tamano maximo del estado previo que se interpreta (entrada no confiable): el de trece archivos son
+# Tamano maximo del estado previo que se interpreta (entrada no confiable): el de doce archivos son
 # unos 3 KB; un estado mayor se trata como no valido.
 $StateMaxBytes = 1048576
 # Archivo de configuracion del nivel (Fase 3): <Target>/synclayer-config.json, lo escribe el usuario a mano.
@@ -413,10 +413,10 @@ function Get-ManifestEntries($m) {
         $hash = Get-Prop $entry 'sha256'
         if (-not ($path -is [string])) { throw 'una entrada de files no tiene path de texto' }
         if ($path.Contains('..') -or $path.Contains('\') -or $path.Contains(':') -or $path.StartsWith('/')) {
-            throw ('ruta no permitida (absoluta, con .., \ o :): ' + (Format-Safe $path))
+            throw ('ruta no permitida (absoluta, con .., \ o :): ' + (Format-SafeShort $path))
         }
         if ($path -cnotmatch $AllowedPattern) {
-            throw ('ruta fuera de la lista permitida: ' + (Format-Safe $path))
+            throw ('ruta fuera de la lista permitida: ' + (Format-SafeShort $path))
         }
         if ($hashes.ContainsKey($path)) { throw ('ruta duplicada: ' + (Format-Safe $path)) }
         if (-not ($hash -is [string]) -or $hash -cnotmatch '^[0-9a-f]{64}\z') {
@@ -428,13 +428,23 @@ function Get-ManifestEntries($m) {
     return @{ Order = $order; Hashes = $hashes; Files = $files }
 }
 
+# $true si el texto contiene __type (busqueda ordinal), tambien escrito con escapes de la forma backslash-u y
+# cuatro hex ya resueltos. Lo usan Read-State y Read-LevelConfig.
+function Test-TextHasTypeKey([string]$Text) {
+    $unescaped = [regex]::Replace($Text, '\\u([0-9a-fA-F]{4})', [System.Text.RegularExpressions.MatchEvaluator]{
+        param($hit)
+        return [string][char][System.Convert]::ToInt32($hit.Groups[1].Value, 16)
+    })
+    return ($unescaped.IndexOf('__type', [System.StringComparison]::Ordinal) -ge 0)
+}
+
 # Lee y valida el estado previo (<Target>/synclayer-manifest.json), que es entrada no confiable.
 # Esquema 1 (instalador de la Fase 1, copia del manifiesto): written = sha256 y level = 5 por archivo,
 # porque aquel instalador escribia los bytes canonicos del origen. Esquema 2: ademas written (hash de
 # lo escrito, 64 hex minuscula) y level (entero de 1 a 5) por archivo, con claves de lista cerrada.
 # Cualquier otro schema, un JSON ilegible o un campo invalido lanza: el llamador lo trata como ausente
-# (nunca como ACTUALIZAR). Devuelve @{ Order; Hashes; Written; Levels; Schema; Bytes }. Levels y Schema
-# no se leen aun: quedan para T3 y T5 (nivel anterior).
+# (nunca como ACTUALIZAR). Devuelve @{ Order; Hashes; Written; Levels; Bytes }. Levels da el nivel anterior
+# (linea Nivel anterior:); no interviene en la clasificacion.
 function Read-State([string]$FilePath) {
     # Lectura unica con tope sobre lo leido (no sobre una medida previa): se abre una vez, en solo lectura, y se
     # leen como maximo $StateMaxBytes mas uno. Mismo patron que Read-LevelConfig.
@@ -463,6 +473,9 @@ function Read-State([string]$FilePath) {
     $bytes = New-Object byte[] $count
     [System.Array]::Copy($buf, $bytes, $count)
     $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes).TrimStart([char]0xFEFF)
+    # Mismo rechazo de __type que en la configuracion: el ConvertFrom-Json de 5.1 descarta esa clave antes de la
+    # lista cerrada. Un estado legitimo (esquema 1 o 2) nunca la contiene.
+    if (Test-TextHasTypeKey $text) { throw 'clave desconocida: __type' }
     try {
         $m = $text | ConvertFrom-Json
     }
@@ -502,7 +515,7 @@ function Read-State([string]$FilePath) {
         foreach ($entry in $entries.Files) {
             foreach ($p in $entry.PSObject.Properties) {
                 if (-not (Test-OrdinalIn @('path', 'sha256', 'written', 'level') $p.Name)) {
-                    throw ('clave desconocida en una entrada: ' + (Format-Safe $p.Name))
+                    throw ('clave desconocida en una entrada: ' + (Format-SafeShort $p.Name))
                 }
             }
             $rel = [string](Get-Prop $entry 'path')
@@ -518,7 +531,7 @@ function Read-State([string]$FilePath) {
             $levels[$rel] = [int]$lv
         }
     }
-    return @{ Order = $entries.Order; Hashes = $entries.Hashes; Written = $written; Levels = $levels; Schema = [int]$schema; Bytes = $bytes }
+    return @{ Order = $entries.Order; Hashes = $entries.Hashes; Written = $written; Levels = $levels; Bytes = $bytes }
 }
 
 # Texto no confiable para un mensaje: recortado a 40 caracteres y escapado (Format-Safe).
@@ -570,11 +583,7 @@ function Read-LevelConfig([string]$FilePath) {
     # con escapes de la forma backslash-u y cuatro hex, antes de que se pueda comprobar la lista cerrada de
     # claves. Un archivo valido solo tiene la clave level: cualquier aparicion de __type (comparacion ordinal,
     # con esos escapes ya resueltos) se rechaza.
-    $unescaped = [regex]::Replace($text, '\\u([0-9a-fA-F]{4})', [System.Text.RegularExpressions.MatchEvaluator]{
-        param($hit)
-        return [string][char][System.Convert]::ToInt32($hit.Groups[1].Value, 16)
-    })
-    if ($unescaped.IndexOf('__type', [System.StringComparison]::Ordinal) -ge 0) {
+    if (Test-TextHasTypeKey $text) {
         throw 'clave desconocida: __type (el instalador puede ser anterior al archivo)'
     }
     try {
@@ -656,6 +665,7 @@ function Get-LevelCell([int]$Level, [string]$Agent) {
 #  - model: ausente, repetido o sin la forma simple (letras, digitos, punto, guion), y effort: repetido o sin
 #    la forma simple (letras minusculas);
 #  - la linea siguiente a model: o a effort: no es el cierre ni empieza por una letra (continuacion);
+#  - alguna linea con sangria entre la linea 1 y la mayor de model: y effort: (hueco envolvente);
 #  - autocomprobacion del resultado: mismo cierre, una sola linea model:, effort: solo si la celda lo pide,
 #    todas las demas lineas identicas, y ninguna clave de primer nivel repetida o distinta.
 # La proteccion del bloque hooks: son las reglas de forma, la comparacion linea a linea y el rechazo de
@@ -721,6 +731,16 @@ function ConvertTo-LevelBytes([byte[]]$Canon, [string]$Model, [string]$Effort) {
         $nextLine = $lines[$ix + 1]
         if (-not ([string]::Equals($nextLine, '---', $ord) -or $nextLine -cmatch '^[A-Za-z]')) {
             throw 'una linea model: o effort: del origen tiene continuacion en la linea siguiente'
+        }
+    }
+    # Hueco envolvente: una linea con sangria antes de model: o de effort: (desde la 1 hasta la mayor de las dos)
+    # podria ser la continuacion de un valor abierto (comilla, corchete, llave) que esa linea cierra, y sustituirla
+    # dejaria YAML distinto. Se rechaza cualquier sangria ahi; despues de ambas se permite (el bloque hooks: va despues).
+    $lastKey = $modelIdx[0]
+    if ($effortIdx.Count -eq 1 -and $effortIdx[0] -gt $lastKey) { $lastKey = $effortIdx[0] }
+    for ($i = 1; $i -lt $lastKey; $i++) {
+        if ($lines[$i].StartsWith(' ', $ord)) {
+            throw 'hay una linea con sangria antes de la linea model: o effort: del frontmatter'
         }
     }
     $out = New-Object System.Collections.Generic.List[string]
@@ -928,7 +948,7 @@ try {
     # defecto del origen que el manifiesto no detecta: exit 1 antes de escribir, tambien en -DryRun.
     # $outHash (hash de $outBytes) es lo que clasifica, verifica y se guarda en el estado como written.
     # Con el nivel 5 los mensajes de verificacion dicen lo de siempre (el manifiesto): quien no configura
-    # nada ve la misma salida que antes. Con el nivel 1 a 4 el hash esperado ya no es el del manifiesto.
+    # nada ve la misma salida que antes, salvo la linea Nivel:. Con el nivel 1 a 4 el hash esperado ya no es el del manifiesto.
     $verifyWhat = 'el manifiesto'
     if ($level -ne 5) { $verifyWhat = 'lo esperado para el nivel ' + $level }
     $outBytes = @{}
