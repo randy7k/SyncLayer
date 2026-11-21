@@ -61,10 +61,13 @@ SyncLayer/
     ├── test_brand_agents.py
     ├── test_ico.py
     ├── test_install.py
+    ├── test_levels.py     Tabla de niveles, marcadores del README, guarda de promesas
+    ├── levels_ref.py      Lector de la tabla y del estado esperado (auxiliar de las pruebas)
     ├── test_manifest.py
     ├── test_usage_report.py
     ├── test_usage_report_cli.py
     ├── test_usage_report_edges.py
+    ├── test_usage_report_perf.py  Equivalencia y tope de trabajo del lector de transcripciones
     └── usage_synth.py     Transcripciones sintéticas para las pruebas del reporte
 ```
 
@@ -176,7 +179,7 @@ Códigos de salida:
 | Código | Significado | ¿Se escribió algo? |
 |---|---|---|
 | 0 | Correcto, incluido «nada que hacer» y `-DryRun` sin problemas | Sólo en ejecución real |
-| 1 | Uso o entorno: manifiesto ausente o inválido, ruta no permitida, punto de reanálisis o archivo bloqueado detectados antes de escribir, respaldo que ya existe, `-Target` que es un archivo o una raíz de unidad sin `-BackupDir`, error no previsto | No (salvo fallo de E/S al crear el respaldo) |
+| 1 | Uso o entorno: manifiesto ausente o inválido, `synclayer-config.json` inválido o ilegible, nivel de 1 a 4 (aún no se aplica), ruta no permitida, punto de reanálisis o archivo bloqueado detectados antes de escribir, respaldo que ya existe, `-Target` que es un archivo o una raíz de unidad sin `-BackupDir`, error no previsto | No (salvo fallo de E/S al crear el respaldo) |
 | 2 | El origen no coincide con el manifiesto | No |
 | 3 | Hay `MODIFICADO` y falta `-Force` | No |
 | 4 | Falló la copia, la verificación posterior o la escritura del estado | Sí, parcial; el respaldo queda y no hay rollback |
@@ -186,8 +189,24 @@ de crear el respaldo y la repetición vuelve a tener algo que respaldar, repetir
 `-BackupDir` explícito sale 1 porque la carpeta ya existe: usa otro `-BackupDir` o ninguno.
 
 Qué no hace: no sincroniza automáticamente, no borra nada, no toca `settings.json` ni
-`~/.claude/CLAUDE.md`, no hace rollback y no autentica el origen. El único entorno
-verificado es Windows PowerShell 5.1.
+`~/.claude/CLAUDE.md`, no hace rollback, no autentica el origen y no crea, edita, respalda ni
+borra `synclayer-config.json`. El único entorno verificado es Windows PowerShell 5.1.
+
+**Estado del instalador (esquema 2).** `<Target>/synclayer-manifest.json` ya no es una copia del
+manifiesto. Lleva `schema` 2, `algorithm` `sha256`, `eol` `lf` y, por archivo y en el orden del
+manifiesto, `path`, `sha256` (hash canónico del origen), `written` (hash canónico de lo escrito) y
+`level` (el nivel leído de la configuración). El formato es siempre el esquema 2, también con
+el nivel 5; hoy `written` es igual a `sha256`. Es ASCII, con LF y un salto final, y reinstalar sin cambios no lo
+reescribe. La clasificación compara el destino con `written`, no con el origen de la ejecución
+anterior. Un estado de esquema 1 (el de la Fase 1) es válido: se migra a esquema 2 en la primera
+reinstalación y el viejo va al respaldo, así que esa reinstalación crea una carpeta de respaldo
+aunque todos los archivos salgan `IGUAL`. Un estado de otro esquema, ilegible o inválido se trata
+como ausente (con aviso por `stderr`, sin respaldo) y nunca produce `ACTUALIZAR`.
+
+**Configuración y avisos.** Tras verificar el origen (pasos 1 y 2) y antes de leer el estado
+previo, el instalador lee `<Target>/synclayer-config.json` y, con un nivel de 1 a 4, avisa por
+`stderr` si el entorno define `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`. Ver
+«Niveles» (qué se acepta, qué avisos salen y qué falta).
 
 Después, las instrucciones globales del usuario (`~/.claude/CLAUDE.md`) deben apuntar
 a las reglas. Las reglas de `~/.claude/rules/` se cargan en todos los proyectos. Ejemplo
@@ -264,6 +283,8 @@ Resumen de las reglas (detalle en [`rules/agentes.md`](rules/agentes.md)):
 | `shield` | Seguridad | `opus` | Read, Grep, Glob, Bash |
 | `debugger` | Causa raíz | `opus` | Read, Grep, Glob, Bash |
 | `scribe` | Documentación | `sonnet` | Read, Grep, Glob, Edit, Write |
+
+La columna de modelo es la del nivel 5, el repositorio tal cual (ver «Niveles»).
 
 Los alias (`haiku`, `sonnet`, `opus`) los resuelve Claude Code a la versión vigente de
 cada familia. `atlas` va fijado al ID `claude-fable-5-2` porque, con Claude Code
@@ -401,6 +422,27 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
 - El instalador avisa si la variable de entorno `HOME` difiere de `$HOME` de PowerShell: los
   `hooks:` de los agentes usan `$HOME` del shell que los lanza.
 
+**Configuración y niveles**
+
+- Windows PowerShell 5.1 acepta más que JSON estricto al leer `synclayer-config.json`: comillas
+  simples, claves sin comillas, `+3` y `03` pasan. No lo trates como un validador de JSON.
+- Con una clave `level` repetida gana la última.
+- Entre la comprobación de enlaces y la apertura del archivo queda una carrera residual; para
+  aprovecharla hay que poder escribir en `-Target`.
+- Los mensajes de error nombran las claves con `Format-Safe`, que no escapa la barra invertida.
+- La configuración vive en cada `-Target`: no hay una configuración global ni por proyecto. Un
+  `-Target` temporal de pruebas no hereda la de `~/.claude`.
+- Los avisos de entorno sólo miran el ámbito `Process` del instalador, no el bloque `env` de
+  `settings.json` ni otro shell; una variable de sólo espacios avisa y `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=0`
+  también avisa (si Claude Code la trata como inactiva, no está verificado). Ver «Niveles».
+- Un estado de esquema 1 (el de la Fase 1) se migra a esquema 2 al reinstalar y el viejo va al
+  respaldo: esa primera reinstalación crea una carpeta de respaldo aunque todos los archivos salgan
+  `IGUAL`.
+- Un instalador anterior no sabe leer un estado de esquema 2: lo trata como ausente, así que sus
+  archivos salen `MODIFICADO` (exit 3) y nunca se sobrescriben sin `-Force`.
+- Un nivel de 1 a 4 no se aplica todavía (exit 1); los límites del renderizado, cuando exista,
+  se añaden con T4 (ver «Pendiente (T4/T5)» en «Niveles»).
+
 **No verificado**
 
 - pwsh 7 (no está instalado en el equipo de pruebas), volúmenes de red y OneDrive, un enlace
@@ -409,12 +451,18 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
 
 ## Niveles
 
-Esta sección es mínima; el resto del texto llega con la documentación completa de la Fase 3.
-`install.ps1` lleva una tabla con los niveles 1 a 4 (el 5 es el repositorio), con el `model:` y el `effort:` de seis agentes
-(`atlas`, `forge`, `sentinel`, `scribe`, `scout`, `oracle`). Todavía no se usa: la instalación
-escribe los archivos del repositorio, que son el nivel 5. `auditor`, `shield` y `debugger` quedan
-fijos en todos los niveles (`opus`, sin `effort:`). La tabla es un orden razonado, no una
+El diseño prevé que un nivel de 1 a 5 fije el `model:` y el `effort:` de seis agentes (`atlas`,
+`forge`, `sentinel`, `scribe`, `scout`, `oracle`). Hoy sólo el nivel 5 se aplica, y es el
+repositorio tal cual: quien no configura nada instala los mismos archivos de siempre.
+`install.ps1` lleva la tabla de los niveles 1 a 4. `auditor`, `shield` y `debugger` quedan fijos
+en todos los niveles (`opus`, sin `effort:`, con su hook). La tabla es un orden razonado, no una
 medición: no promete ahorro de tokens ni de costo. «—» significa sin `effort:`.
+
+> **Estado de la Fase 3: sólo el nivel 5 se aplica hoy.** Un nivel de 1 a 4 es válido, pero el
+> instalador sale con exit 1 (`error: el nivel N aun no se puede aplicar en esta version.`) y no
+> escribe nada. «Elegir el nivel» y los avisos de entorno describen lo que el instalador hace hoy;
+> «Qué fija el nivel y qué no» y «Qué puede anular el nivel» describen el efecto previsto cuando T4
+> aplique la tabla. Lo que falta está en «Pendiente (T4/T5)».
 
 <!-- niveles:inicio -->
 | Agente | Nivel 5 (repo) | Nivel 4 | Nivel 3 | Nivel 2 | Nivel 1 |
@@ -426,6 +474,107 @@ medición: no promete ahorro de tokens ni de costo. «—» significa sin `effor
 | `scout` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
 | `oracle` | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — |
 <!-- niveles:fin -->
+
+### Elegir el nivel
+
+El archivo es `<Target>/synclayer-config.json` (por defecto `~/.claude/synclayer-config.json`), junto
+al estado del instalador. Es opcional y lo escribes tú a mano; el instalador sólo lo lee, una vez, y
+nunca lo crea, edita, respalda ni borra. Un solo campo:
+
+```json
+{ "level": 5 }
+```
+
+1. Crea o edita el archivo (UTF-8, con o sin BOM; CRLF o LF).
+2. Ensaya con `-DryRun`: lee y valida el archivo sin escribir nada. Para probar sin tocar
+   `~/.claude`, pasa `-Target` a una carpeta temporal y crea el archivo allí.
+3. Reinstala. Cambiar de nivel es editar el archivo y reinstalar; hoy esto sólo funciona con el 5.
+
+Reglas del archivo:
+
+| Caso | Resultado |
+|---|---|
+| Sin archivo, o `{}` | Nivel 5 |
+| `level` entero de 1 a 5 | Ese nivel. `"3"`, `3.0`, `true`, 0, 6 y los negativos dan exit 1 |
+| Otra clave (incluida `Level`, en mayúsculas) | Exit 1. El mensaje dice que el instalador puede ser anterior al archivo. Con `level` y `Level` a la vez, el error es `JSON invalido` |
+| JSON roto, vacío, raíz que no es un objeto, más de 65 536 bytes | Exit 1 |
+| Carpeta, enlace simbólico o junction con ese nombre, archivo bloqueado o ilegible | Exit 1: un nivel que no se puede leer no se sustituye en silencio por el 5 |
+
+Todo error de configuración sale con exit 1 antes de escribir nada, también con `-DryRun`. El
+formato es `error: synclayer-config.json no es valido: <motivo>. No se escribio nada.`; con un
+enlace o junction el mensaje es el de rechazo de enlaces (`error: <ruta> es un punto de reanalisis
+(...). No se escribe a traves de enlaces. No se escribio nada.`). Los mensajes nunca imprimen los
+valores del archivo; una clave desconocida se nombra recortada a 40 caracteres y escapada.
+
+Con un nivel de 1 a 4 válido, hoy:
+
+- `-DryRun` y la ejecución real salen con exit 1 y `error: el nivel N aun no se puede aplicar en
+  esta version.` No se escribe ningún archivo del destino, ni el estado.
+- La línea `Nivel:` del plan sólo se imprime con el nivel 5, porque el exit 1 llega antes:
+  `Nivel: 5 (synclayer-config.json)` o `Nivel: 5 (por defecto; no hay synclayer-config.json)`.
+- Los avisos de entorno (más abajo) sí salen, justo antes de ese exit 1.
+
+### Qué fija el nivel y qué no
+
+Esta subsección describe el efecto previsto cuando T4 aplique la tabla; hoy ningún nivel de 1 a 4
+escribe nada.
+
+- **Fijos en todos los niveles:** `auditor`, `shield` y `debugger` (`opus`, sin `effort:`, hook
+  intacto). Ningún nivel les cambiará nada, así que las revisiones de seguridad y de código no
+  dependerán del nivel.
+- **Bajar el nivel cambiará la calidad esperada** del trabajo de los seis agentes modificables. El
+  ahorro no está medido: este repositorio no tiene cifras de ahorro ni de calidad por nivel, y no
+  las promete.
+- **Límites de la tabla.** Es un orden razonado, no una medición. El precio por token no es el costo
+  por tarea: un modelo de menor precio por token puede gastar más tokens. Un `effort:` explícito fijará el esfuerzo del
+  agente aunque la sesión tenga otro: si la sesión corre en `low`, una celda `medium` lo subirá para ese
+  agente. Los alias (`opus`, `sonnet`, `haiku`) cambian de versión con el tiempo. Un `effort:` que el
+  modelo no soporta baja al más alto soportado igual o inferior.
+- **Compatibilidad con `effort:`.** Antes de usar un nivel de 1 a 4 (cuando se pueda), comprueba con
+  `claude --debug` que tu versión de Claude Code no lista `effort:` como campo no reconocido. La
+  versión mínima que lo admite no está verificada.
+
+### Qué puede anular el nivel
+
+Cuando T4 escriba el frontmatter, otras capas tendrán precedencia sobre él y el instalador no las
+verá, salvo las dos variables de entorno que se indican (el aviso de esas dos ya existe hoy):
+
+| Anulación | Efecto | ¿Avisa el instalador? |
+|---|---|---|
+| `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` | Claude Code ignora el `model:` de los agentes | Sí, con nivel 1 a 4 |
+| `CLAUDE_CODE_EFFORT_LEVEL` | Tiene prioridad sobre el `effort:` de los agentes | Sí, con nivel 1 a 4 |
+| Variables definidas en el bloque `env` de `settings.json` o en otro shell | Las mismas dos de arriba, fuera del entorno del instalador | No |
+| Un `.claude/agents/<nombre>.md` de proyecto con el mismo nombre | Reemplaza al agente global, con su `model:` y su `effort:` | No |
+| `maxEffortLevel` gestionado | Limita el esfuerzo | No |
+| `availableModels` gestionado | Limita los modelos disponibles | No |
+| El parámetro `model` de la llamada a Agent | Gana al `model:` del frontmatter | No |
+
+Los avisos salen por `stderr`, en `-DryRun` y en ejecución real, sin cambiar el código de salida:
+
+```
+aviso: CLAUDE_CODE_SUBAGENT_MODEL_FORCE esta definida: Claude Code ignora el model: de los agentes y el nivel N no cambia el modelo.
+aviso: CLAUDE_CODE_EFFORT_LEVEL esta definida: tiene prioridad sobre el effort: de los agentes.
+```
+
+Sólo se mira el nombre y si tiene valor; el valor nunca se imprime. Con el nivel 5 no hay aviso.
+Límites de los avisos: sólo miran el ámbito `Process` del entorno del instalador (una variable
+definida con `setx` y sin reiniciar la consola no avisa); una variable de sólo espacios avisa; y
+`CLAUDE_CODE_SUBAGENT_MODEL_FORCE=0` también avisa, aunque Claude Code quizá la trate como inactiva
+(no verificado). El instalador no define, cambia ni borra variables.
+
+### Pendiente (T4/T5)
+
+Lo siguiente **no existe todavía**; no lo des por hecho:
+
+- **Renderizado (T4).** Escribir el `model:` y el `effort:` de la tabla en los seis agentes. Está
+  bloqueada por la compuerta G1 del propietario (verificar `effort:` en una versión real de Claude
+  Code). Con ella se retira la guardia temporal de los niveles 1 a 4 y salen las líneas `Ajuste:` del plan.
+- **Clasificación y escritura con niveles (T5).** Que un cambio de nivel dé `ACTUALIZAR` y que una
+  edición a mano dé `MODIFICADO` con el contenido del nivel; la línea `Nivel anterior:` y la frase
+  del exit 3 que remite a la configuración.
+- **Límites del renderizado:** los bytes de un nivel de 1 a 4 no los cubre el hash del manifiesto
+  (parten de bytes verificados y se comprobarán contra lo escrito) y `install.ps1` no está en el
+  manifiesto. Se documentan al implementar T4.
 
 ## Reporte de uso
 
@@ -586,15 +735,17 @@ reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sob
 
 Resumen; la guía completa está en [`docs/agentes.md`](docs/agentes.md).
 
-- **Cambiar el modelo:** línea `model:` del archivo del agente.
+- **Cambiar el modelo:** hoy, editar a mano la línea `model:` del archivo del agente. El nivel de
+  `synclayer-config.json` aún no lo aplica (ver «Niveles»). Una edición a mano sale `MODIFICADO` al
+  reinstalar.
 - **Cambiar herramientas:** línea `tools:`. Sin ella, el agente hereda todas, incluidos
   los conectores MCP.
 - **Adaptar a un proyecto:** `.claude/agents/<nombre>.md` dentro del repo del proyecto
   reemplaza al agente global del mismo nombre sólo allí.
 - **Agregar un agente:** archivo nuevo en `agents/` con `name` y `description`, y una
   fila en el catálogo de `rules/agentes.md` y de `docs/agentes.md`.
-- **Variables de entorno que alteran los modelos:** `CLAUDE_CODE_SUBAGENT_MODEL`,
-  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, `ANTHROPIC_DEFAULT_*_MODEL`.
+- **Variables de entorno que alteran los modelos y el esfuerzo:** `CLAUDE_CODE_SUBAGENT_MODEL`,
+  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, `CLAUDE_CODE_EFFORT_LEVEL`, `ANTHROPIC_DEFAULT_*_MODEL`.
 - Tras cambiar cualquiera de los doce archivos gestionados (los nueve agentes,
   `rules/agentes.md`, `hooks/agent_guard.py`, `docs/agentes.md`), regenera el manifiesto con
   `python -B tools/build_manifest.py` (`--check` sólo comprueba y sale con 1 si no está al

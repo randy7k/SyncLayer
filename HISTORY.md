@@ -2,6 +2,23 @@
 
 ## [Sin publicar]
 
+### Añadido (niveles, Fase 3)
+
+Resumen parcial de la Fase 3 (esfuerzo configurable por niveles, plan
+`docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). **Hoy ningún nivel distinto de 5 se aplica**: un
+nivel de 1 a 4 es válido pero sale con exit 1 (guardia temporal). El detalle está en las entradas por task,
+más abajo:
+
+- T1, tabla de niveles de esfuerzo (24 filas, listas cerradas, validada al arrancar; misma tabla en el README).
+- T2, estado del instalador con esquema 2 y migración desde el esquema 1.
+- T3, lectura y validación de `<Target>/synclayer-config.json` y guardia temporal.
+- T6, avisos de variables de entorno que anulan el nivel (adelantada a T4 y T5).
+- T7 (parcial), documentación de lo que existe: README (sección «Niveles», estado del instalador, límites),
+  CLAUDE.md, `docs/agentes.md`, `rules/agentes.md` y el estado de la fase en el backlog.
+- Pendiente: T4 (renderizado de `model:` y `effort:`, bloqueada por la compuerta G1 del propietario) y T5
+  (clasificación y escritura con niveles); al cerrarlas se completa T7 (renderizado, tabla aplicada,
+  límites del renderizado). No hay medición de ahorro ni de calidad por nivel.
+
 ### Añadido (Fase 3, T6: avisos de variables de entorno)
 
 - `install.ps1` avisa por `stderr` cuando el nivel leído es 1 a 4 y el entorno del instalador trae, con

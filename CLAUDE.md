@@ -85,7 +85,8 @@ Cuatro piezas, de la más abstracta a la más concreta (la cuarta, el instalador
 
 4. El instalador: `install.ps1` (Windows PowerShell 5.1), `install-manifest.json` (los doce
    archivos gestionados con su hash canónico) y `tools/build_manifest.py` (lo genera y lo
-   comprueba). En el destino deja el estado `<Target>/synclayer-manifest.json`, con esquema 2 (por
+   comprueba). Lee además `<Target>/synclayer-config.json` (opcional, a mano, sólo `level`; ver «Niveles
+   de esfuerzo» en «Comportamientos no obvios»). En el destino deja el estado `<Target>/synclayer-manifest.json`, con esquema 2 (por
    archivo: hash del origen `sha256`, hash de lo escrito `written` y `level`; lee también el esquema 1 y lo
    migra). La clasificación compara el destino con `written`: igual al origen nuevo es `IGUAL`, igual a
    `written` es `ACTUALIZAR`, cualquier otro caso `MODIFICADO`; un estado no reconocido se trata como
@@ -200,19 +201,35 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
-- Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`): la tabla
-  nivel por agente vive en `install.ps1` (`$LevelRows`, niveles 1 a 4; el 5 es el repositorio) y debe ser
-  igual a la del README entre `<!-- niveles:inicio -->` y `<!-- niveles:fin -->`
-  (`tests/levels_ref.py` los lee, `tests/test_levels.py` lo comprueba junto con las reglas R1 a R5).
-  Cambiar una celda exige cambiarla en los dos sitios. `auditor`, `shield` y `debugger` no entran en la
-  tabla. Todavía no se usa para escribir: eso llega con T4. Los textos que hablen de niveles no pueden
-  prometer ahorro: `promise_hits` de `tests/test_levels.py` es la guarda.
-- `<Target>/synclayer-config.json` (opcional, campo `level` de 1 a 5, sin archivo = 5) es entrada no
-  confiable: lectura única con tope de 64 KiB, UTF-8 estricto, sin enlaces, claves de lista cerrada
-  (incluida `__type`, que `ConvertFrom-Json` de 5.1 descarta en silencio) y errores con exit 1 antes de
-  escribir. El instalador nunca lo escribe, respalda ni borra. Mientras T4 no exista, un nivel 1 a 4 sale
-  con exit 1 (guardia temporal). Con `level` repetido gana el último, y 5.1 acepta sintaxis laxa
-  (comillas simples, `+3`, `03`): no es JSON estricto.
+- Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: T1,
+  T2, T3 y T6 hechas; T4 (renderizado de `model:` y `effort:`, bloqueada por la compuerta G1 del
+  propietario) y T5 (clasificación y escritura con niveles) pendientes. Hoy ningún nivel distinto de 5 se
+  aplica: no documentes los niveles 1 a 4 como funcionales.
+  - Contrato con las pruebas: la tabla nivel por agente vive en `install.ps1` (`$LevelRows`, niveles 1 a 4;
+    el 5 es el repositorio, sin filas) y debe ser igual a la del README entre `<!-- niveles:inicio -->` y
+    `<!-- niveles:fin -->` (`tests/levels_ref.py` los lee, `tests/test_levels.py` lo comprueba junto con
+    las reglas R1 a R5). Cambiar una celda exige cambiarla en los dos sitios. `auditor`, `shield` y
+    `debugger` no entran en la tabla. No muevas ni renombres los marcadores.
+  - Los textos de niveles no pueden prometer ahorro: `promise_hits` de `tests/test_levels.py` revisa la
+    sección «Niveles» del README (la lista completa de patrones está en `PROMISE_PATTERNS`). Haz lo mismo en el resto de la documentación.
+  - Nivel 5 = repositorio tal cual: la instalación escribe los bytes canónicos del origen.
+    `assets/brand/src/agents_data.py` y `tests/test_brand_agents.py` siguen en el nivel 5.
+  - `<Target>/synclayer-config.json` (opcional, campo `level` de 1 a 5, sin archivo o `{}` = 5) es entrada
+    no confiable: lectura única con tope de 64 KiB, UTF-8 estricto, sin enlaces, claves de lista cerrada
+    (incluida `__type`, que `ConvertFrom-Json` de 5.1 descarta en silencio). Una configuración ilegible o
+    inválida falla con exit 1 antes de escribir (también en `-DryRun`); un estado ilegible, en cambio, se
+    trata como ausente. El instalador nunca escribe, respalda ni borra la configuración.
+  - Guardia temporal: un nivel 1 a 4 válido sale con exit 1 antes de imprimir la línea `Nivel:`. T4 la
+    retira junto con `patch_out_guard` de las pruebas. Los avisos de entorno (T6) van antes de la
+    guardia y deben seguir saliendo cuando T4 la retire.
+  - Marcadores de `install.ps1` entre el Paso 2 y el Paso 3: `# Configuracion:` (lee y valida el archivo)
+    y `# Nivel:` (hoy sólo asigna `$outHash` = hash del manifiesto; T4 renderizará aquí). No empiezan
+    por `# Paso`, que es el contrato de `patch_script`.
+  - Límites conocidos de la configuración (README, «Límites del instalador»): 5.1 acepta sintaxis laxa
+    (comillas simples, `+3`, `03`); con `level` repetido gana el último; carrera residual de lectura de
+    enlace; `Format-Safe` no escapa `\`; pwsh 7 sin verificar.
+  - Avisos de entorno: sólo con nivel 1 a 4, sólo el ámbito `Process`, nunca imprimen el valor; una
+    variable de sólo espacios avisa y `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=0` también (sin verificar).
 - Las pruebas del instalador pasan SIEMPRE `-Target` a una carpeta temporal, nunca
   `~/.claude`, y no escriben el nombre de usuario como literal.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`

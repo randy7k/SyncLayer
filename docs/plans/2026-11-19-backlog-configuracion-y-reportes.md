@@ -52,6 +52,12 @@ preguntas abiertas. Sin código.
 
 ## Fase 3: esfuerzo configurable (5 niveles)
 
+**Estado (2026-11-20).** Plan aprobado:
+[`2026-11-20-fase3-esfuerzo-configurable.md`](2026-11-20-fase3-esfuerzo-configurable.md), rama
+`feat/esfuerzo-configurable`. T1, T2, T3 y T6 cerradas. T4 (renderizado de `model:` y `effort:`)
+bloqueada por la compuerta G1 del propietario. T5, T7 y el cierre pendientes (T7 tiene una versión
+parcial escrita). Hoy sólo el nivel 5 se aplica.
+
 **Pedido.** Subir o bajar el consumo según los tokens que queden: por ejemplo, que `atlas`
 pase de `claude-fable-5-2` a `opus` al bajar el esfuerzo.
 
