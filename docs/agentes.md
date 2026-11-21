@@ -12,7 +12,7 @@ Instalado el 2026-11-19 con Claude Code 2.1.310.
 | `~/.claude/CLAUDE.md` | Instrucciones globales del usuario: deben apuntar a `~/.claude/rules/agentes.md` |
 | `~/.claude/docs/agentes.md` | Esta guía |
 | Copias previas | `install.ps1` respalda lo que sobrescribe en `<Target>-backup-<fecha-hora>` (o en el `-BackupDir` que pases; por defecto `~/.claude-backup-<fecha-hora>`); no toca `CLAUDE.md` ni `settings.json`, así que respaldalos vos si los vas a editar |
-| `~/.claude/synclayer-manifest.json` | Estado que deja `install.ps1`: copia del manifiesto de la última instalación correcta |
+| `~/.claude/synclayer-manifest.json` | Estado que deja `install.ps1` tras la última instalación correcta: por archivo, el hash del origen, el de lo escrito y el nivel |
 | `~/.claude/synclayer-usage.md` | Reporte global de uso de subagentes. No lo instala `install.ps1`: lo genera `tools/usage_report.py global` (ver «Reporte de uso») |
 
 Cómo instalar y actualizar: `install.ps1`, con `-DryRun` primero. Uso y límites en la sección

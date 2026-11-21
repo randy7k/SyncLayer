@@ -8,6 +8,12 @@ archivo y muestra el plan. Sin -DryRun respalda lo que va a sobrescribir (verifi
 el hook primero (temporal en la misma carpeta + movimiento), verifica el destino y escribe el
 estado <Target>/synclayer-manifest.json. Nunca borra. No hace rollback: si falla, informa.
 
+Estado: esquema 2, por archivo el hash del origen (sha256), el hash de lo escrito (written) y el
+nivel (level, siempre 5 por ahora). La clasificacion compara el destino con el hash escrito por la
+instalacion previa (written) y el origen con el manifiesto. Lee tambien el esquema 1 (copia del
+manifiesto, de la Fase 1) y lo migra al reinstalar (el estado viejo va al respaldo). Un estado
+ilegible, invalido o de otro esquema se trata como ausente: nunca produce ACTUALIZAR.
+
 Hash canonico: SHA-256 (hex minusculas) de los bytes del archivo con cada CRLF sustituido por
 LF. Un CR suelto no se toca; no se quita BOM ni se recodifica.
 
@@ -53,6 +59,9 @@ $ErrorActionPreference = 'Stop'
 $AllowedPattern = '^(agents/(?!(con|prn|aux|nul|com[1-9]|lpt[1-9])\.)[a-z0-9_-]+\.md|rules/agentes\.md|hooks/agent_guard\.py|docs/agentes\.md)\z'
 $StateName = 'synclayer-manifest.json'
 $ManifestName = 'install-manifest.json'
+# Tamano maximo del estado previo que se interpreta (entrada no confiable): el de trece archivos son
+# unos 3 KB; un estado mayor se trata como no valido.
+$StateMaxBytes = 1048576
 
 # Tabla de niveles (Fase 3). Aun no se usa para escribir nada: la instalacion no cambia. Una fila
 # por linea, nivel|agente|modelo|esfuerzo, con - para "sin effort:". El nivel 5 es el repositorio y
@@ -160,11 +169,25 @@ function Get-ErrorText($ErrorRecord) {
     return Format-Safe $ex.Message.Trim()
 }
 
-# Busca la propiedad distinguiendo mayusculas (PSObject.Properties[nombre] no las distingue).
+# Igualdad ORDINAL de cadenas: -ceq compara segun la cultura e ignora caracteres como NUL (U+0000) o el
+# guion blando (U+00AD), asi que no vale para texto no confiable (claves y valores de un JSON).
+function Test-OrdinalEqual($A, $B) {
+    return (($A -is [string]) -and ($B -is [string]) -and [string]::Equals($A, $B, [System.StringComparison]::Ordinal))
+}
+
+# Pertenencia ordinal a una lista cerrada de cadenas.
+function Test-OrdinalIn($List, $Item) {
+    foreach ($candidate in $List) {
+        if (Test-OrdinalEqual $candidate $Item) { return $true }
+    }
+    return $false
+}
+
+# Busca la propiedad distinguiendo mayusculas y de forma ordinal (PSObject.Properties[nombre] no las distingue).
 function Get-PropRaw($Object, [string]$Name) {
     if ($null -eq $Object) { return $null }
     foreach ($p in $Object.PSObject.Properties) {
-        if ($p.Name -ceq $Name) { return $p }
+        if (Test-OrdinalEqual $p.Name $Name) { return $p }
     }
     return $null
 }
@@ -356,9 +379,16 @@ function Read-Manifest([string]$FilePath) {
     if (-not (($schema -is [int] -or $schema -is [long]) -and $schema -eq 1)) {
         throw 'schema debe ser 1'
     }
-    if ((Get-Prop $m 'algorithm') -cne 'sha256') {
+    if (-not (Test-OrdinalEqual (Get-Prop $m 'algorithm') 'sha256')) {
         throw 'algorithm debe ser sha256'
     }
+    $entries = Get-ManifestEntries $m
+    return @{ Order = $entries.Order; Hashes = $entries.Hashes }
+}
+
+# Valida la lista files de un manifiesto o de un estado (rutas de la lista permitida, sin duplicados,
+# sha256 de 64 hex en minuscula). Devuelve @{ Order; Hashes; Files }. Lanza si algo no cumple.
+function Get-ManifestEntries($m) {
     $filesProp = Get-PropRaw $m 'files'
     if ($null -eq $filesProp) { throw 'falta la lista files' }
     $files = $filesProp.Value
@@ -383,7 +413,96 @@ function Read-Manifest([string]$FilePath) {
         $hashes[$path] = $hash
         $order.Add($path)
     }
-    return @{ Order = $order; Hashes = $hashes; Bytes = $bytes }
+    return @{ Order = $order; Hashes = $hashes; Files = $files }
+}
+
+# Lee y valida el estado previo (<Target>/synclayer-manifest.json), que es entrada no confiable.
+# Esquema 1 (instalador de la Fase 1, copia del manifiesto): written = sha256 y level = 5 por archivo,
+# porque aquel instalador escribia los bytes canonicos del origen. Esquema 2: ademas written (hash de
+# lo escrito, 64 hex minuscula) y level (entero de 1 a 5) por archivo, con claves de lista cerrada.
+# Cualquier otro schema, un JSON ilegible o un campo invalido lanza: el llamador lo trata como ausente
+# (nunca como ACTUALIZAR). Devuelve @{ Order; Hashes; Written; Levels; Schema; Bytes }. Levels y Schema
+# no se leen aun: quedan para T3 y T5 (nivel anterior).
+function Read-State([string]$FilePath) {
+    $info = New-Object System.IO.FileInfo($FilePath)
+    if ($info.Length -gt $StateMaxBytes) { throw ('supera ' + $StateMaxBytes + ' bytes') }
+    $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+    $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes).TrimStart([char]0xFEFF)
+    try {
+        $m = $text | ConvertFrom-Json
+    }
+    catch {
+        throw 'JSON invalido (no se puede interpretar el archivo)'
+    }
+    $schema = Get-Prop $m 'schema'
+    if (-not ($schema -is [int] -or $schema -is [long])) { throw 'schema no reconocido' }
+    if ($schema -ne 1 -and $schema -ne 2) { throw 'schema no reconocido' }
+    if (-not (Test-OrdinalEqual (Get-Prop $m 'algorithm') 'sha256')) {
+        throw 'algorithm debe ser sha256'
+    }
+    $entries = Get-ManifestEntries $m
+    $written = @{}
+    $levels = @{}
+    if ($schema -eq 1) {
+        foreach ($rel in $entries.Order) {
+            $written[$rel] = $entries.Hashes[$rel]
+            $levels[$rel] = 5
+        }
+    }
+    else {
+        foreach ($p in $m.PSObject.Properties) {
+            if (-not (Test-OrdinalIn @('schema', 'algorithm', 'eol', 'files') $p.Name)) {
+                throw ('clave desconocida: ' + (Format-Safe $p.Name))
+            }
+        }
+        if (-not (Test-OrdinalEqual (Get-Prop $m 'eol') 'lf')) { throw 'eol debe ser lf' }
+        foreach ($entry in $entries.Files) {
+            foreach ($p in $entry.PSObject.Properties) {
+                if (-not (Test-OrdinalIn @('path', 'sha256', 'written', 'level') $p.Name)) {
+                    throw ('clave desconocida en una entrada: ' + (Format-Safe $p.Name))
+                }
+            }
+            $rel = [string](Get-Prop $entry 'path')
+            $w = Get-Prop $entry 'written'
+            $lv = Get-Prop $entry 'level'
+            if (-not ($w -is [string]) -or $w -cnotmatch '^[0-9a-f]{64}\z') {
+                throw ('written invalido para ' + (Format-Safe $rel))
+            }
+            if (-not (($lv -is [int] -or $lv -is [long]) -and $lv -ge 1 -and $lv -le 5)) {
+                throw ('level invalido para ' + (Format-Safe $rel))
+            }
+            $written[$rel] = $w
+            $levels[$rel] = [int]$lv
+        }
+    }
+    return @{ Order = $entries.Order; Hashes = $entries.Hashes; Written = $written; Levels = $levels; Schema = [int]$schema; Bytes = $bytes }
+}
+
+# Bytes del estado con esquema 2: ASCII, LF, sangria de dos espacios y salto final. Coinciden byte a
+# byte con json.dumps(obj, indent=2, ensure_ascii=True) + LF de Python con este orden de claves
+# (ConvertTo-Json de 5.1 da otro formato). Las rutas son [a-z0-9_/.-] por AllowedPattern: no se escapa nada.
+# Funcion pura de manifiesto, hashes escritos y nivel: reinstalar sin cambios no reescribe el estado.
+function ConvertTo-StateBytes($Manifest, [hashtable]$OutHashes, [int]$Level) {
+    $lf = "`n"
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('{' + $lf)
+    [void]$sb.Append('  "schema": 2,' + $lf)
+    [void]$sb.Append('  "algorithm": "sha256",' + $lf)
+    [void]$sb.Append('  "eol": "lf",' + $lf)
+    [void]$sb.Append('  "files": [' + $lf)
+    $last = $Manifest.Order.Count - 1
+    for ($i = 0; $i -le $last; $i++) {
+        $rel = $Manifest.Order[$i]
+        [void]$sb.Append('    {' + $lf)
+        [void]$sb.Append('      "path": "' + $rel + '",' + $lf)
+        [void]$sb.Append('      "sha256": "' + $Manifest.Hashes[$rel] + '",' + $lf)
+        [void]$sb.Append('      "written": "' + $OutHashes[$rel] + '",' + $lf)
+        [void]$sb.Append('      "level": ' + $Level.ToString([System.Globalization.CultureInfo]::InvariantCulture) + $lf)
+        if ($i -lt $last) { [void]$sb.Append('    },' + $lf) } else { [void]$sb.Append('    }' + $lf) }
+    }
+    [void]$sb.Append('  ]' + $lf)
+    [void]$sb.Append('}' + $lf)
+    return , [System.Text.Encoding]::ASCII.GetBytes($sb.ToString())
 }
 
 try {
@@ -470,9 +589,17 @@ try {
             "`nSi eres mantenedor y el cambio es intencional, regenera el manifiesto con: python -B tools/build_manifest.py")
     }
 
+    # Nivel: en esta version el nivel es siempre 5 (el repositorio): se escriben los bytes canonicos del
+    # origen y el hash escrito de cada archivo es el del manifiesto. $outHash es lo que clasifica,
+    # verifica y se guarda en el estado como written.
+    $level = 5
+    $outHash = @{}
+    foreach ($rel in $manifest.Order) { $outHash[$rel] = $manifest.Hashes[$rel] }
+
     # Paso 3: estado previo del destino (las pruebas inyectan codigo justo despues de esta linea).
-    # Ni -Target ni el estado pueden ser puntos de reanalisis. Un estado ilegible o invalido se trata
-    # como ausente: aviso a stderr, no se hace hash de el ni se respalda, y se reescribe al final.
+    # Ni -Target ni el estado pueden ser puntos de reanalisis. Un estado ilegible, invalido o de un
+    # schema no reconocido se trata como ausente: aviso a stderr, no se hace hash de el ni se respalda,
+    # y se reescribe al final. Un estado no reconocido nunca produce ACTUALIZAR.
     $statePath = Join-Path $TargetFull $StateName
     $badLink = Find-Reparse $TargetFull $StateName
     if ($null -ne $badLink) { Stop-Install 1 (Get-ReparseMessage $badLink) }
@@ -484,7 +611,7 @@ try {
     $stateDestHash = $null
     if ($stateExists) {
         try {
-            $prev = Read-Manifest $statePath
+            $prev = Read-State $statePath
             $stateDestHash = Get-Sha256Hex (ConvertTo-CanonicalBytes $prev.Bytes)
         }
         catch {
@@ -524,10 +651,10 @@ try {
             catch {
                 Stop-Install 1 ('error: no se pudo leer el destino ' + (Format-Safe $dest) + ' (' + (Get-ErrorText $_) + '). No se escribio nada en el destino.')
             }
-            if ($destHash -ceq $manifest.Hashes[$rel]) {
+            if ($destHash -ceq $outHash[$rel]) {
                 $state = 'IGUAL'
             }
-            elseif ($null -ne $prev -and $prev.Hashes.ContainsKey($rel) -and ($prev.Hashes[$rel] -ceq $destHash)) {
+            elseif ($null -ne $prev -and $prev.Written.ContainsKey($rel) -and ($prev.Written[$rel] -ceq $destHash)) {
                 $state = 'ACTUALIZAR'
             }
             else {
@@ -560,7 +687,7 @@ try {
             $writeRows.Add($row)
         }
     }
-    $stateBytes = ConvertTo-CanonicalBytes $manifest.Bytes
+    $stateBytes = ConvertTo-StateBytes $manifest $outHash $level
     $stateHash = Get-Sha256Hex $stateBytes
     # Un estado ilegible o invalido deja $stateDestHash en $null: se reescribe y no se respalda.
     $stateNeedsWrite = (-not $stateExists) -or ($stateDestHash -cne $stateHash)
@@ -738,7 +865,7 @@ try {
             $badLink = Find-Reparse $TargetFull $rel
             if ($null -ne $badLink) { throw ((Get-ReparseText $badLink) + ' Aparecio mientras se escribia: el archivo pudo escribirse fuera del destino; revisalo.') }
             Write-Out ('Copiado: ' + $rel)
-            if ((Get-CanonicalHash $dest) -cne $manifest.Hashes[$rel]) {
+            if ((Get-CanonicalHash $dest) -cne $outHash[$rel]) {
                 throw 'el hash del archivo escrito no coincide con el manifiesto'
             }
         }
@@ -756,7 +883,7 @@ try {
             if ($null -ne $badLink) {
                 $badDest.Add($rel + ' (' + (Get-ReparseText $badLink) + ')')
             }
-            elseif ((Get-CanonicalHash $dest) -cne $manifest.Hashes[$rel]) { $badDest.Add($rel) }
+            elseif ((Get-CanonicalHash $dest) -cne $outHash[$rel]) { $badDest.Add($rel) }
         }
         catch {
             $badDest.Add($rel + ' (no se pudo leer)')

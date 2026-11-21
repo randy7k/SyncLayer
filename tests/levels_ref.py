@@ -6,6 +6,7 @@ implementacion, independiente de PowerShell, contra la que se comparan los bytes
 Solo biblioteca estandar.
 """
 
+import json
 import os
 import re
 
@@ -112,6 +113,29 @@ def repo_frontmatter(name):
         raise ValueError("%s no empieza por ---" % name)
     end = lines.index("---", 1)
     return lines[1:end]
+
+
+def state_for(manifest, out_hashes=None, level=5):
+    """Estado esquema 2 esperado (3.4 del plan), en bytes: segunda implementacion, independiente de
+    PowerShell. `manifest` es el texto, los bytes o el dict de install-manifest.json (schema 1);
+    `out_hashes` {ruta: hash de lo escrito} (por defecto el sha256 del origen: nivel 5); `level` el
+    nivel de la instalacion, igual en todas las entradas. Orden de `files`: el del manifiesto."""
+    if isinstance(manifest, (bytes, bytearray)):
+        manifest = manifest.decode("utf-8")
+    if isinstance(manifest, str):
+        manifest = json.loads(manifest)
+    out_hashes = {} if out_hashes is None else out_hashes
+    files = []
+    for entry in manifest["files"]:
+        path = entry["path"]
+        files.append({
+            "path": path,
+            "sha256": entry["sha256"],
+            "written": out_hashes.get(path, entry["sha256"]),
+            "level": level,
+        })
+    state = {"schema": 2, "algorithm": "sha256", "eol": "lf", "files": files}
+    return (json.dumps(state, indent=2, ensure_ascii=True) + "\n").encode("ascii")
 
 
 def render_expected(data, model, effort):

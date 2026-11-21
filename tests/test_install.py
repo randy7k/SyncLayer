@@ -23,8 +23,10 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import build_manifest as bm  # noqa: E402
+import levels_ref as lr  # noqa: E402
 
 SCRIPT = os.path.join(ROOT, "install.ps1")
 POWERSHELL = shutil.which("powershell")
@@ -196,12 +198,24 @@ class InstallCases:
                 result[m.group(2)] = m.group(1)
         return result
 
-    def write_state(self, files):
-        """Estado previo en el destino: manifiesto de una instalacion anterior con esos archivos."""
+    def write_state(self, files, schema=2, written=None, level=5):
+        """Estado previo en el destino, el de una instalacion anterior con esos archivos. schema=1: copia
+        del manifiesto (instalador de la Fase 1); schema=2: el estado nuevo, con `written` (por defecto el
+        hash del origen) y `level`."""
         old = os.path.join(self.tmp, "viejo")
         for rel, data in files.items():
             write(old, rel, data)
-        write(self.target, "synclayer-manifest.json", manifest_for(old, sorted(files)).encode("ascii"))
+        manifest = manifest_for(old, sorted(files))
+        if schema == 1:
+            data = manifest.encode("ascii")
+        else:
+            data = lr.state_for(manifest, written, level)
+        write(self.target, "synclayer-manifest.json", data)
+
+    def assert_state(self, level=5, out_hashes=None):
+        """El estado del destino es, byte a byte, el que genera la referencia de Python para el origen."""
+        self.assertEqual(read(self.target, "synclayer-manifest.json"),
+                         lr.state_for(read(self.src, "install-manifest.json"), out_hashes, level))
 
     def assert_nothing_written_outside_target_and_backup(self):
         self.assertEqual(sorted(os.listdir(self.tmp)),
@@ -627,10 +641,11 @@ class InstallCases:
 
     def preinstall(self):
         """Deja el destino como lo deja una instalacion limpia (los archivos canonicos y el estado), sin
-        lanzar PowerShell: solo para pruebas que necesitan ese punto de partida y no prueban la instalacion."""
+        lanzar PowerShell: solo para pruebas que necesitan ese punto de partida y no prueban la instalacion.
+        El estado es el de esquema 2 que deja el instalador: asi estas pruebas no ganan un respaldo por migracion."""
         for rel, data in SAMPLE.items():
             write(self.target, rel, data)
-        write(self.target, "synclayer-manifest.json", read(self.src, "install-manifest.json"))
+        write(self.target, "synclayer-manifest.json", lr.state_for(read(self.src, "install-manifest.json")))
 
     def install_ok(self, *args):
         code, out, err = self.run_install(*args)
@@ -667,8 +682,7 @@ class InstallCases:
         out, err = self.install_ok("-BackupDir", backup)
         for rel, data in SAMPLE.items():
             self.assertEqual(read(self.target, rel), data)
-        self.assertEqual(read(self.target, "synclayer-manifest.json"),
-                         read(self.src, "install-manifest.json"))
+        self.assert_state(5)
         self.assertFalse(os.path.exists(backup))
         self.assertEqual(self.leftover_temps(), [])
         self.assertEqual(sorted(os.listdir(self.tmp)), ["destino", "home", "origen"])
@@ -717,8 +731,7 @@ class InstallCases:
                        for d, _s, fs in os.walk(backup) for f in fs)
         self.assertEqual(saved, ["agents/alfa.md", "synclayer-manifest.json"])
         self.assertEqual(self.states(out)["agents/alfa.md"], "ACTUALIZAR")
-        self.assertEqual(read(self.target, "synclayer-manifest.json"),
-                         read(self.src, "install-manifest.json"))
+        self.assert_state(5)
         self.assertIn(backup, out)
         self.assertEqual(self.leftover_temps(), [])
 
@@ -778,8 +791,7 @@ class InstallCases:
         before = {rel: os.stat(os.path.join(self.target, *rel.split("/"))).st_mtime_ns for rel in SAMPLE}
         out, err = self.install_ok()
         self.assertEqual(set(self.states(out).values()), {"IGUAL"})
-        self.assertEqual(read(self.target, "synclayer-manifest.json"),
-                         read(self.src, "install-manifest.json"))
+        self.assert_state(5)
         for rel in SAMPLE:
             self.assertEqual(os.stat(os.path.join(self.target, *rel.split("/"))).st_mtime_ns, before[rel])
         self.assertEqual(sorted(os.listdir(self.tmp)), ["destino", "home", "origen"])
@@ -844,6 +856,11 @@ class InstallCases:
         self.assertFalse(os.path.exists(os.path.join(self.target, "tests")))
         for entry in json.loads(raw)["files"]:
             self.assertEqual(bm.canonical_sha256(read(self.target, entry["path"])), entry["sha256"])
+        self.assert_state(5)
+        state = json.loads(read(self.target, "synclayer-manifest.json"))
+        self.assertEqual(state["schema"], 2)
+        self.assertEqual({f["level"] for f in state["files"]}, {5})
+        self.assertTrue(all(f["written"] == f["sha256"] for f in state["files"]))
 
     def test_real_run_altered_source_exit2_writes_nothing(self):
         self.make_source()
@@ -964,6 +981,423 @@ class InstallCases:
         self.assertEqual(self.states(out)["agents/viejo.md"], "HUERFANO")
         self.assertEqual(read(self.target, "agents/viejo.md"), b"de una version anterior\n")
 
+    # --- Fase 3, T2: estado con esquema 2 (hash del origen, written y level) y migracion del esquema 1 ---
+
+    STATE = "synclayer-manifest.json"
+
+    def sha(self, data):
+        return bm.canonical_sha256(data)
+
+    def test_t2_case6_state_bytes_are_the_python_serialization(self):
+        # Caso 6: los bytes del estado de PowerShell son los de json.dumps(indent=2) de Python.
+        self.make_source()
+        self.install_ok()
+        raw = read(self.target, self.STATE)
+        self.assertEqual(raw, lr.state_for(read(self.src, "install-manifest.json"), None, 5))
+        self.assertTrue(raw.isascii())
+        self.assertNotIn(b"\r", raw)
+        self.assertTrue(raw.endswith(b"}\n"))
+        self.assertFalse(raw.endswith(b"\n\n"))
+        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+        # independiente de state_for: releer el JSON y volver a serializarlo da los mismos bytes
+        data = json.loads(raw)
+        self.assertEqual((json.dumps(data, indent=2, ensure_ascii=True) + "\n").encode("ascii"), raw)
+        self.assertEqual(list(data), ["schema", "algorithm", "eol", "files"])
+        self.assertEqual(data["schema"], 2)
+        self.assertEqual([list(f) for f in data["files"]], [["path", "sha256", "written", "level"]] * len(SAMPLE))
+        self.assertEqual([f["path"] for f in data["files"]], sorted(SAMPLE))
+        for f in data["files"]:
+            self.assertEqual(f["written"], f["sha256"])
+            self.assertEqual(f["level"], 5)
+            self.assertIs(type(f["level"]), int)
+
+    def test_t2_case6_state_with_crlf_source_is_still_lf(self):
+        self.make_source(crlf=True)
+        self.install_ok()
+        self.assert_state(5)
+        self.assertNotIn(b"\r", read(self.target, self.STATE))
+
+    def test_t2_case7_schema1_state_intact_destination_is_igual_and_migrates(self):
+        # Caso 7: estado de la Fase 1 con el destino intacto: todo IGUAL; el estado migra y el viejo va al respaldo.
+        self.make_source()
+        for rel, data in SAMPLE.items():
+            write(self.target, rel, data)
+        self.write_state(SAMPLE, schema=1)
+        old_state = read(self.target, self.STATE)
+        self.assertEqual(json.loads(old_state)["schema"], 1)
+        before_dry = snapshot(self.target)
+        listing_dry = sorted(os.listdir(self.tmp))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertIn("Respaldo:", out)
+        self.assertEqual(snapshot(self.target), before_dry)
+        self.assertEqual(sorted(os.listdir(self.tmp)), listing_dry)
+        self.assertEqual(read(self.target, self.STATE), old_state)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertIn("escritos=0", out)
+        self.assertNotIn("Se trata como ausente", err)
+        self.assert_state(5)
+        self.assertEqual(read(backup, self.STATE), old_state)
+        saved = sorted(os.path.relpath(os.path.join(d, f), backup).replace("\\", "/")
+                       for d, _s, fs in os.walk(backup) for f in fs)
+        self.assertEqual(saved, [self.STATE])
+        for rel, data in SAMPLE.items():
+            self.assertEqual(read(self.target, rel), data)
+        # segunda corrida: ya es esquema 2, sin escrituras ni respaldo, solo IGUAL
+        after = snapshot(self.target)
+        backup2 = os.path.join(self.tmp, "respaldo2")
+        out, err = self.install_ok("-BackupDir", backup2)
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertEqual(snapshot(self.target), after)
+        self.assertFalse(os.path.exists(backup2))
+        self.assertNotIn("Estado:", out)
+        self.assert_quiet_when_nothing_written(out)
+
+    def test_t2_case8_schema1_state_with_changed_source_is_actualizar(self):
+        # Caso 8: el destino coincide con el estado viejo y el origen cambio: ACTUALIZAR, como antes.
+        self.make_source()
+        for rel, data in SAMPLE.items():
+            write(self.target, rel, data)
+        self.write_state(SAMPLE, schema=1)
+        old_state = read(self.target, self.STATE)
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/alfa.md"], "ACTUALIZAR")
+        self.assertEqual({v for k, v in st.items() if k != "agents/alfa.md"}, {"IGUAL"})
+        self.assertEqual(read(self.target, "agents/alfa.md"), b"alfa nueva\n")
+        self.assertEqual(read(backup, "agents/alfa.md"), SAMPLE["agents/alfa.md"])
+        self.assertEqual(read(backup, self.STATE), old_state)
+        self.assert_state(5)
+
+    def valid_old_state(self):
+        """Escribe en el destino el estado esquema 2 de una instalacion anterior con alfa vieja y lo devuelve como dict."""
+        old = dict(SAMPLE)
+        old["agents/alfa.md"] = b"alfa vieja\n"
+        self.write_state(old)
+        return json.loads(read(self.target, self.STATE))
+
+    def dump_state(self, data):
+        if isinstance(data, (bytes, bytearray)):
+            raw = bytes(data)
+        else:
+            raw = (json.dumps(data, indent=2, ensure_ascii=True) + "\n").encode("ascii")
+        write(self.target, self.STATE, raw)
+        return raw
+
+    def test_t2_case9_invalid_schema2_state_is_absent_and_never_actualizar(self):
+        # Caso 9: un estado esquema 2 invalido se trata como ausente: con la edicion o la version vieja en el
+        # destino sale MODIFICADO (nunca ACTUALIZAR), con aviso por stderr, y el estado no se respalda ni toca.
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        old = dict(SAMPLE)
+        old["agents/alfa.md"] = b"alfa vieja\n"
+
+        def entry(d, rel="agents/alfa.md"):
+            return next(f for f in d["files"] if f["path"] == rel)
+
+        def top(key, value):
+            def mut(d):
+                d[key] = value
+            return mut
+
+        def field(key, value):
+            def mut(d):
+                entry(d)[key] = value
+            return mut
+
+        def drop(key):
+            def mut(d):
+                del entry(d)[key]
+            return mut
+
+        def extra_top(d):
+            d["extra"] = 1
+
+        def extra_entry(d):
+            entry(d)["extra"] = 1
+
+        def unicode_key(d):
+            d["claveé"] = 1
+
+        def bad_path(d):
+            entry(d)["path"] = "settings.json"
+
+        def dup_path(d):
+            d["files"].append(dict(entry(d)))
+
+        def empty_files(d):
+            d["files"] = []
+
+        def upper_written(d):
+            entry(d)["written"] = entry(d)["written"].upper()
+
+        def rename_key(owner, old_key, new_key):
+            def mut(d):
+                target = d if owner == "top" else entry(d)
+                items = list(target.items())
+                target.clear()
+                for k, v in items:
+                    target[new_key if k == old_key else k] = v
+            return mut
+
+        variants = {
+            "clave eol con NUL": rename_key("top", "eol", "eol\u0000"),
+            "clave written con NUL": rename_key("entry", "written", "written\u0000"),
+            "clave level con NUL": rename_key("entry", "level", "level\u0000"),
+            "clave schema con NUL": rename_key("top", "schema", "schema\u0000"),
+            "algorithm con guion blando": top("algorithm", "sha\u00ad256"),
+            "algorithm con NUL": top("algorithm", "sha256\u0000"),
+            "eol con NUL": top("eol", "lf\u0000"),
+            "eol con guion blando": top("eol", "l\u00adf"),
+            "level 6": field("level", 6),
+            "written de 65 caracteres": field("written", "a" * 65),
+            "written no hexadecimal": field("written", "z" * 64),
+            "written en mayusculas": upper_written,
+            "written corto": field("written", "abc"),
+            "written numero": field("written", 5),
+            "written null": field("written", None),
+            "sin written": drop("written"),
+            "level 9": field("level", 9),
+            "level 0": field("level", 0),
+            "level texto": field("level", "5"),
+            "level decimal": field("level", 5.0),
+            "level booleano": field("level", True),
+            "level null": field("level", None),
+            "sin level": drop("level"),
+            "schema 3": top("schema", 3),
+            "schema 0": top("schema", 0),
+            "schema texto": top("schema", "2"),
+            "schema decimal": top("schema", 2.0),
+            "algorithm md5": top("algorithm", "md5"),
+            "eol crlf": top("eol", "crlf"),
+            "clave de mas en la raiz": extra_top,
+            "clave de mas en una entrada": extra_entry,
+            "clave no ASCII": unicode_key,
+            "ruta fuera de la lista": bad_path,
+            "ruta duplicada": dup_path,
+            "files vacio": empty_files,
+        }
+        for name, mutate in variants.items():
+            with self.subTest(case=name):
+                shutil.rmtree(self.target, ignore_errors=True)
+                for rel, data in old.items():
+                    write(self.target, rel, data)
+                data = self.valid_old_state()
+                mutate(data)
+                raw = self.dump_state(data)
+                before = snapshot(self.target)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+                self.assertNotIn("ACTUALIZAR", set(self.states(out).values()))
+                self.assert_clean_unreadable_warning(err)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(read(self.target, self.STATE), raw)
+                if name == "clave no ASCII":
+                    self.assertIn("\\u00e9", err)
+
+    def test_t2_case9_control_valid_schema2_state_gives_actualizar(self):
+        # Control de la prueba anterior: sin el campo invalido, el mismo estado da ACTUALIZAR.
+        self.make_source()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        old = dict(SAMPLE)
+        old["agents/alfa.md"] = b"alfa vieja\n"
+        for rel, data in old.items():
+            write(self.target, rel, data)
+        self.write_state(old)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(out)["agents/alfa.md"], "ACTUALIZAR")
+        self.assertEqual(err, "")
+
+    def test_t2_case9_oversized_state_is_absent(self):
+        self.make_source()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        old = dict(SAMPLE)
+        old["agents/alfa.md"] = b"alfa vieja\n"
+        for rel, data in old.items():
+            write(self.target, rel, data)
+        self.write_state(old)
+        raw = read(self.target, self.STATE) + b" " * 1100000
+        write(self.target, self.STATE, raw)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+        self.assert_clean_unreadable_warning(err)
+
+    def test_t2_case9_state_size_limit_is_exact(self):
+        # 1048576 bytes validos se leen (ACTUALIZAR); un byte mas, estado ausente (MODIFICADO).
+        self.update_source("agents/alfa.md", b"alfa nueva" + bytes([10]))
+        old = dict(SAMPLE)
+        old["agents/alfa.md"] = b"alfa vieja" + bytes([10])
+        for extra, expected, code_expected in ((0, "ACTUALIZAR", 0), (1, "MODIFICADO", 3)):
+            with self.subTest(extra=extra):
+                shutil.rmtree(self.target, ignore_errors=True)
+                for rel, data in old.items():
+                    write(self.target, rel, data)
+                self.write_state(old)
+                raw = read(self.target, self.STATE)
+                raw += b" " * (1048576 + extra - len(raw))
+                self.assertEqual(len(raw), 1048576 + extra)
+                write(self.target, self.STATE, raw)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, code_expected, out + err)
+                self.assertEqual(self.states(out)["agents/alfa.md"], expected)
+
+    def test_t2_install_manifest_algorithm_is_compared_ordinally(self):
+        # Read-Manifest: algorithm con guion blando o NUL no es sha256.
+        self.make_source()
+        good = json.loads(read(self.src, "install-manifest.json"))
+        for name, value in (("guion blando", "sha\u00ad256"), ("NUL", "sha256\u0000")):
+            with self.subTest(case=name):
+                write(self.src, "install-manifest.json", json.dumps(dict(good, algorithm=value)).encode("ascii"))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("algorithm debe ser sha256", err)
+                self.assertFalse(os.path.exists(self.target))
+
+    def test_t2_case9_invalid_state_real_run_is_replaced_without_backup(self):
+        # No se respalda un estado no reconocido; con -Force el estado se reescribe en esquema 2.
+        for name, mutate in (("schema 3", lambda d: d.update(schema=3)),
+                             ("written invalido", lambda d: d["files"][0].update(written="XYZ"))):
+            with self.subTest(case=name):
+                shutil.rmtree(self.target, ignore_errors=True)
+                self.make_source()
+                for rel, data in SAMPLE.items():
+                    write(self.target, rel, data)
+                data = self.valid_old_state()
+                write(self.target, "agents/alfa.md", SAMPLE["agents/alfa.md"])
+                mutate(data)
+                self.dump_state(data)
+                backup = os.path.join(self.tmp, "respaldo")
+                code, out, err = self.run_install("-Force", "-BackupDir", backup)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+                self.assert_clean_unreadable_warning(err)
+                self.assert_state(5)
+                self.assertFalse(os.path.exists(backup))
+
+    def test_t2_case10_orphan_with_schema2_state_is_reported_and_kept(self):
+        # Caso 10: una ruta del estado esquema 2 que ya no esta en el manifiesto es HUERFANO: se informa y no se borra.
+        self.make_source()
+        old = dict(SAMPLE)
+        old["agents/viejo.md"] = b"de una version anterior\n"
+        self.write_state(old)
+        for rel, data in old.items():
+            write(self.target, rel, data)
+        before = snapshot(self.target)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(out)["agents/viejo.md"], "HUERFANO")
+        self.assertEqual(snapshot(self.target), before)
+        out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        self.assertEqual(self.states(out)["agents/viejo.md"], "HUERFANO")
+        self.assertIn("nota:", out)
+        self.assertEqual(read(self.target, "agents/viejo.md"), b"de una version anterior\n")
+        self.assert_state(5)
+        self.assertNotIn("viejo", read(self.target, self.STATE).decode("ascii"))
+
+    def test_t2_case11_rerun_leaves_state_untouched_and_makes_no_backup(self):
+        # Caso 11: reejecucion idempotente: el estado no se reescribe (bytes y mtime) y no hay respaldo.
+        self.make_source()
+        self.install_ok()
+        state_path = os.path.join(self.target, self.STATE)
+        raw, mtime = read(self.target, self.STATE), os.stat(state_path).st_mtime_ns
+        listing = sorted(os.listdir(self.tmp))
+        for _ in range(2):
+            out, err = self.install_ok()
+            self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+            self.assertNotIn("Estado:", out)
+            self.assertEqual(read(self.target, self.STATE), raw)
+            self.assertEqual(os.stat(state_path).st_mtime_ns, mtime)
+            self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+            self.assertNotIn("Se trata como ausente", err)
+
+    def test_t2_written_is_what_classifies_not_the_source_hash(self):
+        # El destino se compara con `written` de la instalacion previa. Con written distinto de sha256:
+        # destino = written -> ACTUALIZAR; destino = sha256 viejo (no written) -> MODIFICADO.
+        self.make_source()
+        written_bytes = b"alfa como la dejo la instalacion\n"
+        other = b"alfa de otro origen\n"
+        for label, dest_bytes, state_src, expected in (
+                ("destino = written", written_bytes, SAMPLE["agents/alfa.md"], "ACTUALIZAR"),
+                ("destino = hash del origen previo", other, other, "MODIFICADO")):
+            with self.subTest(case=label):
+                shutil.rmtree(self.target, ignore_errors=True)
+                for rel, data in SAMPLE.items():
+                    write(self.target, rel, data)
+                write(self.target, "agents/alfa.md", dest_bytes)
+                # el origen cambio: el destino ya no coincide con el origen de hoy
+                old = dict(SAMPLE)
+                old["agents/alfa.md"] = state_src
+                self.write_state(old, written={"agents/alfa.md": self.sha(written_bytes)})
+                code, out, err = self.run_install("-DryRun", "-Force")
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.states(out)["agents/alfa.md"], expected)
+
+    def test_t2_actualizar_with_written_overwrites_with_backup_and_records_state(self):
+        self.make_source()
+        written_bytes = b"alfa como la dejo la instalacion\n"
+        for rel, data in SAMPLE.items():
+            write(self.target, rel, data)
+        write(self.target, "agents/alfa.md", written_bytes)
+        self.write_state(SAMPLE, written={"agents/alfa.md": self.sha(written_bytes)})
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(self.states(out)["agents/alfa.md"], "ACTUALIZAR")
+        self.assertEqual(read(backup, "agents/alfa.md"), written_bytes)
+        self.assertEqual(read(self.target, "agents/alfa.md"), SAMPLE["agents/alfa.md"])
+        self.assert_state(5)
+
+    def test_t2_manual_edit_is_modified_exit3_never_actualizar(self):
+        # Edicion a mano del destino con un estado esquema 2 valido: MODIFICADO y exit 3 sin -Force,
+        # con o sin cambio de origen; nada se escribe.
+        for changed_source in (False, True):
+            with self.subTest(changed_source=changed_source):
+                shutil.rmtree(self.target, ignore_errors=True)
+                self.make_source()
+                self.preinstall()
+                if changed_source:
+                    self.update_source("agents/alfa.md", b"alfa nueva\n")
+                write(self.target, "agents/alfa.md", b"editado a mano\n")
+                before = snapshot(self.target)
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*(mode + ["-BackupDir", os.path.join(self.tmp, "respaldo")]))
+                    self.assertEqual(code, 3, out + err)
+                    self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+                    self.assertNotIn("ACTUALIZAR", set(self.states(out).values()))
+                    self.assertEqual(snapshot(self.target), before)
+                    self.assertFalse(os.path.exists(os.path.join(self.tmp, "respaldo")))
+
+    def test_t2_schema1_state_with_manual_edit_is_modified(self):
+        self.make_source()
+        for rel, data in SAMPLE.items():
+            write(self.target, rel, data)
+        self.write_state(SAMPLE, schema=1)
+        write(self.target, "agents/beta.md", b"editado a mano\n")
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out)["agents/beta.md"], "MODIFICADO")
+
+    def test_t2_state_never_prints_unsafe_text_from_a_hostile_state(self):
+        # El estado es entrada no confiable: una ruta o clave hostil no llega cruda a stdout ni a stderr.
+        self.make_source()
+        for rel, data in SAMPLE.items():
+            write(self.target, rel, data)
+        data = self.valid_old_state()
+        write(self.target, "agents/alfa.md", SAMPLE["agents/alfa.md"])
+        data["files"][0]["path"] = "agents/a‐b.md"
+        self.dump_state(data)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue(err.isascii() and out.isascii(), repr(out + err))
+        self.assertIn("\\u2010", err)
+        self.assertNotIn("a‐b", out + err)
+
     # --- T5: cambios locales y -Force ---
 
     def test_t5_mixed_modified_and_update_without_force_writes_neither(self):
@@ -999,7 +1433,7 @@ class InstallCases:
         self.assertEqual(read(backup, "agents/beta.md"), b"editado a mano\r\ncon CR\r\n")
         for rel, data in files.items():
             self.assertEqual(read(self.target, rel), data)
-        self.assertEqual(read(self.target, "synclayer-manifest.json"), read(self.src, "install-manifest.json"))
+        self.assert_state(5)
         self.assertIn("Recordatorio", out)
         self.assertEqual(self.leftover_temps(), [])
 
@@ -1023,7 +1457,7 @@ class InstallCases:
         out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
         self.assertEqual(self.states(out)["agents/viejo.md"], "HUERFANO")
         self.assertEqual(read(self.target, "agents/viejo.md"), b"de una version anterior\n")
-        self.assertEqual(read(self.target, "synclayer-manifest.json"), read(self.src, "install-manifest.json"))
+        self.assert_state(5)
 
     # --- T5: estado previo ilegible: tratado como ausente, sin hash ni respaldo, con aviso por stderr ---
 
@@ -1047,7 +1481,7 @@ class InstallCases:
                 code, out, err = self.run_install(*(extra + ["-BackupDir", backup]))
                 self.assertEqual(code, 0, out + err)
                 self.assert_clean_unreadable_warning(err)
-                self.assertEqual(read(self.target, "synclayer-manifest.json"), read(self.src, "install-manifest.json"))
+                self.assert_state(5)
                 self.assertFalse(os.path.exists(backup))      # un estado invalido no se respalda
                 self.assertNotIn("Respaldo", out)
 

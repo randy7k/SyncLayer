@@ -2,6 +2,21 @@
 
 ## [Sin publicar]
 
+### Cambiado (Fase 3, T2: estado del instalador con esquema 2)
+
+- `install.ps1` escribe el estado `<Target>/synclayer-manifest.json` con esquema 2: por archivo, el hash
+  del origen (`sha256`), el hash de lo escrito (`written`) y el `level` (hoy siempre 5, así que
+  `written` es igual al origen). Lee los esquemas 1 y 2; el 1 se migra al reinstalar y se respalda.
+- La clasificación compara el destino con lo que escribió la instalación anterior: igual al origen nuevo
+  es `IGUAL`, igual a `written` es `ACTUALIZAR`, cualquier otro caso `MODIFICADO` (exit 3 sin `-Force`).
+  Un estado no reconocido (esquema desconocido, hashes mal formados, claves de más, rutas fuera de lista o
+  de más de 1 MiB) se trata como ausente y nunca produce `ACTUALIZAR`. Las comparaciones de claves y
+  valores del estado son ordinales: un NUL o un guion blando no se confunden con la clave canónica.
+- Los bytes de los doce archivos destino no cambian. `Read-Manifest` sigue exigiendo el esquema 1 en
+  `install-manifest.json`. `docs/agentes.md` describe el estado nuevo y el manifiesto se regeneró.
+- Pruebas: casos 6 a 11 de la Fase 3 en `tests/test_install.py`, las aserciones «estado igual al manifiesto»
+  pasan a `assert_state`, y `tests/levels_ref.py` serializa el estado esperado.
+
 ### Añadido (Fase 3, T1: tabla de niveles de esfuerzo)
 
 - `install.ps1` lleva la tabla nivel por agente (niveles 1 a 4, 24 filas de `$LevelRows`; el nivel 5
