@@ -2,6 +2,155 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 3, cierre: T7)
+
+Estado final de la fase de esfuerzo configurable (plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`).
+La documentación (T7) está completa; el cierre (`sentinel`, `shield`, `auditor`) se hizo.
+
+- Niveles 1 a 5 en `<Target>/synclayer-config.json` (campo `level`, sin archivo = 5). El nivel 5 es el
+  repositorio; del 1 al 4 el instalador escribe el `model:` y el `effort:` de `atlas`, `forge`, `sentinel`,
+  `scribe`, `scout` y `oracle` según la tabla del README. `auditor`, `shield`, `debugger` y el resto quedan
+  con los bytes del origen.
+- Estado de esquema 2 (hash del origen, hash de lo escrito y nivel por archivo) con migración desde el
+  esquema 1; la clasificación compara con lo que se escribiría y con lo ya escrito.
+- Renderizado por líneas que falla cerrado ante un frontmatter que no entiende; avisos por `stderr` de las
+  dos variables de entorno que anulan el nivel; `Nivel anterior:` y la frase del exit 3; transiciones de
+  nivel, ediciones a mano y `-Force` con pruebas.
+- Límites documentados en el README («Niveles» y «Límites del instalador»): el hash del manifiesto no cubre
+  los bytes renderizados, la sintaxis laxa de PowerShell 5.1, el estado desfasado tras un fallo parcial y
+  el efecto real de `effort:` sin verificar. No hay medición de ahorro ni de calidad por nivel.
+- Del propietario, pendientes y fuera del conteo: la compuerta G1 (comprobar `effort:` en Claude Code real)
+  y V1 (recarga en caliente de los agentes).
+
+### Añadido (Fase 3, T5: cambios de nivel, ediciones a mano y `-Force`)
+
+- Tras `Nivel:`, el instalador imprime `Nivel anterior: M` sólo cuando el estado previo es válido, todas
+  sus entradas tienen el mismo nivel M y M es distinto del nivel actual.
+- El mensaje del exit 3 (`MODIFICADO` sin `-Force`) termina con la línea `Si cambiaste model: o effort: a
+  mano, usa synclayer-config.json.` Se añade siempre que hay exit 3, también cuando el único `MODIFICADO`
+  no tiene `model:` (el hook) o cuando se perdió el estado (entonces el arreglo es `-Force`).
+- Comportamiento verificado con pruebas (casos 31 a 37 del plan): cambiar de nivel con archivos intactos y
+  estado válido es `ACTUALIZAR` (con respaldo de la versión y del estado anteriores), nunca `MODIFICADO`;
+  una edición a mano es `MODIFICADO` en cualquier nivel y archivo, también en los fijos, con exit 3 y sin
+  escribir nada sin `-Force` (con `-Force` se respalda la versión local); con estado ilegible, ausente o de
+  esquema desconocido, lo que coincide con lo esperado es `IGUAL` y lo que difiere `MODIFICADO`, nunca
+  `ACTUALIZAR`; un estado de esquema 1 intacto con nivel 3 es `ACTUALIZAR` y migra a esquema 2.
+- Límite nuevo: tras un fallo parcial (exit 1 o 4 a mitad de la copia) el estado no se reescribe y queda
+  desfasado; si luego se cambia de nivel, los archivos ya copiados salen `MODIFICADO`. Hay que repetir la
+  instalación con el mismo nivel antes de cambiarlo; restaurar a mano un estado viejo tiene el mismo
+  efecto. Quien puede escribir el estado puede forjar `written` (aceptado por el modelo de amenazas).
+- T7 sigue abierta hasta el cierre de la fase.
+
+### Añadido (Fase 3, T4: renderizado y aplicación de los niveles 1 a 4)
+
+- Un nivel de 1 a 4 válido **se aplica**: para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle`
+  el instalador escribe en el destino el `model:` y, según la tabla (`$LevelRows`), el `effort:`.
+  `auditor`, `shield`, `debugger`, el hook, `rules/agentes.md`, `docs/agentes.md` y el resto quedan con los
+  bytes del origen. El nivel 5 es el repositorio y no se renderiza. La guardia temporal de T3 se retiró.
+- La salida muestra `Nivel: N (...)` en todos los niveles y, con 1 a 4, líneas
+  `Ajuste: agents/<nombre>.md  model: <modelo>  effort: <esfuerzo>` tras `Resumen:`. Con `-DryRun` muestra
+  el plan y no escribe.
+- El renderizado falla cerrado: exit 1 antes de escribir (también en `-DryRun`) con
+  `error: no se puede aplicar el nivel N a agents/<nombre>.md: <motivo>. No se escribio nada.` si el
+  frontmatter del origen de un agente que se renderiza no tiene cierre, no tiene `model:` o lo repite,
+  repite `effort:`, trae BOM, empieza por una línea en blanco, tiene un retorno de carro suelto o un
+  tabulador, tiene un `model:` que no es un escalar simple o un `effort:` con comentario o continuación,
+  tiene `---` con espacios finales o una línea `...`, o falla la autocomprobación estructural. El mismo
+  defecto no detiene el nivel 5 ni a un agente fijo.
+- La clasificación compara con `outHash` (lo que se escribiría para el nivel) y con `written` (lo que
+  escribió la instalación anterior): cambiar de nivel con archivos intactos es `ACTUALIZAR` (con respaldo),
+  reinstalar el mismo nivel es `IGUAL` y una edición a mano es `MODIFICADO` (exit 3 sin `-Force`). El estado
+  guarda `written` y `level` por archivo. Con el nivel 5 la salida es la de siempre («coinciden con el
+  manifiesto»); con 1 a 4, los Pasos 7 y 8 dicen «lo esperado para el nivel N».
+- El estado de esquema 1 tiene lista cerrada de claves y `Read-State` lee una sola vez con tope.
+- La compuerta G1 (comprobar en Claude Code real que `effort:` se reconoce) no se corrió: T4 se hizo sin
+  ella por decisión del propietario. El efecto real de `effort:` y de un valor no soportado sólo está
+  verificado por la documentación. No hay medición de ahorro ni de calidad por nivel.
+- Lo que T4 dejó pendiente (la línea `Nivel anterior:`, la frase del exit 3 y los casos 31 a 37) lo
+  cerró T5, arriba.
+
+### Añadido (niveles, Fase 3)
+
+Resumen parcial de la Fase 3 (esfuerzo configurable por niveles, plan
+`docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Los niveles 1 a 4 se aplican (T4), sin la
+compuerta G1. El detalle está en las entradas por task:
+
+- T1, tabla de niveles de esfuerzo (24 filas, listas cerradas, validada al arrancar; misma tabla en el README).
+- T2, estado del instalador con esquema 2 y migración desde el esquema 1.
+- T3, lectura y validación de `<Target>/synclayer-config.json` y guardia temporal (retirada en T4).
+- T4, renderizado y aplicación de los niveles 1 a 4.
+- T5, cambios de nivel, ediciones a mano y `-Force` (`Nivel anterior:`, frase del exit 3, casos 31 a 37).
+- T6, avisos de variables de entorno que anulan el nivel (adelantada a T4 y T5).
+- T7 (abierta hasta el cierre de la fase), documentación: README (sección «Niveles», estado del
+  instalador, límites), CLAUDE.md, `docs/agentes.md`, `rules/agentes.md` y el estado de la fase en el
+  backlog.
+- Pendiente: el cierre de la fase. No hay medición de ahorro ni de calidad por nivel.
+
+### Añadido (Fase 3, T6: avisos de variables de entorno)
+
+- `install.ps1` avisa por `stderr` cuando el nivel leído es 1 a 4 y el entorno del instalador trae, con
+  valor no vacío, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`, que anulan el `model:` y
+  el `effort:` del frontmatter. Sólo imprime el nombre y un texto fijo, nunca el valor; no cambia el código
+  de salida, no escribe nada y no define, cambia ni borra variables. Con nivel 5 no añade ninguna línea.
+  El aviso va después de leer el nivel y antes de la guardia temporal de T3 (retirada en T4); el aviso sigue
+  saliendo.
+- T6 se adelantó a T4 y T5 por decisión del propietario (sólo depende de T3 en la práctica); las
+  unidades de la fase siguen siendo 8.
+- Pruebas: casos 38 y 39 de la Fase 3 y una prueba estática de que el script nunca define ni borra
+  variables de entorno. `run_install` quita ambas variables del entorno heredado.
+- Para T4: reescribir el comentario de la guardia y retirar `patch_out_guard` de las pruebas. Para T7,
+  documentar que el aviso sólo mira el ámbito `Process` (una variable definida con `setx` y sin reiniciar
+  la consola no avisa), que una variable de sólo espacios avisa y que `FORCE=0` también avisa aunque
+  Claude Code quizá lo trate como inactivo (no verificado).
+
+### Añadido (Fase 3, T3: archivo de configuración del nivel)
+
+- `install.ps1` lee `<Target>/synclayer-config.json` (opcional): un único campo `level`, entero de 1 a 5.
+  Sin archivo o con `{}` el nivel es 5. Lectura única con tope de 64 KiB sobre lo leído, UTF-8 estricto,
+  rechazo de enlaces, junctions, carpetas y archivos bloqueados, claves de lista cerrada con
+  comparaciones ordinales (también se rechaza `__type`, que `ConvertFrom-Json` de 5.1 descartaría en
+  silencio). Cualquier problema sale con exit 1 antes de escribir nada, también en `-DryRun`. Ningún valor
+  del archivo llega al estado ni al destino salvo el entero validado. El instalador no lo escribe, no lo
+  respalda, no lo clasifica ni lo borra.
+- La salida muestra `Nivel: N (...)` y el estado guarda el nivel leído. **Guardia temporal (retirada en T4):** un nivel 1 a 4
+  válido terminaba con exit 1 («el nivel N aun no se puede aplicar en esta version») hasta que T4 aplique
+  la tabla; así ningún commit acepta un nivel que no se escribe.
+- Límites conocidos, para documentar en T7: PowerShell 5.1 acepta más que JSON estricto (comillas
+  simples, claves sin comillas, `+3`, `03`); con una clave `level` repetida gana la última; entre la
+  comprobación de enlaces y la apertura del archivo queda una carrera residual que exige escribir en
+  `-Target`; `Format-Safe` no escapa la barra invertida; pwsh 7 no se verificó.
+- Pruebas: casos 12 a 19 de la Fase 3 en `tests/test_install.py` y una prueba de la guardia.
+
+### Cambiado (Fase 3, T2: estado del instalador con esquema 2)
+
+- `install.ps1` escribe el estado `<Target>/synclayer-manifest.json` con esquema 2: por archivo, el hash
+  del origen (`sha256`), el hash de lo escrito (`written`) y el `level` (hoy siempre 5, así que
+  `written` es igual al origen). Lee los esquemas 1 y 2; el 1 se migra al reinstalar y se respalda.
+- La clasificación compara el destino con lo que escribió la instalación anterior: igual al origen nuevo
+  es `IGUAL`, igual a `written` es `ACTUALIZAR`, cualquier otro caso `MODIFICADO` (exit 3 sin `-Force`).
+  Un estado no reconocido (esquema desconocido, hashes mal formados, claves de más, rutas fuera de lista o
+  de más de 1 MiB) se trata como ausente y nunca produce `ACTUALIZAR`. Las comparaciones de claves y
+  valores del estado son ordinales: un NUL o un guion blando no se confunden con la clave canónica.
+- Los bytes de los doce archivos destino no cambian. `Read-Manifest` sigue exigiendo el esquema 1 en
+  `install-manifest.json`. `docs/agentes.md` describe el estado nuevo y el manifiesto se regeneró.
+- Pruebas: casos 6 a 11 de la Fase 3 en `tests/test_install.py`, las aserciones «estado igual al manifiesto»
+  pasan a `assert_state`, y `tests/levels_ref.py` serializa el estado esperado.
+
+### Añadido (Fase 3, T1: tabla de niveles de esfuerzo)
+
+- `install.ps1` lleva la tabla nivel por agente (niveles 1 a 4, 24 filas de `$LevelRows`; el nivel 5
+  es el repositorio) con listas cerradas de agentes, modelos y esfuerzos, y la valida al arrancar: una
+  tabla rota sale con exit 1 sin escribir nada. Todavía no se usa para escribir: la instalación se
+  comporta igual que antes. `auditor`, `shield` y `debugger` no están en la tabla.
+- `README.md`: sección «Niveles» con la misma tabla entre marcadores; dice que es un orden razonado, no
+  una medición, y no promete ahorro.
+- `tests/levels_ref.py` y `tests/test_levels.py` (28 pruebas): igualdad celda por celda entre
+  `install.ps1` y el README, reglas R1 a R5, asignación única de las variables de la tabla, validación al
+  arrancar con PowerShell y una guarda contra promesas de ahorro reutilizable en la documentación.
+- Plan y exploración: `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md` y
+  `2026-11-20-fase3-esfuerzo-exploracion.md`. Claude Code ya ofrece `effort:` por subagente con cinco
+  niveles; modelo y esfuerzo son palancas distintas.
+
 ### Cambiado (reporte de uso, rendimiento C4)
 
 - Lector de transcripciones más rápido sin cambiar la salida (bytes idénticos): buffer de lectura

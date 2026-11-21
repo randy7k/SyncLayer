@@ -8,6 +8,20 @@ archivo y muestra el plan. Sin -DryRun respalda lo que va a sobrescribir (verifi
 el hook primero (temporal en la misma carpeta + movimiento), verifica el destino y escribe el
 estado <Target>/synclayer-manifest.json. Nunca borra. No hace rollback: si falla, informa.
 
+Configuracion: <Target>/synclayer-config.json es opcional y tiene un solo campo, level (entero de 1 a 5;
+sin archivo, o con un objeto vacio, el nivel es 5). Un archivo invalido, o una carpeta o un enlace con ese
+nombre, detiene la instalacion con exit 1 antes de escribir nada (tambien con -DryRun). Con el nivel 1 a 4, el
+instalador reescribe model: y effort: del frontmatter de los seis agentes modificables (atlas, forge, sentinel,
+scribe, scout, oracle) con los valores de la tabla de niveles; auditor, shield, debugger, el hook y el resto
+quedan como el origen. El nivel 5 es el repositorio tal cual. El instalador nunca escribe, respalda ni borra
+el archivo de configuracion.
+
+Estado: esquema 2, por archivo el hash del origen (sha256), el hash de lo escrito (written) y el
+nivel de la instalacion (level). La clasificacion compara el destino con el hash escrito por la
+instalacion previa (written) y el origen con el manifiesto. Lee tambien el esquema 1 (copia del
+manifiesto, de la Fase 1) y lo migra al reinstalar (el estado viejo va al respaldo). Un estado
+ilegible, invalido o de otro esquema se trata como ausente: nunca produce ACTUALIZAR.
+
 Hash canonico: SHA-256 (hex minusculas) de los bytes del archivo con cada CRLF sustituido por
 LF. Un CR suelto no se toca; no se quita BOM ni se recodifica.
 
@@ -53,6 +67,82 @@ $ErrorActionPreference = 'Stop'
 $AllowedPattern = '^(agents/(?!(con|prn|aux|nul|com[1-9]|lpt[1-9])\.)[a-z0-9_-]+\.md|rules/agentes\.md|hooks/agent_guard\.py|docs/agentes\.md)\z'
 $StateName = 'synclayer-manifest.json'
 $ManifestName = 'install-manifest.json'
+# Tamano maximo del estado previo que se interpreta (entrada no confiable): el de doce archivos son
+# unos 3 KB; un estado mayor se trata como no valido.
+$StateMaxBytes = 1048576
+# Archivo de configuracion del nivel (Fase 3): <Target>/synclayer-config.json, lo escribe el usuario a mano.
+# Es entrada no confiable: tope de tamano, validacion cerrada y el instalador solo lo lee (una vez).
+$ConfigName = 'synclayer-config.json'
+$ConfigMaxBytes = 65536
+
+# Tabla de niveles (Fase 3). La usa el renderizado de los niveles 1 a 4 (ConvertTo-LevelBytes). Una fila
+# por linea, nivel|agente|modelo|esfuerzo, con - para "sin effort:". El nivel 5 es el repositorio y
+# no tiene filas. auditor, shield y debugger no estan: quedan fijos en todos los niveles. Contrato
+# con tests/test_levels.py: la tabla documentada en el README (entre los marcadores de niveles) debe
+# tener las mismas celdas. Es un orden razonado, no una medicion.
+$LevelAgents = @('atlas', 'forge', 'sentinel', 'scribe', 'scout', 'oracle')
+$AllowedModels = @('opus', 'sonnet', 'haiku')
+$AllowedEfforts = @('-', 'low', 'medium', 'high', 'xhigh', 'max')
+$LevelRows = @(
+    '4|atlas|opus|-',
+    '4|forge|sonnet|-',
+    '4|sentinel|sonnet|-',
+    '4|scribe|sonnet|-',
+    '4|scout|sonnet|-',
+    '4|oracle|haiku|-',
+    '3|atlas|opus|medium',
+    '3|forge|sonnet|-',
+    '3|sentinel|sonnet|-',
+    '3|scribe|sonnet|medium',
+    '3|scout|sonnet|-',
+    '3|oracle|haiku|-',
+    '2|atlas|sonnet|medium',
+    '2|forge|sonnet|medium',
+    '2|sentinel|sonnet|-',
+    '2|scribe|sonnet|low',
+    '2|scout|sonnet|medium',
+    '2|oracle|haiku|-',
+    '1|atlas|sonnet|medium',
+    '1|forge|sonnet|low',
+    '1|sentinel|sonnet|medium',
+    '1|scribe|haiku|medium',
+    '1|scout|sonnet|low',
+    '1|oracle|haiku|-'
+)
+
+# Devuelve el primer problema de la tabla de niveles (texto) o $null si es coherente: 24 filas
+# unicas (niveles 1 a 4 por los seis agentes), agente en $LevelAgents, modelo y esfuerzo en las
+# listas cerradas.
+function Get-LevelTableProblem {
+    if ($LevelRows.Count -ne 24) {
+        return ('se esperaban 24 filas y hay ' + $LevelRows.Count)
+    }
+    $seen = @{}
+    foreach ($row in $LevelRows) {
+        $parts = ([string]$row).Split('|')
+        if ($parts.Count -ne 4) {
+            return ('fila mal formada: ' + (Format-Safe ([string]$row)))
+        }
+        if ($parts[0] -cnotmatch '^[1-4]$') {
+            return ('nivel fuera de 1 a 4 en la fila ' + (Format-Safe ([string]$row)))
+        }
+        if ($LevelAgents -cnotcontains $parts[1]) {
+            return ('agente fuera de la lista en la fila ' + (Format-Safe ([string]$row)))
+        }
+        if ($AllowedModels -cnotcontains $parts[2]) {
+            return ('modelo fuera de la lista en la fila ' + (Format-Safe ([string]$row)))
+        }
+        if ($AllowedEfforts -cnotcontains $parts[3]) {
+            return ('esfuerzo fuera de la lista en la fila ' + (Format-Safe ([string]$row)))
+        }
+        $key = $parts[0] + '|' + $parts[1]
+        if ($seen.ContainsKey($key)) {
+            return ('fila repetida: nivel ' + $parts[0] + ' agente ' + $parts[1])
+        }
+        $seen[$key] = $true
+    }
+    return $null
+}
 
 # Canales de salida: stdout lleva el plan y las notas informativas (p. ej. HUERFANO); stderr lleva
 # los avisos (algo anomalo que no detiene) y los errores. Los mensajes con rutas o textos externos
@@ -91,11 +181,25 @@ function Get-ErrorText($ErrorRecord) {
     return Format-Safe $ex.Message.Trim()
 }
 
-# Busca la propiedad distinguiendo mayusculas (PSObject.Properties[nombre] no las distingue).
+# Igualdad ORDINAL de cadenas: -ceq compara segun la cultura e ignora caracteres como NUL (U+0000) o el
+# guion blando (U+00AD), asi que no vale para texto no confiable (claves y valores de un JSON).
+function Test-OrdinalEqual($A, $B) {
+    return (($A -is [string]) -and ($B -is [string]) -and [string]::Equals($A, $B, [System.StringComparison]::Ordinal))
+}
+
+# Pertenencia ordinal a una lista cerrada de cadenas.
+function Test-OrdinalIn($List, $Item) {
+    foreach ($candidate in $List) {
+        if (Test-OrdinalEqual $candidate $Item) { return $true }
+    }
+    return $false
+}
+
+# Busca la propiedad distinguiendo mayusculas y de forma ordinal (PSObject.Properties[nombre] no las distingue).
 function Get-PropRaw($Object, [string]$Name) {
     if ($null -eq $Object) { return $null }
     foreach ($p in $Object.PSObject.Properties) {
-        if ($p.Name -ceq $Name) { return $p }
+        if (Test-OrdinalEqual $p.Name $Name) { return $p }
     }
     return $null
 }
@@ -287,9 +391,16 @@ function Read-Manifest([string]$FilePath) {
     if (-not (($schema -is [int] -or $schema -is [long]) -and $schema -eq 1)) {
         throw 'schema debe ser 1'
     }
-    if ((Get-Prop $m 'algorithm') -cne 'sha256') {
+    if (-not (Test-OrdinalEqual (Get-Prop $m 'algorithm') 'sha256')) {
         throw 'algorithm debe ser sha256'
     }
+    $entries = Get-ManifestEntries $m
+    return @{ Order = $entries.Order; Hashes = $entries.Hashes }
+}
+
+# Valida la lista files de un manifiesto o de un estado (rutas de la lista permitida, sin duplicados,
+# sha256 de 64 hex en minuscula). Devuelve @{ Order; Hashes; Files }. Lanza si algo no cumple.
+function Get-ManifestEntries($m) {
     $filesProp = Get-PropRaw $m 'files'
     if ($null -eq $filesProp) { throw 'falta la lista files' }
     $files = $filesProp.Value
@@ -302,10 +413,10 @@ function Read-Manifest([string]$FilePath) {
         $hash = Get-Prop $entry 'sha256'
         if (-not ($path -is [string])) { throw 'una entrada de files no tiene path de texto' }
         if ($path.Contains('..') -or $path.Contains('\') -or $path.Contains(':') -or $path.StartsWith('/')) {
-            throw ('ruta no permitida (absoluta, con .., \ o :): ' + (Format-Safe $path))
+            throw ('ruta no permitida (absoluta, con .., \ o :): ' + (Format-SafeShort $path))
         }
         if ($path -cnotmatch $AllowedPattern) {
-            throw ('ruta fuera de la lista permitida: ' + (Format-Safe $path))
+            throw ('ruta fuera de la lista permitida: ' + (Format-SafeShort $path))
         }
         if ($hashes.ContainsKey($path)) { throw ('ruta duplicada: ' + (Format-Safe $path)) }
         if (-not ($hash -is [string]) -or $hash -cnotmatch '^[0-9a-f]{64}\z') {
@@ -314,7 +425,400 @@ function Read-Manifest([string]$FilePath) {
         $hashes[$path] = $hash
         $order.Add($path)
     }
-    return @{ Order = $order; Hashes = $hashes; Bytes = $bytes }
+    return @{ Order = $order; Hashes = $hashes; Files = $files }
+}
+
+# $true si el texto contiene __type (busqueda ordinal), tambien escrito con escapes de la forma backslash-u y
+# cuatro hex ya resueltos. Lo usan Read-State y Read-LevelConfig.
+function Test-TextHasTypeKey([string]$Text) {
+    $unescaped = [regex]::Replace($Text, '\\u([0-9a-fA-F]{4})', [System.Text.RegularExpressions.MatchEvaluator]{
+        param($hit)
+        return [string][char][System.Convert]::ToInt32($hit.Groups[1].Value, 16)
+    })
+    return ($unescaped.IndexOf('__type', [System.StringComparison]::Ordinal) -ge 0)
+}
+
+# Lee y valida el estado previo (<Target>/synclayer-manifest.json), que es entrada no confiable.
+# Esquema 1 (instalador de la Fase 1, copia del manifiesto): written = sha256 y level = 5 por archivo,
+# porque aquel instalador escribia los bytes canonicos del origen. Esquema 2: ademas written (hash de
+# lo escrito, 64 hex minuscula) y level (entero de 1 a 5) por archivo, con claves de lista cerrada.
+# Cualquier otro schema, un JSON ilegible o un campo invalido lanza: el llamador lo trata como ausente
+# (nunca como ACTUALIZAR). Devuelve @{ Order; Hashes; Written; Levels; Bytes }. Levels da el nivel anterior
+# (linea Nivel anterior:); no interviene en la clasificacion.
+function Read-State([string]$FilePath) {
+    # Lectura unica con tope sobre lo leido (no sobre una medida previa): se abre una vez, en solo lectura, y se
+    # leen como maximo $StateMaxBytes mas uno. Mismo patron que Read-LevelConfig.
+    try {
+        $fs = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    }
+    catch {
+        throw 'no se pudo abrir el archivo'
+    }
+    $buf = New-Object byte[] ($StateMaxBytes + 1)
+    $count = 0
+    try {
+        while ($count -lt $buf.Length) {
+            $got = $fs.Read($buf, $count, $buf.Length - $count)
+            if ($got -le 0) { break }
+            $count += $got
+        }
+    }
+    catch {
+        throw 'no se pudo leer el archivo'
+    }
+    finally {
+        $fs.Dispose()
+    }
+    if ($count -gt $StateMaxBytes) { throw ('supera ' + $StateMaxBytes + ' bytes') }
+    $bytes = New-Object byte[] $count
+    [System.Array]::Copy($buf, $bytes, $count)
+    $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes).TrimStart([char]0xFEFF)
+    # Mismo rechazo de __type que en la configuracion: el ConvertFrom-Json de 5.1 descarta esa clave antes de la
+    # lista cerrada. Un estado legitimo (esquema 1 o 2) nunca la contiene.
+    if (Test-TextHasTypeKey $text) { throw 'clave desconocida: __type' }
+    try {
+        $m = $text | ConvertFrom-Json
+    }
+    catch {
+        throw 'JSON invalido (no se puede interpretar el archivo)'
+    }
+    $schema = Get-Prop $m 'schema'
+    if (-not ($schema -is [int] -or $schema -is [long])) { throw 'schema no reconocido' }
+    if ($schema -ne 1 -and $schema -ne 2) { throw 'schema no reconocido' }
+    if (-not (Test-OrdinalEqual (Get-Prop $m 'algorithm') 'sha256')) {
+        throw 'algorithm debe ser sha256'
+    }
+    $entries = Get-ManifestEntries $m
+    $written = @{}
+    $levels = @{}
+    # Claves de lista cerrada en la raiz (los dos esquemas) y, en el esquema 1, tambien por entrada.
+    foreach ($p in $m.PSObject.Properties) {
+        if (-not (Test-OrdinalIn @('schema', 'algorithm', 'eol', 'files') $p.Name)) {
+            throw ('clave desconocida: ' + (Format-SafeShort $p.Name))
+        }
+    }
+    if ($schema -eq 1) {
+        foreach ($entry in $entries.Files) {
+            foreach ($p in $entry.PSObject.Properties) {
+                if (-not (Test-OrdinalIn @('path', 'sha256') $p.Name)) {
+                    throw ('clave desconocida en una entrada: ' + (Format-SafeShort $p.Name))
+                }
+            }
+        }
+        foreach ($rel in $entries.Order) {
+            $written[$rel] = $entries.Hashes[$rel]
+            $levels[$rel] = 5
+        }
+    }
+    else {
+        if (-not (Test-OrdinalEqual (Get-Prop $m 'eol') 'lf')) { throw 'eol debe ser lf' }
+        foreach ($entry in $entries.Files) {
+            foreach ($p in $entry.PSObject.Properties) {
+                if (-not (Test-OrdinalIn @('path', 'sha256', 'written', 'level') $p.Name)) {
+                    throw ('clave desconocida en una entrada: ' + (Format-SafeShort $p.Name))
+                }
+            }
+            $rel = [string](Get-Prop $entry 'path')
+            $w = Get-Prop $entry 'written'
+            $lv = Get-Prop $entry 'level'
+            if (-not ($w -is [string]) -or $w -cnotmatch '^[0-9a-f]{64}\z') {
+                throw ('written invalido para ' + (Format-Safe $rel))
+            }
+            if (-not (($lv -is [int] -or $lv -is [long]) -and $lv -ge 1 -and $lv -le 5)) {
+                throw ('level invalido para ' + (Format-Safe $rel))
+            }
+            $written[$rel] = $w
+            $levels[$rel] = [int]$lv
+        }
+    }
+    return @{ Order = $entries.Order; Hashes = $entries.Hashes; Written = $written; Levels = $levels; Bytes = $bytes }
+}
+
+# Texto no confiable para un mensaje: recortado a 40 caracteres y escapado (Format-Safe).
+function Format-SafeShort([string]$Text) {
+    if ($Text.Length -gt 40) { $Text = $Text.Substring(0, 40) + '...' }
+    return Format-Safe $Text
+}
+
+# Lee y valida <Target>/synclayer-config.json (entrada no confiable) y devuelve el nivel (entero de 1 a 5;
+# un objeto vacio es el nivel 5). Lectura unica: se abre una vez (solo lectura) y se leen como maximo
+# $ConfigMaxBytes mas uno, asi el tope vale sobre lo leido y no sobre una medida previa. UTF-8 estricto, con
+# o sin BOM. Raiz: un objeto. Claves: lista cerrada (solo level), comparadas de forma ordinal. level: entero
+# de 1 a 5 (ni texto, ni decimal, ni bool, ni null). Lanza un motivo fijo y escapado: nunca el contenido del
+# archivo ni el texto de .NET. El llamador comprueba antes que no sea carpeta ni punto de reanalisis.
+function Read-LevelConfig([string]$FilePath) {
+    try {
+        $fs = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    }
+    catch {
+        throw 'no se pudo abrir el archivo (bloqueado, sin permiso o desaparecio)'
+    }
+    $buf = New-Object byte[] ($ConfigMaxBytes + 1)
+    $count = 0
+    try {
+        while ($count -lt $buf.Length) {
+            $got = $fs.Read($buf, $count, $buf.Length - $count)
+            if ($got -le 0) { break }
+            $count += $got
+        }
+    }
+    catch {
+        throw 'no se pudo leer el archivo'
+    }
+    finally {
+        $fs.Dispose()
+    }
+    if ($count -gt $ConfigMaxBytes) { throw ('supera ' + $ConfigMaxBytes + ' bytes') }
+    $bytes = New-Object byte[] $count
+    [System.Array]::Copy($buf, $bytes, $count)
+    try {
+        $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($bytes)
+    }
+    catch {
+        throw 'JSON invalido (no es UTF-8)'
+    }
+    if ($text.Length -gt 0 -and [int]$text[0] -eq 0xFEFF) { $text = $text.Substring(1) }
+    if ([string]::IsNullOrWhiteSpace($text)) { throw 'JSON invalido (archivo vacio)' }
+    # El ConvertFrom-Json de 5.1 (JavaScriptSerializer) descarta en silencio la clave __type, tambien escrita
+    # con escapes de la forma backslash-u y cuatro hex, antes de que se pueda comprobar la lista cerrada de
+    # claves. Un archivo valido solo tiene la clave level: cualquier aparicion de __type (comparacion ordinal,
+    # con esos escapes ya resueltos) se rechaza.
+    if (Test-TextHasTypeKey $text) {
+        throw 'clave desconocida: __type (el instalador puede ser anterior al archivo)'
+    }
+    try {
+        $m = $text | ConvertFrom-Json
+    }
+    catch {
+        throw 'JSON invalido'
+    }
+    # ConvertFrom-Json de 5.1 desenrolla una lista de un elemento: la raiz debe empezar por llave.
+    if (-not ($text.TrimStart().StartsWith('{', [System.StringComparison]::Ordinal)) -or -not ($m -is [System.Management.Automation.PSCustomObject])) {
+        throw 'debe ser un objeto'
+    }
+    foreach ($p in $m.PSObject.Properties) {
+        if (-not (Test-OrdinalEqual $p.Name 'level')) {
+            throw ('clave desconocida: ' + (Format-SafeShort $p.Name) + ' (el instalador puede ser anterior al archivo)')
+        }
+    }
+    $levelProp = Get-PropRaw $m 'level'
+    if ($null -eq $levelProp) { return 5 }
+    $lv = $levelProp.Value
+    if (-not (($lv -is [int] -or $lv -is [long]) -and $lv -ge 1 -and $lv -le 5)) {
+        throw 'level debe ser un entero de 1 a 5'
+    }
+    return [int]$lv
+}
+
+# Bytes del estado con esquema 2: ASCII, LF, sangria de dos espacios y salto final. Coinciden byte a
+# byte con json.dumps(obj, indent=2, ensure_ascii=True) + LF de Python con este orden de claves
+# (ConvertTo-Json de 5.1 da otro formato). Las rutas son [a-z0-9_/.-] por AllowedPattern: no se escapa nada.
+# Funcion pura de manifiesto, hashes escritos y nivel: reinstalar sin cambios no reescribe el estado.
+function ConvertTo-StateBytes($Manifest, [hashtable]$OutHashes, [int]$Level) {
+    $lf = "`n"
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('{' + $lf)
+    [void]$sb.Append('  "schema": 2,' + $lf)
+    [void]$sb.Append('  "algorithm": "sha256",' + $lf)
+    [void]$sb.Append('  "eol": "lf",' + $lf)
+    [void]$sb.Append('  "files": [' + $lf)
+    $last = $Manifest.Order.Count - 1
+    for ($i = 0; $i -le $last; $i++) {
+        $rel = $Manifest.Order[$i]
+        [void]$sb.Append('    {' + $lf)
+        [void]$sb.Append('      "path": "' + $rel + '",' + $lf)
+        [void]$sb.Append('      "sha256": "' + $Manifest.Hashes[$rel] + '",' + $lf)
+        [void]$sb.Append('      "written": "' + $OutHashes[$rel] + '",' + $lf)
+        [void]$sb.Append('      "level": ' + $Level.ToString([System.Globalization.CultureInfo]::InvariantCulture) + $lf)
+        if ($i -lt $last) { [void]$sb.Append('    },' + $lf) } else { [void]$sb.Append('    }' + $lf) }
+    }
+    [void]$sb.Append('  ]' + $lf)
+    [void]$sb.Append('}' + $lf)
+    return , [System.Text.Encoding]::ASCII.GetBytes($sb.ToString())
+}
+
+# Celda (modelo, esfuerzo) de $LevelRows para un nivel de 1 a 4 y un agente de $LevelAgents. Lanza si no
+# esta (la tabla ya se valido al arrancar: no deberia pasar).
+function Get-LevelCell([int]$Level, [string]$Agent) {
+    foreach ($row in $LevelRows) {
+        $parts = ([string]$row).Split('|')
+        if ((Test-OrdinalEqual $parts[0] ([string]$Level)) -and (Test-OrdinalEqual $parts[1] $Agent)) {
+            return @{ Model = $parts[2]; Effort = $parts[3] }
+        }
+    }
+    throw 'no hay celda en la tabla de niveles'
+}
+
+# Renderizado del frontmatter (Fase 3, 3.3 del plan): funcion PURA, sin E/S. Entrada: los bytes canonicos
+# de un agente ya verificados contra el manifiesto (Paso 2) y una celda de $LevelRows. Salida: los bytes a
+# escribir. Solo toca la linea model: y la linea effort: del frontmatter (columna 0, comparacion ordinal);
+# todo lo demas pasa igual. Un effort de - no toca el esfuerzo (una effort: del origen se conserva). Lanza
+# (falla cerrada) ante cualquiera de estas anomalias, todas sobre un origen que el manifiesto da por bueno:
+#  - modelo o esfuerzo fuera de las listas cerradas;
+#  - primera linea distinta de tres guiones, o frontmatter sin cierre (el cierre es la primera linea de tres
+#    guiones exactos);
+#  - regla 1: algun caracter del frontmatter fuera de ASCII imprimible (0x20 a 0x7E);
+#  - regla 2: alguna linea sin sangria que no tiene la forma clave: seguida de espacio o de fin de linea (esto
+#    cubre las lineas de tres guiones con texto o con espacios, las lineas de tres puntos y las claves raras);
+#  - regla 3: algun valor de primer nivel que empieza por un indicador YAML (comillas, corchete, llave, barra,
+#    mayor, ampersand, asterisco, exclamacion, porcentaje, arroba, acento grave);
+#  - model: ausente, repetido o sin la forma simple (letras, digitos, punto, guion), y effort: repetido o sin
+#    la forma simple (letras minusculas);
+#  - la linea siguiente a model: o a effort: no es el cierre ni empieza por una letra (continuacion);
+#  - alguna linea con sangria entre la linea 1 y la mayor de model: y effort: (hueco envolvente);
+#  - autocomprobacion del resultado: mismo cierre, una sola linea model:, effort: solo si la celda lo pide,
+#    todas las demas lineas identicas, y ninguna clave de primer nivel repetida o distinta.
+# La proteccion del bloque hooks: son las reglas de forma, la comparacion linea a linea y el rechazo de
+# claves repetidas; la comparacion de conjuntos de claves es defensa en profundidad.
+function ConvertTo-LevelBytes([byte[]]$Canon, [string]$Model, [string]$Effort) {
+    if (-not (Test-OrdinalIn $AllowedModels $Model)) { throw 'modelo fuera de la lista cerrada' }
+    if (-not (Test-OrdinalIn $AllowedEfforts $Effort)) { throw 'esfuerzo fuera de la lista cerrada' }
+    $ord = [System.StringComparison]::Ordinal
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $lines = $latin1.GetString($Canon).Split([char]10)
+    if ($lines.Count -lt 2 -or -not [string]::Equals($lines[0], '---', $ord)) { throw 'la primera linea no es ---' }
+    $close = -1
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ([string]::Equals($lines[$i], '---', $ord)) { $close = $i; break }
+    }
+    if ($close -lt 0) { throw 'frontmatter sin cierre' }
+    # Falla cerrada ante un origen que el manifiesto no distingue de uno honesto (las tres reglas miran solo las
+    # lineas entre los dos ---). Regla 1: nada fuera de 0x20 a 0x7E (sin retorno de carro, tabulador, NEL, U+2028,
+    # NBSP, BOM interior...); el texto se decodifica en ISO-8859-1, asi que cualquier byte alto es un caracter alto.
+    for ($i = 1; $i -lt $close; $i++) {
+        if ($lines[$i] -cmatch '[^\x20-\x7e]') {
+            throw 'el frontmatter tiene un caracter fuera de ASCII imprimible (retorno de carro, tabulador, NEL u otro)'
+        }
+    }
+    # Regla 2: toda linea sin sangria tiene la forma clave: seguida de espacio o de fin de linea (rechaza
+    # hooks : x, claves con comillas, listas con guion, llaves, lineas --- con texto y lineas ...). Las lineas con
+    # sangria siguen siendo parte del bloque de la clave anterior.
+    for ($i = 1; $i -lt $close; $i++) {
+        if (-not $lines[$i].StartsWith(' ', $ord) -and $lines[$i] -cnotmatch '^[A-Za-z][A-Za-z0-9_-]{0,}:( |\z)') {
+            throw 'una linea del primer nivel del frontmatter no tiene la forma clave: valor'
+        }
+    }
+    # Regla 3: ningun valor de primer nivel empieza por un indicador YAML (comillas, corchete, llave, barra, mayor,
+    # ampersand, asterisco, exclamacion, porcentaje, arroba o acento grave). El caracter de asterisco no se escribe
+    # literal en este archivo: se construye con [char]42.
+    $indicators = '"''\[{|>&' + [string][char]42 + '!%@`'
+    $indicatorPattern = '^[A-Za-z][A-Za-z0-9_-]{0,}: {1,}[' + $indicators + ']'
+    for ($i = 1; $i -lt $close; $i++) {
+        if ($lines[$i] -cmatch $indicatorPattern) {
+            throw 'un valor de primer nivel del frontmatter empieza por un indicador YAML'
+        }
+    }
+    $modelIdx = New-Object System.Collections.Generic.List[int]
+    $effortIdx = New-Object System.Collections.Generic.List[int]
+    for ($i = 1; $i -lt $close; $i++) {
+        if ($lines[$i].StartsWith('model:', $ord)) { $modelIdx.Add($i) }
+        if ($lines[$i].StartsWith('effort:', $ord)) { $effortIdx.Add($i) }
+    }
+    if ($modelIdx.Count -ne 1) { throw 'debe haber exactamente una linea model: en el frontmatter' }
+    if ($effortIdx.Count -gt 1) { throw 'hay mas de una linea effort: en el frontmatter' }
+    # Forma simple de las dos lineas (sin comentario, comillas, anclas, bloques ni valor vacio) y sin
+    # continuacion en la linea siguiente: asi sustituir una sola linea no deja texto suelto de un valor YAML.
+    if ($lines[$modelIdx[0]] -cnotmatch '^model: [A-Za-z0-9][A-Za-z0-9._-]{0,}\z') {
+        throw 'la linea model: del origen no tiene la forma esperada'
+    }
+    if ($effortIdx.Count -eq 1 -and $lines[$effortIdx[0]] -cnotmatch '^effort: [a-z]+\z') {
+        throw 'la linea effort: del origen no tiene la forma esperada'
+    }
+    $nextChecks = New-Object System.Collections.Generic.List[int]
+    $nextChecks.Add($modelIdx[0])
+    if ($effortIdx.Count -eq 1) { $nextChecks.Add($effortIdx[0]) }
+    foreach ($ix in $nextChecks) {
+        $nextLine = $lines[$ix + 1]
+        if (-not ([string]::Equals($nextLine, '---', $ord) -or $nextLine -cmatch '^[A-Za-z]')) {
+            throw 'una linea model: o effort: del origen tiene continuacion en la linea siguiente'
+        }
+    }
+    # Hueco envolvente: una linea con sangria antes de model: o de effort: (desde la 1 hasta la mayor de las dos)
+    # podria ser la continuacion de un valor abierto (comilla, corchete, llave) que esa linea cierra, y sustituirla
+    # dejaria YAML distinto. Se rechaza cualquier sangria ahi; despues de ambas se permite (el bloque hooks: va despues).
+    $lastKey = $modelIdx[0]
+    if ($effortIdx.Count -eq 1 -and $effortIdx[0] -gt $lastKey) { $lastKey = $effortIdx[0] }
+    for ($i = 1; $i -lt $lastKey; $i++) {
+        if ($lines[$i].StartsWith(' ', $ord)) {
+            throw 'hay una linea con sangria antes de la linea model: o effort: del frontmatter'
+        }
+    }
+    $out = New-Object System.Collections.Generic.List[string]
+    $out.AddRange([string[]]$lines)
+    $mi = $modelIdx[0]
+    $out[$mi] = 'model: ' + $Model
+    $inserted = $false
+    if (-not (Test-OrdinalEqual $Effort '-')) {
+        if ($effortIdx.Count -eq 1) {
+            $out[$effortIdx[0]] = 'effort: ' + $Effort
+        }
+        else {
+            $out.Insert($mi + 1, 'effort: ' + $Effort)
+            $inserted = $true
+        }
+    }
+    $result = $latin1.GetBytes([string]::Join([string][char]10, $out.ToArray()))
+
+    # Autocomprobacion: se vuelve a leer el resultado y se compara con la entrada.
+    $chk = $latin1.GetString($result).Split([char]10)
+    if (-not [string]::Equals($chk[0], '---', $ord)) { throw 'autocomprobacion: cambio la primera linea' }
+    $chkClose = -1
+    for ($i = 1; $i -lt $chk.Count; $i++) {
+        if ([string]::Equals($chk[$i], '---', $ord)) { $chkClose = $i; break }
+    }
+    $expectClose = $close
+    if ($inserted) { $expectClose = $close + 1 }
+    if ($chkClose -ne $expectClose) { throw 'autocomprobacion: cambio el cierre del frontmatter' }
+    $chkModel = New-Object System.Collections.Generic.List[int]
+    $chkEffort = New-Object System.Collections.Generic.List[int]
+    for ($i = 1; $i -lt $chkClose; $i++) {
+        if ($chk[$i].StartsWith('model:', $ord)) { $chkModel.Add($i) }
+        if ($chk[$i].StartsWith('effort:', $ord)) { $chkEffort.Add($i) }
+    }
+    if ($chkModel.Count -ne 1 -or -not [string]::Equals($chk[$chkModel[0]], ('model: ' + $Model), $ord)) {
+        throw 'autocomprobacion: la linea model: no es la esperada'
+    }
+    if (Test-OrdinalEqual $Effort '-') {
+        if ($chkEffort.Count -ne $effortIdx.Count) { throw 'autocomprobacion: cambio la cantidad de lineas effort:' }
+        if ($effortIdx.Count -eq 1 -and -not [string]::Equals($chk[$chkEffort[0]], $lines[$effortIdx[0]], $ord)) {
+            throw 'autocomprobacion: cambio la linea effort: del origen'
+        }
+    }
+    elseif ($chkEffort.Count -ne 1 -or -not [string]::Equals($chk[$chkEffort[0]], ('effort: ' + $Effort), $ord)) {
+        throw 'autocomprobacion: la linea effort: no es la esperada'
+    }
+    $restIn = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($i -ne $mi -and -not $effortIdx.Contains($i)) { $restIn.Add($lines[$i]) }
+    }
+    $restOut = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $chk.Count; $i++) {
+        if ($i -ne $chkModel[0] -and -not $chkEffort.Contains($i)) { $restOut.Add($chk[$i]) }
+    }
+    if ($restIn.Count -ne $restOut.Count) { throw 'autocomprobacion: cambio la cantidad de lineas' }
+    for ($i = 0; $i -lt $restIn.Count; $i++) {
+        if (-not [string]::Equals($restIn[$i], $restOut[$i], $ord)) { throw 'autocomprobacion: cambio una linea distinta de model: y effort:' }
+    }
+    # Estructural: ninguna clave de primer nivel se repite en la salida (esto si frena un segundo hooks:). La
+    # igualdad del conjunto de claves con el de la entrada mas, como mucho, effort es REDUNDANTE con las reglas de
+    # forma y la comparacion linea a linea de arriba: se deja como defensa en profundidad, no como la proteccion
+    # de hooks:.
+    $keyPattern = '^([A-Za-z_][A-Za-z0-9_-]{0,}):'
+    $keysIn = New-Object System.Collections.Generic.HashSet[string]
+    for ($i = 1; $i -lt $close; $i++) {
+        $km = [regex]::Match($lines[$i], $keyPattern)
+        if ($km.Success) { [void]$keysIn.Add($km.Groups[1].Value) }
+    }
+    if (-not (Test-OrdinalEqual $Effort '-')) { [void]$keysIn.Add('effort') }
+    $keysOut = New-Object System.Collections.Generic.HashSet[string]
+    for ($i = 1; $i -lt $chkClose; $i++) {
+        $km = [regex]::Match($chk[$i], $keyPattern)
+        if ($km.Success -and -not $keysOut.Add($km.Groups[1].Value)) {
+            throw 'autocomprobacion: clave de primer nivel repetida en la salida'
+        }
+    }
+    if (-not $keysOut.SetEquals($keysIn)) { throw 'autocomprobacion: cambio el conjunto de claves de primer nivel' }
+    return , $result
 }
 
 try {
@@ -357,6 +861,12 @@ try {
         Stop-Install 1 ('error: -BackupDir no puede estar dentro de -Target (ni ser -Target): ' + (Format-Safe $BackupFull))
     }
 
+    # Validacion de la tabla de niveles: antes de leer el origen y sin escribir nada.
+    $levelProblem = Get-LevelTableProblem
+    if ($null -ne $levelProblem) {
+        Stop-Install 1 ('error: la tabla de niveles de install.ps1 no es valida: ' + $levelProblem + '. No se escribio nada.')
+    }
+
     # Paso 1: cargar y validar el manifiesto.
     $manifestPath = Join-Path $Source $ManifestName
     if (-not [System.IO.File]::Exists($manifestPath)) {
@@ -395,9 +905,78 @@ try {
             "`nSi eres mantenedor y el cambio es intencional, regenera el manifiesto con: python -B tools/build_manifest.py")
     }
 
+    # Configuracion: leer y validar <Target>/synclayer-config.json (solo lectura; nunca se escribe, respalda,
+    # clasifica ni borra). Ausente: nivel 5. Carpeta, punto de reanalisis, ilegible o invalido: exit 1 antes
+    # de escribir nada, tambien en -DryRun. El punto de reanalisis se vuelve a comprobar tras leer.
+    $configPath = Join-Path $TargetFull $ConfigName
+    $level = 5
+    $levelFromFile = $false
+    $badLink = Find-Reparse $TargetFull $ConfigName
+    if ($null -ne $badLink) { Stop-Install 1 ((Get-ReparseMessage $badLink) + ' No se escribio nada.') }
+    if ([System.IO.Directory]::Exists($configPath)) {
+        Stop-Install 1 ('error: ' + $ConfigName + ' no es valido: es una carpeta, no un archivo. No se escribio nada.')
+    }
+    if ([System.IO.File]::Exists($configPath)) {
+        try {
+            $level = [int](Read-LevelConfig $configPath)
+        }
+        catch {
+            Stop-Install 1 ('error: ' + $ConfigName + ' no es valido: ' + (Get-ErrorText $_) + '. No se escribio nada.')
+        }
+        $badLink = Find-Reparse $TargetFull $ConfigName
+        if ($null -ne $badLink) { Stop-Install 1 ((Get-ReparseMessage $badLink) + ' No se escribio nada.') }
+        $levelFromFile = $true
+    }
+    # Avisos de entorno (T6): con el nivel 1 a 4, dos variables anulan el model: y el effort: de los agentes
+    # y el nivel no lo puede lograr. Solo lectura (GetEnvironmentVariable): el instalador no define, cambia ni
+    # borra variables, y NUNCA imprime el valor, solo el nombre y un texto fijo. Salen por stderr, antes del
+    # bloque Nivel y de la salida de -DryRun (asi se ven tambien en -DryRun), sin cambiar el codigo de
+    # salida. Con el nivel 5 no hay aviso: quien no configuro nada no ve una linea nueva.
+    if ($level -ne 5) {
+        if (-not [string]::IsNullOrEmpty([System.Environment]::GetEnvironmentVariable('CLAUDE_CODE_SUBAGENT_MODEL_FORCE'))) {
+            Write-Err ('aviso: CLAUDE_CODE_SUBAGENT_MODEL_FORCE esta definida: Claude Code ignora el model: de los agentes y el nivel ' + $level + ' no cambia el modelo.')
+        }
+        if (-not [string]::IsNullOrEmpty([System.Environment]::GetEnvironmentVariable('CLAUDE_CODE_EFFORT_LEVEL'))) {
+            Write-Err 'aviso: CLAUDE_CODE_EFFORT_LEVEL esta definida: tiene prioridad sobre el effort: de los agentes.'
+        }
+    }
+
+    # Nivel: bytes a escribir por archivo. Con el nivel 5 (el repositorio) son los bytes canonicos del origen
+    # y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
+    # manifiesto pasan por ConvertTo-LevelBytes con su celda de $LevelRows; el resto (auditor, shield,
+    # debugger, el hook, las reglas, la guia) queda en los bytes del origen. Un error de renderizado es un
+    # defecto del origen que el manifiesto no detecta: exit 1 antes de escribir, tambien en -DryRun.
+    # $outHash (hash de $outBytes) es lo que clasifica, verifica y se guarda en el estado como written.
+    # Con el nivel 5 los mensajes de verificacion dicen lo de siempre (el manifiesto): quien no configura
+    # nada ve la misma salida que antes, salvo la linea Nivel:. Con el nivel 1 a 4 el hash esperado ya no es el del manifiesto.
+    $verifyWhat = 'el manifiesto'
+    if ($level -ne 5) { $verifyWhat = 'lo esperado para el nivel ' + $level }
+    $outBytes = @{}
+    $outHash = @{}
+    $adjustLines = New-Object System.Collections.Generic.List[string]
+    foreach ($rel in $manifest.Order) {
+        $bytesOut = $canonSrc[$rel]
+        if ($level -ne 5) {
+            $agentMatch = [regex]::Match($rel, '^agents/([a-z0-9_-]+)\.md\z')
+            if ($agentMatch.Success -and (Test-OrdinalIn $LevelAgents $agentMatch.Groups[1].Value)) {
+                try {
+                    $cell = Get-LevelCell $level $agentMatch.Groups[1].Value
+                    $bytesOut = ConvertTo-LevelBytes $canonSrc[$rel] $cell.Model $cell.Effort
+                }
+                catch {
+                    Stop-Install 1 ('error: no se puede aplicar el nivel ' + $level + ' a ' + $rel + ': ' + (Get-ErrorText $_) + '. No se escribio nada.')
+                }
+                $adjustLines.Add('Ajuste: ' + $rel + '  model: ' + $cell.Model + '  effort: ' + $cell.Effort)
+            }
+        }
+        $outBytes[$rel] = $bytesOut
+        $outHash[$rel] = Get-Sha256Hex $bytesOut
+    }
+
     # Paso 3: estado previo del destino (las pruebas inyectan codigo justo despues de esta linea).
-    # Ni -Target ni el estado pueden ser puntos de reanalisis. Un estado ilegible o invalido se trata
-    # como ausente: aviso a stderr, no se hace hash de el ni se respalda, y se reescribe al final.
+    # Ni -Target ni el estado pueden ser puntos de reanalisis. Un estado ilegible, invalido o de un
+    # schema no reconocido se trata como ausente: aviso a stderr, no se hace hash de el ni se respalda,
+    # y se reescribe al final. Un estado no reconocido nunca produce ACTUALIZAR.
     $statePath = Join-Path $TargetFull $StateName
     $badLink = Find-Reparse $TargetFull $StateName
     if ($null -ne $badLink) { Stop-Install 1 (Get-ReparseMessage $badLink) }
@@ -409,7 +988,7 @@ try {
     $stateDestHash = $null
     if ($stateExists) {
         try {
-            $prev = Read-Manifest $statePath
+            $prev = Read-State $statePath
             $stateDestHash = Get-Sha256Hex (ConvertTo-CanonicalBytes $prev.Bytes)
         }
         catch {
@@ -418,6 +997,15 @@ try {
             Write-Err ('aviso: ' + (Format-Safe $statePath) + ' no se pudo leer o no es valido (' +
                 (Get-ErrorText $_) + '). Se trata como ausente: no se respalda.')
         }
+    }
+    # Nivel de la instalacion previa, solo para informar (linea "Nivel anterior:"): hay estado valido y todas sus
+    # entradas dicen el mismo nivel (asi lo escribe este instalador). Un estado ausente, no valido o con niveles
+    # mezclados no tiene nivel anterior. No interviene en la clasificacion.
+    $prevLevel = $null
+    if ($null -ne $prev) {
+        $prevLevels = @{}
+        foreach ($rel in $prev.Order) { $prevLevels[[string]$prev.Levels[$rel]] = $true }
+        if ($prevLevels.Count -eq 1) { $prevLevel = [int]@($prevLevels.Keys)[0] }
     }
 
     # Paso 4: clasificar.
@@ -449,10 +1037,10 @@ try {
             catch {
                 Stop-Install 1 ('error: no se pudo leer el destino ' + (Format-Safe $dest) + ' (' + (Get-ErrorText $_) + '). No se escribio nada en el destino.')
             }
-            if ($destHash -ceq $manifest.Hashes[$rel]) {
+            if ($destHash -ceq $outHash[$rel]) {
                 $state = 'IGUAL'
             }
-            elseif ($null -ne $prev -and $prev.Hashes.ContainsKey($rel) -and ($prev.Hashes[$rel] -ceq $destHash)) {
+            elseif ($null -ne $prev -and $prev.Written.ContainsKey($rel) -and ($prev.Written[$rel] -ceq $destHash)) {
                 $state = 'ACTUALIZAR'
             }
             else {
@@ -485,7 +1073,7 @@ try {
             $writeRows.Add($row)
         }
     }
-    $stateBytes = ConvertTo-CanonicalBytes $manifest.Bytes
+    $stateBytes = ConvertTo-StateBytes $manifest $outHash $level
     $stateHash = Get-Sha256Hex $stateBytes
     # Un estado ilegible o invalido deja $stateDestHash en $null: se reescribe y no se respalda.
     $stateNeedsWrite = (-not $stateExists) -or ($stateDestHash -cne $stateHash)
@@ -501,6 +1089,15 @@ try {
     }
     # Paso 5: mostrar el plan.
     Write-Out ('Destino: ' + (Format-Safe $TargetFull))
+    if ($levelFromFile) {
+        Write-Out ('Nivel: ' + $level + ' (' + $ConfigName + ')')
+    }
+    else {
+        Write-Out ('Nivel: ' + $level + ' (por defecto; no hay ' + $ConfigName + ')')
+    }
+    if ($null -ne $prevLevel -and $prevLevel -ne $level) {
+        Write-Out ('Nivel anterior: ' + $prevLevel)
+    }
     if ($backupItems.Count -gt 0) { Write-Out ('Respaldo: ' + (Format-Safe $BackupFull)) }
     if ($DryRun) { Write-Out 'Modo: -DryRun (no se escribe nada)' }
     foreach ($row in $rows) {
@@ -509,6 +1106,7 @@ try {
     Write-Out ('Resumen: NUEVO=' + $counts['NUEVO'] + ' IGUAL=' + $counts['IGUAL'] +
         ' ACTUALIZAR=' + $counts['ACTUALIZAR'] + ' MODIFICADO=' + $counts['MODIFICADO'] +
         ' HUERFANO=' + $counts['HUERFANO'])
+    foreach ($adjustLine in $adjustLines) { Write-Out $adjustLine }
     if ($counts['HUERFANO'] -gt 0) {
         Write-Out 'nota: los HUERFANO los instalo una version anterior y ya no estan en el manifiesto. No se borran.'
     }
@@ -517,7 +1115,8 @@ try {
         $mod = @($rows | Where-Object { $_.State -eq 'MODIFICADO' } | ForEach-Object { $_.Path })
         Stop-Install 3 ("error: hay cambios locales en el destino (MODIFICADO):`n  " + ($mod -join "`n  ") +
             "`nNo se escribio nada. Opciones: lleva el cambio al repositorio (regla de copia inversa del README)" +
-            " o repite con -Force (se respalda lo que se sobrescribe).")
+            " o repite con -Force (se respalda lo que se sobrescribe)." +
+            "`nSi cambiaste model: o effort: a mano, usa synclayer-config.json.")
     }
 
     # Destino no escribible: archivo de solo lectura que hay que reemplazar (o el estado). Exit 1 en ambos modos.
@@ -642,8 +1241,8 @@ try {
         Write-Out ('Respaldado: ' + $item.Rel)
     }
 
-    # Paso 7: copiar los bytes canonicos (las pruebas inyectan codigo justo despues de esta linea).
-    # Son los ya verificados en memoria; cada uno se verifica al instante.
+    # Paso 7: copiar los bytes de salida (las pruebas inyectan codigo justo despues de esta linea).
+    # Son los canonicos ya verificados en memoria, o su renderizado por nivel; cada uno se verifica al instante.
     foreach ($row in $writeRows) {
         $rel = $row.Path
         $dest = ConvertTo-LocalPath $TargetFull $rel
@@ -656,15 +1255,15 @@ try {
                 throw 'el archivo cambio en el destino despues de clasificarlo'
             }
             # Ultimo punto de escritura (las pruebas inyectan una carrera justo antes de esta linea).
-            Write-Atomic $dest $canonSrc[$rel] $existing
+            Write-Atomic $dest $outBytes[$rel] $existing
             $written.Add($rel)
             # La carrera no se cierra: si un enlace aparecio tras la comprobacion, el archivo ya pudo ir
             # fuera. Se detecta y se informa (exit 4); no se deshace.
             $badLink = Find-Reparse $TargetFull $rel
             if ($null -ne $badLink) { throw ((Get-ReparseText $badLink) + ' Aparecio mientras se escribia: el archivo pudo escribirse fuera del destino; revisalo.') }
             Write-Out ('Copiado: ' + $rel)
-            if ((Get-CanonicalHash $dest) -cne $manifest.Hashes[$rel]) {
-                throw 'el hash del archivo escrito no coincide con el manifiesto'
+            if ((Get-CanonicalHash $dest) -cne $outHash[$rel]) {
+                throw ('el hash del archivo escrito no coincide con ' + $verifyWhat)
             }
         }
         catch {
@@ -681,7 +1280,7 @@ try {
             if ($null -ne $badLink) {
                 $badDest.Add($rel + ' (' + (Get-ReparseText $badLink) + ')')
             }
-            elseif ((Get-CanonicalHash $dest) -cne $manifest.Hashes[$rel]) { $badDest.Add($rel) }
+            elseif ((Get-CanonicalHash $dest) -cne $outHash[$rel]) { $badDest.Add($rel) }
         }
         catch {
             $badDest.Add($rel + ' (no se pudo leer)')
@@ -691,7 +1290,7 @@ try {
         Stop-CopyFailed ("la verificacion posterior fallo:`n  " + ($badDest -join "`n  "))
     }
     if ($written.Count -gt 0) {
-        Write-Out ('Verificado: ' + $written.Count + ' archivo(s) escritos coinciden con el manifiesto.')
+        Write-Out ('Verificado: ' + $written.Count + ' archivo(s) escritos coinciden con ' + $verifyWhat + '.')
     }
 
     # Paso 9: estado, solo si todo lo anterior paso.

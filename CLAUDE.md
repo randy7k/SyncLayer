@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1064 pruebas, 112 saltadas (109 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1280 pruebas, 205 saltadas (202 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -85,8 +85,12 @@ Cuatro piezas, de la más abstracta a la más concreta (la cuarta, el instalador
 
 4. El instalador: `install.ps1` (Windows PowerShell 5.1), `install-manifest.json` (los doce
    archivos gestionados con su hash canónico) y `tools/build_manifest.py` (lo genera y lo
-   comprueba). En el destino deja el estado `<Target>/synclayer-manifest.json`, copia del
-   manifiesto instalado. Ni el instalador, ni `tools/`, ni el manifiesto del repo se instalan
+   comprueba). Lee además `<Target>/synclayer-config.json` (opcional, a mano, sólo `level`; ver «Niveles
+   de esfuerzo» en «Comportamientos no obvios»). En el destino deja el estado `<Target>/synclayer-manifest.json`, con esquema 2 (por
+   archivo: hash del origen `sha256`, hash de lo escrito `written` y `level`; lee también el esquema 1 y lo
+   migra). La clasificación compara el destino con `written`: igual a lo que se escribiría para el nivel (el origen en el nivel 5) es `IGUAL`, igual a
+   `written` es `ACTUALIZAR`, cualquier otro caso `MODIFICADO`; un estado no reconocido se trata como
+   ausente y nunca produce `ACTUALIZAR`. Las comparaciones de claves y valores del estado son ordinales. Ni el instalador, ni `tools/`, ni el manifiesto del repo se instalan
    en `~/.claude`.
 
 Fuera de las cuatro piezas, `tools/usage_report.py` es el reporte de uso (Fase 2): un solo
@@ -197,12 +201,57 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
+- Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: T1,
+  T2, T3, T4, T5 y T6 hechas; el cierre pendiente; T7 abierta hasta el cierre de la fase. Los niveles 1 a 4 se aplican (el instalador
+  escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
+  Claude Code sólo está verificado por documentación. No lo documentes como probado en una máquina real.
+  - Contrato con las pruebas: la tabla nivel por agente vive en `install.ps1` (`$LevelRows`, niveles 1 a 4;
+    el 5 es el repositorio, sin filas) y debe ser igual a la del README entre `<!-- niveles:inicio -->` y
+    `<!-- niveles:fin -->` (`tests/levels_ref.py` los lee, `tests/test_levels.py` lo comprueba junto con
+    las reglas R1 a R5). Cambiar una celda exige cambiarla en los dos sitios. `auditor`, `shield` y
+    `debugger` no entran en la tabla. No muevas ni renombres los marcadores.
+  - Los textos de niveles no pueden prometer ahorro: `promise_hits` de `tests/test_levels.py` revisa la
+    sección «Niveles» del README (la lista completa de patrones está en `PROMISE_PATTERNS`). Haz lo mismo en el resto de la documentación.
+  - Nivel 5 = repositorio tal cual: la instalación escribe los bytes canónicos del origen.
+    `assets/brand/src/agents_data.py` y `tests/test_brand_agents.py` siguen en el nivel 5.
+  - `<Target>/synclayer-config.json` (opcional, campo `level` de 1 a 5, sin archivo o `{}` = 5) es entrada
+    no confiable: lectura única con tope de 64 KiB, UTF-8 estricto, sin enlaces, claves de lista cerrada
+    (incluida `__type`, que `ConvertFrom-Json` de 5.1 descarta en silencio). Una configuración ilegible o
+    inválida falla con exit 1 antes de escribir (también en `-DryRun`); un estado ilegible, en cambio, se
+    trata como ausente. El instalador nunca escribe, respalda ni borra la configuración.
+  - Renderizado (T4): con nivel 1 a 4, los seis agentes de `$LevelAgents` pasan por `ConvertTo-LevelBytes`
+    (función pura; sólo toca las líneas `model:` y `effort:` del frontmatter) y falla cerrado con exit 1
+    antes de escribir, también en `-DryRun`, ante un frontmatter que no entiende. Los demás archivos y
+    los agentes fijos salen con los bytes del origen. Con nivel 5 no se llama al renderizado. Los avisos
+    de entorno (T6) van antes. La guardia temporal de T3 ya no existe.
+  - Marcadores de `install.ps1` entre el Paso 2 y el Paso 3: `# Configuracion:` (lee y valida el archivo)
+    y `# Nivel:` (calcula `$outBytes` y `$outHash` por archivo; llama al renderizado sólo con nivel 1 a 4).
+    No empiezan por `# Paso`, que es el contrato de `patch_script`. El Paso 7 escribe `$outBytes` y los
+    Pasos 7 y 8 verifican contra `$outHash` (el manifiesto en el nivel 5; «lo esperado para el nivel N»
+    en el 1 a 4).
+  - La clasificación compara con `$outHash` (lo que se escribiría) y con `written` del estado previo:
+    cambio de nivel con archivos intactos = `ACTUALIZAR`; mismo nivel = `IGUAL`; edición a mano =
+    `MODIFICADO`. `Read-State` lee una sola vez con tope y el esquema 1 tiene lista cerrada de claves.
+  - Contrato de T5: `Nivel anterior: M` sólo con estado previo válido cuyas entradas tienen todas el
+    mismo nivel M distinto del actual (nunca sin estado, con el mismo nivel ni con niveles mezclados). El
+    mensaje del exit 3 termina SIEMPRE con «Si cambiaste model: o effort: a mano, usa
+    synclayer-config.json.», aunque el `MODIFICADO` no tenga `model:` (el hook) o se haya perdido el
+    estado (entonces el arreglo es `-Force`). Una edición a mano es `MODIFICADO` en cualquier nivel y
+    archivo, incluidos los fijos; con estado ilegible, ausente o de esquema desconocido nunca hay
+    `ACTUALIZAR`. Tras un fallo parcial el estado queda desfasado: cambiar de nivel entonces da
+    `MODIFICADO` en lo ya copiado; repite antes con el mismo nivel. Casos 31 a 37 del plan: pruebas
+    `test_t5_case31`..`case37` en `tests/test_install.py`.
+  - Límites conocidos de la configuración (README, «Límites del instalador»): 5.1 acepta sintaxis laxa
+    (comillas simples, `+3`, `03`); con `level` repetido gana el último; carrera residual de lectura de
+    enlace; `Format-Safe` no escapa `\`; pwsh 7 sin verificar.
+  - Avisos de entorno: sólo con nivel 1 a 4, sólo el ámbito `Process`, nunca imprimen el valor; una
+    variable de sólo espacios avisa y `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=0` también (sin verificar).
 - Las pruebas del instalador pasan SIEMPRE `-Target` a una carpeta temporal, nunca
   `~/.claude`, y no escriben el nombre de usuario como literal.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (109 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (202 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los
