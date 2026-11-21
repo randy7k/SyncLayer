@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1191 pruebas, 161 saltadas (158 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1238 pruebas, 184 saltadas (181 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -202,9 +202,10 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: T1,
-  T2, T3 y T6 hechas; T4 (renderizado de `model:` y `effort:`, bloqueada por la compuerta G1 del
-  propietario) y T5 (clasificación y escritura con niveles) pendientes. Hoy ningún nivel distinto de 5 se
-  aplica: no documentes los niveles 1 a 4 como funcionales.
+  T2, T3, T4 y T6 hechas; T5 (pruebas de transiciones, línea `Nivel anterior:` y frase del exit 3) y
+  el cierre pendientes; T7 abierta hasta después de T5. Los niveles 1 a 4 se aplican (el instalador
+  escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
+  Claude Code sólo está verificado por documentación. No lo documentes como probado en una máquina real.
   - Contrato con las pruebas: la tabla nivel por agente vive en `install.ps1` (`$LevelRows`, niveles 1 a 4;
     el 5 es el repositorio, sin filas) y debe ser igual a la del README entre `<!-- niveles:inicio -->` y
     `<!-- niveles:fin -->` (`tests/levels_ref.py` los lee, `tests/test_levels.py` lo comprueba junto con
@@ -219,12 +220,21 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     (incluida `__type`, que `ConvertFrom-Json` de 5.1 descarta en silencio). Una configuración ilegible o
     inválida falla con exit 1 antes de escribir (también en `-DryRun`); un estado ilegible, en cambio, se
     trata como ausente. El instalador nunca escribe, respalda ni borra la configuración.
-  - Guardia temporal: un nivel 1 a 4 válido sale con exit 1 antes de imprimir la línea `Nivel:`. T4 la
-    retira junto con `patch_out_guard` de las pruebas. Los avisos de entorno (T6) van antes de la
-    guardia y deben seguir saliendo cuando T4 la retire.
+  - Renderizado (T4): con nivel 1 a 4, los seis agentes de `$LevelAgents` pasan por `ConvertTo-LevelBytes`
+    (función pura; sólo toca las líneas `model:` y `effort:` del frontmatter) y falla cerrado con exit 1
+    antes de escribir, también en `-DryRun`, ante un frontmatter que no entiende. Los demás archivos y
+    los agentes fijos salen con los bytes del origen. Con nivel 5 no se llama al renderizado. Los avisos
+    de entorno (T6) van antes. La guardia temporal de T3 ya no existe.
   - Marcadores de `install.ps1` entre el Paso 2 y el Paso 3: `# Configuracion:` (lee y valida el archivo)
-    y `# Nivel:` (hoy sólo asigna `$outHash` = hash del manifiesto; T4 renderizará aquí). No empiezan
-    por `# Paso`, que es el contrato de `patch_script`.
+    y `# Nivel:` (calcula `$outBytes` y `$outHash` por archivo; llama al renderizado sólo con nivel 1 a 4).
+    No empiezan por `# Paso`, que es el contrato de `patch_script`. El Paso 7 escribe `$outBytes` y los
+    Pasos 7 y 8 verifican contra `$outHash` (el manifiesto en el nivel 5; «lo esperado para el nivel N»
+    en el 1 a 4).
+  - La clasificación compara con `$outHash` (lo que se escribiría) y con `written` del estado previo:
+    cambio de nivel con archivos intactos = `ACTUALIZAR`; mismo nivel = `IGUAL`; edición a mano =
+    `MODIFICADO`. `Read-State` lee una sola vez con tope y el esquema 1 tiene lista cerrada de claves.
+  - Pendiente de T5: línea `Nivel anterior:`, la frase del exit 3 que remite a la configuración y los
+    casos 31 a 37 del plan como pruebas formales.
   - Límites conocidos de la configuración (README, «Límites del instalador»): 5.1 acepta sintaxis laxa
     (comillas simples, `+3`, `03`); con `level` repetido gana el último; carrera residual de lectura de
     enlace; `Format-Safe` no escapa `\`; pwsh 7 sin verificar.
@@ -235,7 +245,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (158 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (181 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

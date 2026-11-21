@@ -13,7 +13,7 @@ Instalado el 2026-11-19 con Claude Code 2.1.310.
 | `~/.claude/docs/agentes.md` | Esta guía |
 | Copias previas | `install.ps1` respalda lo que sobrescribe en `<Target>-backup-<fecha-hora>` (o en el `-BackupDir` que pases; por defecto `~/.claude-backup-<fecha-hora>`); no toca `CLAUDE.md` ni `settings.json`, así que respaldalos vos si los vas a editar |
 | `~/.claude/synclayer-manifest.json` | Estado que deja `install.ps1` tras la última instalación correcta: por archivo, el hash del origen, el de lo escrito y el nivel |
-| `~/.claude/synclayer-config.json` | Opcional. Lo escribís vos a mano (campo `level`, de 1 a 5). No lo instala ni lo gestiona `install.ps1`: sólo lo lee. Hoy sólo el nivel 5 se aplica (ver «Niveles» en el `README.md`) |
+| `~/.claude/synclayer-config.json` | Opcional. Lo escribís vos a mano (campo `level`, de 1 a 5). No lo instala ni lo gestiona `install.ps1`: sólo lo lee. Al reinstalar, el instalador aplica el nivel (ver «Niveles» en el `README.md`) |
 | `~/.claude/synclayer-usage.md` | Reporte global de uso de subagentes. No lo instala `install.ps1`: lo genera `tools/usage_report.py global` (ver «Reporte de uso») |
 
 Cómo instalar y actualizar: `install.ps1`, con `-DryRun` primero. Uso y límites en la sección
@@ -90,13 +90,14 @@ python -B tools/usage_report.py global
 
 ## Mantenimiento
 
-**Cambiar el modelo de un agente.** Hoy: editá a mano la línea `model:` de su archivo. Valores:
-`haiku`, `sonnet`, `opus`, `fable`, un ID completo de modelo, o `inherit` (usa el de
-la sesión). Los alias apuntan siempre a la versión vigente de cada familia. Una edición a
-mano sale `MODIFICADO` (exit 3) la próxima vez que reinstalés, y hace falta `-Force` (con respaldo).
-El nivel de `synclayer-config.json` todavía no se aplica: un nivel de 1 a 4 sale con exit 1 y no
-cambia ningún archivo. Cuando el instalador lo aplique, será la vía preferida (ver «Niveles» en el
-`README.md`).
+**Cambiar el modelo de un agente.** Para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle`,
+la vía preferida es el nivel de `synclayer-config.json`: el instalador escribe su `model:` y su
+`effort:` al reinstalar (ver «Niveles» en el `README.md`; el efecto real de `effort:` en Claude Code
+no está verificado en una máquina real). Para cualquier agente también podés editar a mano la línea
+`model:` de su archivo. Valores: `haiku`, `sonnet`, `opus`, `fable`, un ID completo de modelo, o
+`inherit` (usa el de la sesión). Los alias apuntan siempre a la versión vigente de cada familia. Una
+edición a mano de `model:` o `effort:` sale `MODIFICADO` (exit 3) la próxima vez que reinstalés, y
+hace falta `-Force` (con respaldo).
 
 **Cambiar herramientas.** Editá la línea `tools:`. Si se borra la línea, el agente
 hereda todas las herramientas de la sesión, incluidos los conectores MCP.

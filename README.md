@@ -149,8 +149,8 @@ Qué hace, en orden (los pasos 1 a 5 no escriben nada):
    | Estado | Condición | Acción |
    |---|---|---|
    | `NUEVO` | El destino no existe | Copia |
-   | `IGUAL` | El hash del destino coincide con el manifiesto | Nada |
-   | `ACTUALIZAR` | Distinto, y coincide con lo que instaló la ejecución anterior | Respalda y copia |
+   | `IGUAL` | El hash del destino coincide con lo que se escribiría para el nivel (el manifiesto, en el nivel 5) | Nada |
+   | `ACTUALIZAR` | Distinto, y coincide con lo que instaló la ejecución anterior (por ejemplo, un cambio de nivel con los archivos intactos) | Respalda y copia |
    | `MODIFICADO` | Distinto, y sin estado previo o con un hash que no es el de la ejecución anterior | Sin `-Force`: aborta con exit 3 y no escribe nada. Con `-Force`: respalda y copia |
    | `HUERFANO` | Estaba en el estado previo y ya no está en el manifiesto | Sólo informa; no lo borra |
 
@@ -161,9 +161,10 @@ Qué hace, en orden (los pasos 1 a 5 no escriben nada):
    si hay algo que respaldar y nunca se pisa un respaldo.
 7. Copia primero `hooks/agent_guard.py` y después el resto, cada archivo mediante un
    temporal en la misma carpeta y un movimiento sobre el destino.
-8. Verifica el hash de lo escrito.
+8. Verifica el hash de lo escrito (con el nivel 5, contra el manifiesto; con 1 a 4, contra lo
+   esperado para el nivel).
 9. Escribe `<Target>/synclayer-manifest.json`, el estado con esquema 2 (por archivo: el hash del
-   origen, el de lo escrito y el nivel, que hoy es siempre 5; lee también el esquema 1 de las
+   origen, el de lo escrito y el nivel; lee también el esquema 1 de las
    instalaciones anteriores y lo migra), sólo si todo lo anterior salió bien. Sin él, el instalador no distingue una versión anterior de
    SyncLayer de una edición a mano, y todo archivo distinto sale `MODIFICADO`.
 10. Imprime los conteos, la ruta del respaldo y los recordatorios (reiniciar sesiones,
@@ -179,7 +180,7 @@ Códigos de salida:
 | Código | Significado | ¿Se escribió algo? |
 |---|---|---|
 | 0 | Correcto, incluido «nada que hacer» y `-DryRun` sin problemas | Sólo en ejecución real |
-| 1 | Uso o entorno: manifiesto ausente o inválido, `synclayer-config.json` inválido o ilegible, nivel de 1 a 4 (aún no se aplica), ruta no permitida, punto de reanálisis o archivo bloqueado detectados antes de escribir, respaldo que ya existe, `-Target` que es un archivo o una raíz de unidad sin `-BackupDir`, error no previsto | No (salvo fallo de E/S al crear el respaldo) |
+| 1 | Uso o entorno: manifiesto ausente o inválido, `synclayer-config.json` inválido o ilegible, frontmatter de un agente que no se puede renderizar para el nivel (también con `-DryRun`), ruta no permitida, punto de reanálisis o archivo bloqueado detectados antes de escribir, respaldo que ya existe, `-Target` que es un archivo o una raíz de unidad sin `-BackupDir`, error no previsto | No (salvo fallo de E/S al crear el respaldo) |
 | 2 | El origen no coincide con el manifiesto | No |
 | 3 | Hay `MODIFICADO` y falta `-Force` | No |
 | 4 | Falló la copia, la verificación posterior o la escritura del estado | Sí, parcial; el respaldo queda y no hay rollback |
@@ -196,7 +197,7 @@ borra `synclayer-config.json`. El único entorno verificado es Windows PowerShel
 manifiesto. Lleva `schema` 2, `algorithm` `sha256`, `eol` `lf` y, por archivo y en el orden del
 manifiesto, `path`, `sha256` (hash canónico del origen), `written` (hash canónico de lo escrito) y
 `level` (el nivel leído de la configuración). El formato es siempre el esquema 2, también con
-el nivel 5; hoy `written` es igual a `sha256`. Es ASCII, con LF y un salto final, y reinstalar sin cambios no lo
+el nivel 5; con el nivel 5 `written` es igual a `sha256`, y con 1 a 4 es distinto para los seis agentes cuya celda cambia el archivo. Es ASCII, con LF y un salto final, y reinstalar sin cambios no lo
 reescribe. La clasificación compara el destino con `written`, no con el origen de la ejecución
 anterior. Un estado de esquema 1 (el de la Fase 1) es válido: se migra a esquema 2 en la primera
 reinstalación y el viejo va al respaldo, así que esa reinstalación crea una carpeta de respaldo
@@ -205,8 +206,9 @@ como ausente (con aviso por `stderr`, sin respaldo) y nunca produce `ACTUALIZAR`
 
 **Configuración y avisos.** Tras verificar el origen (pasos 1 y 2) y antes de leer el estado
 previo, el instalador lee `<Target>/synclayer-config.json` y, con un nivel de 1 a 4, avisa por
-`stderr` si el entorno define `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`. Ver
-«Niveles» (qué se acepta, qué avisos salen y qué falta).
+`stderr` si el entorno define `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`. Con un
+nivel de 1 a 4 escribe después el `model:` y el `effort:` de seis agentes. Ver «Niveles» (qué se
+acepta, qué avisos salen y qué falta).
 
 Después, las instrucciones globales del usuario (`~/.claude/CLAUDE.md`) deben apuntar
 a las reglas. Las reglas de `~/.claude/rules/` se cargan en todos los proyectos. Ejemplo
@@ -440,8 +442,30 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
   `IGUAL`.
 - Un instalador anterior no sabe leer un estado de esquema 2: lo trata como ausente, así que sus
   archivos salen `MODIFICADO` (exit 3) y nunca se sobrescriben sin `-Force`.
-- Un nivel de 1 a 4 no se aplica todavía (exit 1); los límites del renderizado, cuando exista,
-  se añaden con T4 (ver «Pendiente (T4/T5)» en «Niveles»).
+- Los bytes que se escriben con un nivel de 1 a 4 (el frontmatter renderizado) no los cubre el hash
+  del manifiesto: parten de bytes verificados contra él, pero `install.ps1`, que los transforma, no
+  está en el manifiesto. Lo escrito se verifica contra lo esperado para el nivel, no contra el
+  manifiesto.
+- El renderizado trabaja por líneas y rechaza (exit 1 antes de escribir, también con `-DryRun`) lo que
+  no entiende: frontmatter sin cierre, `model:` ausente o duplicado, `effort:` duplicado, BOM, línea
+  inicial en blanco, retorno de carro suelto o tabulador, `model:` que no es un escalar simple
+  (comentario, comillas, ancla, bloque, lista, continuación), `effort:` con comentario o continuación,
+  `---` con espacios finales o una línea `...`, o una autocomprobación estructural que falla. En las
+  líneas del frontmatter exige sólo caracteres ASCII imprimibles, que cada línea sin sangría tenga la
+  forma `clave: valor` y que ningún valor empiece por un indicador YAML (comillas, corchetes, llaves,
+  `|`, `>`, `&`, asterisco, `!`, `%`, `@` o acento grave). El mismo defecto no detiene el nivel 5 ni a
+  un agente fijo.
+- Límite conocido del renderizado: una comilla o una lista abierta en una línea con sangría anterior a
+  `model:` puede envolver esa línea (por ejemplo, `xq:` seguida de `  "abc`). La estructura y el
+  bloque `hooks:` no cambian, pero el nivel no se aplicaría de verdad aunque `Ajuste:` lo diga. Exige un
+  origen anómalo que ya haya pasado el manifiesto; los nueve agentes del repositorio no lo tienen.
+- El efecto real de `effort:` en Claude Code, y el de un valor que el modelo no soporta, sólo están
+  verificados por la documentación, no en una máquina real (la compuerta G1 no se corrió).
+- Según la documentación, un nivel de esfuerzo que el modelo no soporta baja al más alto soportado
+  igual o inferior, sin un aviso documentado.
+- Un `model:` o un `effort:` inválido tiene un comportamiento no documentado en Claude Code; por eso
+  el instalador sólo escribe valores de lista cerrada (alias `opus`, `sonnet`, `haiku` y los cinco
+  esfuerzos oficiales).
 
 **No verificado**
 
@@ -451,18 +475,20 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
 
 ## Niveles
 
-El diseño prevé que un nivel de 1 a 5 fije el `model:` y el `effort:` de seis agentes (`atlas`,
-`forge`, `sentinel`, `scribe`, `scout`, `oracle`). Hoy sólo el nivel 5 se aplica, y es el
-repositorio tal cual: quien no configura nada instala los mismos archivos de siempre.
-`install.ps1` lleva la tabla de los niveles 1 a 4. `auditor`, `shield` y `debugger` quedan fijos
-en todos los niveles (`opus`, sin `effort:`, con su hook). La tabla es un orden razonado, no una
-medición: no promete ahorro de tokens ni de costo. «—» significa sin `effort:`.
+Un nivel de 1 a 5 fija el `model:` y el `effort:` de seis agentes (`atlas`, `forge`, `sentinel`,
+`scribe`, `scout`, `oracle`). El nivel 5 es el repositorio tal cual: quien no configura nada
+instala los mismos archivos de siempre. `install.ps1` lleva la tabla de los niveles 1 a 4.
+`auditor`, `shield` y `debugger` quedan fijos en todos los niveles (`opus`, sin `effort:`, con su
+hook). La tabla es un orden razonado, no una medición: no promete ahorro de tokens ni de costo.
+«—» significa sin `effort:`.
 
-> **Estado de la Fase 3: sólo el nivel 5 se aplica hoy.** Un nivel de 1 a 4 es válido, pero el
-> instalador sale con exit 1 (`error: el nivel N aun no se puede aplicar en esta version.`) y no
-> escribe nada. «Elegir el nivel» y los avisos de entorno describen lo que el instalador hace hoy;
-> «Qué fija el nivel y qué no» y «Qué puede anular el nivel» describen el efecto previsto cuando T4
-> aplique la tabla. Lo que falta está en «Pendiente (T4/T5)».
+> **Estado de la Fase 3: los niveles 1 a 4 se aplican; el efecto real en Claude Code no está
+> verificado en una máquina real (G1).** El instalador escribe lo que dice la tabla, y eso está
+> probado. Lo que Claude Code hace con `effort:` (y con un valor que el modelo no soporta) sólo se
+> conoce por su documentación: la compuerta G1 no se corrió. Para comprobarlo, sigue el
+> procedimiento de G1 del plan
+> ([`docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md))
+> y mira la ejecución del agente con `/tasks`. Lo que falta está en «Pendiente (T5)».
 
 <!-- niveles:inicio -->
 | Agente | Nivel 5 (repo) | Nivel 4 | Nivel 3 | Nivel 2 | Nivel 1 |
@@ -488,7 +514,8 @@ nunca lo crea, edita, respalda ni borra. Un solo campo:
 1. Crea o edita el archivo (UTF-8, con o sin BOM; CRLF o LF).
 2. Ensaya con `-DryRun`: lee y valida el archivo sin escribir nada. Para probar sin tocar
    `~/.claude`, pasa `-Target` a una carpeta temporal y crea el archivo allí.
-3. Reinstala. Cambiar de nivel es editar el archivo y reinstalar; hoy esto sólo funciona con el 5.
+3. Reinstala. Cambiar de nivel es editar el archivo y reinstalar. Con los archivos intactos, un
+   cambio de nivel sale `ACTUALIZAR` (con respaldo) y reinstalar el mismo nivel sale `IGUAL`.
 
 Reglas del archivo:
 
@@ -506,38 +533,46 @@ enlace o junction el mensaje es el de rechazo de enlaces (`error: <ruta> es un p
 (...). No se escribe a traves de enlaces. No se escribio nada.`). Los mensajes nunca imprimen los
 valores del archivo; una clave desconocida se nombra recortada a 40 caracteres y escapada.
 
-Con un nivel de 1 a 4 válido, hoy:
+Con un nivel de 1 a 4 válido:
 
-- `-DryRun` y la ejecución real salen con exit 1 y `error: el nivel N aun no se puede aplicar en
-  esta version.` No se escribe ningún archivo del destino, ni el estado.
-- La línea `Nivel:` del plan sólo se imprime con el nivel 5, porque el exit 1 llega antes:
-  `Nivel: 5 (synclayer-config.json)` o `Nivel: 5 (por defecto; no hay synclayer-config.json)`.
-- Los avisos de entorno (más abajo) sí salen, justo antes de ese exit 1.
+- El plan imprime `Nivel: N (synclayer-config.json)` (o `Nivel: 5 (por defecto; no hay
+  synclayer-config.json)` si no hay archivo) y, tras el `Resumen:`, una línea por agente
+  renderizado: `Ajuste: agents/<nombre>.md  model: <modelo>  effort: <esfuerzo>` (`effort: -` si la
+  celda no lo fija).
+- Para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle` escribe en el destino el `model:`
+  y, según la tabla, el `effort:`. `auditor`, `shield`, `debugger`, el hook, `rules/agentes.md` y
+  `docs/agentes.md` quedan con los bytes del origen. El nivel 5 no pasa por el renderizado.
+- Con `-DryRun` muestra el plan y no escribe nada. Si el frontmatter de un agente no se puede
+  renderizar, sale con exit 1 antes de escribir (también con `-DryRun`):
+  `error: no se puede aplicar el nivel N a agents/<nombre>.md: <motivo>. No se escribio nada.`
+  Los motivos están en «Límites del instalador».
+- Los pasos 7 y 8 dicen «lo esperado para el nivel N» en lugar de «el manifiesto».
+- Los avisos de entorno (más abajo) salen antes de todo esto.
 
 ### Qué fija el nivel y qué no
 
-Esta subsección describe el efecto previsto cuando T4 aplique la tabla; hoy ningún nivel de 1 a 4
-escribe nada.
+Lo que el instalador escribe está descrito arriba. Lo que Claude Code hace después con esos
+valores sólo está verificado por su documentación, no en una máquina real (G1).
 
 - **Fijos en todos los niveles:** `auditor`, `shield` y `debugger` (`opus`, sin `effort:`, hook
-  intacto). Ningún nivel les cambiará nada, así que las revisiones de seguridad y de código no
-  dependerán del nivel.
-- **Bajar el nivel cambiará la calidad esperada** del trabajo de los seis agentes modificables. El
+  intacto). Ningún nivel les cambia nada, así que las revisiones de seguridad y de código no
+  dependen del nivel.
+- **Bajar el nivel cambia la calidad esperada** del trabajo de los seis agentes modificables. El
   ahorro no está medido: este repositorio no tiene cifras de ahorro ni de calidad por nivel, y no
   las promete.
 - **Límites de la tabla.** Es un orden razonado, no una medición. El precio por token no es el costo
-  por tarea: un modelo de menor precio por token puede gastar más tokens. Un `effort:` explícito fijará el esfuerzo del
-  agente aunque la sesión tenga otro: si la sesión corre en `low`, una celda `medium` lo subirá para ese
+  por tarea: un modelo de menor precio por token puede gastar más tokens. Un `effort:` explícito fija el esfuerzo del
+  agente aunque la sesión tenga otro: si la sesión corre en `low`, una celda `medium` lo sube para ese
   agente. Los alias (`opus`, `sonnet`, `haiku`) cambian de versión con el tiempo. Un `effort:` que el
   modelo no soporta baja al más alto soportado igual o inferior.
-- **Compatibilidad con `effort:`.** Antes de usar un nivel de 1 a 4 (cuando se pueda), comprueba con
+- **Compatibilidad con `effort:`.** Antes de usar un nivel de 1 a 4, comprueba con
   `claude --debug` que tu versión de Claude Code no lista `effort:` como campo no reconocido. La
   versión mínima que lo admite no está verificada.
 
 ### Qué puede anular el nivel
 
-Cuando T4 escriba el frontmatter, otras capas tendrán precedencia sobre él y el instalador no las
-verá, salvo las dos variables de entorno que se indican (el aviso de esas dos ya existe hoy):
+El nivel sólo escribe líneas del frontmatter de los agentes. Otras capas tienen precedencia sobre
+él y el instalador no las ve, salvo las dos variables de entorno que se indican:
 
 | Anulación | Efecto | ¿Avisa el instalador? |
 |---|---|---|
@@ -562,19 +597,18 @@ definida con `setx` y sin reiniciar la consola no avisa); una variable de sólo 
 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=0` también avisa, aunque Claude Code quizá la trate como inactiva
 (no verificado). El instalador no define, cambia ni borra variables.
 
-### Pendiente (T4/T5)
+### Pendiente (T5)
 
 Lo siguiente **no existe todavía**; no lo des por hecho:
 
-- **Renderizado (T4).** Escribir el `model:` y el `effort:` de la tabla en los seis agentes. Está
-  bloqueada por la compuerta G1 del propietario (verificar `effort:` en una versión real de Claude
-  Code). Con ella se retira la guardia temporal de los niveles 1 a 4 y salen las líneas `Ajuste:` del plan.
-- **Clasificación y escritura con niveles (T5).** Que un cambio de nivel dé `ACTUALIZAR` y que una
-  edición a mano dé `MODIFICADO` con el contenido del nivel; la línea `Nivel anterior:` y la frase
-  del exit 3 que remite a la configuración.
-- **Límites del renderizado:** los bytes de un nivel de 1 a 4 no los cubre el hash del manifiesto
-  (parten de bytes verificados y se comprobarán contra lo escrito) y `install.ps1` no está en el
-  manifiesto. Se documentan al implementar T4.
+- La línea `Nivel anterior:` del plan.
+- La frase del mensaje del exit 3 que remite a la configuración («Si cambiaste model: o effort: a
+  mano, usa synclayer-config.json.»).
+- Los casos 31 a 37 del plan como pruebas formales de las transiciones de nivel, de las ediciones a
+  mano y de `-Force`. La clasificación contra `written` ya funciona y tiene pruebas de T2 y T4; falta
+  cubrir cada situación del plan con una prueba propia.
+
+La documentación de la Fase 3 (T7) sigue abierta hasta completarla después de T5.
 
 ## Reporte de uso
 
@@ -727,7 +761,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1191 pruebas, 161 saltadas: 158 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1238 pruebas, 184 saltadas: 181 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 
@@ -758,18 +792,18 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-20** (T6 de la Fase 3 cerrada, adelantada a T4 y T5: avisos de variables de entorno).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-21** (T4 de la Fase 3 cerrada: renderizado y aplicación de los niveles 1 a 4).
 
 ### Avance global
 
-**El proyecto completo va en 50%.** Cuenta las cinco fases con el mismo peso; las fases 4 y 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 3 está desglosada pero sin ninguna unidad cerrada, así que el número sube cuando se desglosen en sub-fases.
+**El proyecto completo va en 53%.** Cuenta las cinco fases con el mismo peso; las fases 4 y 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 3 está desglosada pero sin ninguna unidad cerrada, así que el número sube cuando se desglosen en sub-fases.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **50%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **53%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
-| **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **50%** | 4 de 8 | Plan aprobado, en curso (T1 a T3 y T6 cerradas); antes de T4 el propietario corre la compuerta G1 ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
+| **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | **63%** | 5 de 8 | Plan aprobado, en curso (T1 a T4 y T6 cerradas); antes de T4 el propietario corre la compuerta G1 ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
 | **4. Nombres de agentes configurables** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 
@@ -798,7 +832,7 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | Frente | Avance | % | Unidades |
 |:--|:--|--:|:--|
 | Tabla y estado | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T1, T2) |
-| Configuración y renderizado | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **33%** | 1 de 3 (T3, T4, T5) |
+| Configuración y renderizado | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | **67%** | 2 de 3 (T3, T4, T5) |
 | Avisos | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 1 de 1 (T6) |
 | Documentación y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 2 (T7, cierre) |
 
@@ -809,7 +843,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 - **Configuración y renderizado**
   - ✅ Hecho: nada.
   - ✅ Hecho: T3 lectura y validación de `<Target>/synclayer-config.json` (campo `level` de 1 a 5, ausente o `{}` = nivel 5; lectura única con tope de 64 KiB, rechazo de enlaces, claves de lista cerrada incluido `__type`), línea `Nivel:` y guardia temporal que impide aplicar un nivel 1 a 4.
-  - ⬜ Falta: T4 renderizado de `model:` y `effort:` (bloqueada hasta la compuerta G1 del propietario); T5 clasificación y escritura.
+  - ✅ Hecho también: T4 renderizado y aplicación de los niveles 1 a 4 (sólo `model:` y `effort:` de seis agentes, con valores de lista cerrada; falla cerrado ante un frontmatter que no entiende), clasificación contra lo que se escribiría y lo ya escrito, líneas `Ajuste:` y retirada de la guardia temporal. Se hizo sin la compuerta G1: el efecto real de `effort:` en Claude Code sólo está verificado por documentación.
+  - ⬜ Falta: T5 cambios de nivel, ediciones a mano y `-Force` (línea `Nivel anterior:`, frase del exit 3 y casos 31 a 37).
 - **Avisos**
   - ✅ Hecho: nada.
   - ✅ Hecho: T6 (adelantada a T4 y T5 por decisión del propietario) aviso por `stderr` si el nivel es 1 a 4 y el entorno trae `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`; nunca imprime el valor y con nivel 5 no añade ninguna línea.
@@ -846,8 +881,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-20 | T2 de la Fase 3: estado con esquema 2 y migración; la clasificación distingue un cambio de origen de una edición manual y un estado no reconocido nunca produce `ACTUALIZAR`; revisada por `auditor` | ✅ |
 | 2026-11-20 | T3 de la Fase 3: lectura y validación de `synclayer-config.json` (entrada no confiable, falla cerrado, guardia temporal para niveles 1 a 4); revisada por `auditor` y `shield` | ✅ |
 | 2026-11-20 | T6 de la Fase 3 (adelantada): avisos de variables de entorno que anulan el nivel, sin imprimir su valor; revisada por `auditor` y `shield` | ✅ |
-| **Ahora** | **Compuerta G1 del propietario** (`effort:` con `claude --debug`), que desbloquea T4, y, del propietario, comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
-| Luego | T4, T5, T7 y cierre de la Fase 3 (compuerta G1 antes de T4) y desglosar las fases 4 y 5 (backlog) | ⬜ |
+| 2026-11-21 | T4 de la Fase 3: renderizado y aplicación de los niveles 1 a 4 (frontmatter de seis agentes, valores de lista cerrada, falla cerrado), guardia temporal retirada; revisada por `auditor` y `shield` en tres rondas; sin la compuerta G1 | ✅ |
+| **Ahora** | **T5 de la Fase 3** (cambios de nivel, ediciones a mano y `-Force`) y, del propietario, la compuerta G1 (`effort:` con `/tasks`, sin bloquear ya), del propietario, comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
+| Luego | T7 (completar la documentación) y cierre de la Fase 3 y desglosar las fases 4 y 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
 

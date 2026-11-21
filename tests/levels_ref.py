@@ -138,10 +138,24 @@ def state_for(manifest, out_hashes=None, level=5):
     return (json.dumps(state, indent=2, ensure_ascii=True) + "\n").encode("ascii")
 
 
+_KEY = re.compile(r"([A-Za-z_][A-Za-z0-9_-]*):")
+
+
+def _front_keys(lines):
+    return [m.group(1) for m in (_KEY.match(l) for l in lines) if m]
+
+
 def render_expected(data, model, effort):
     """Referencia de 3.3: bytes canonicos de un agente + celda -> bytes a escribir.
 
-    Lanza ValueError si el frontmatter no es renderizable. `effort` '-' no toca el esfuerzo."""
+    Lanza ValueError si el frontmatter no es renderizable. `effort` '-' no toca el esfuerzo.
+    Reglas de falla cerrada (un origen manipulado no puede dejar YAML distinto), sobre las lineas entre los dos
+    `---`: (1) solo bytes 0x20 a 0x7E (sin CR, tabulador, NEL, U+2028, NBSP, BOM...); (2) toda linea sin sangria
+    tiene la forma `clave:` seguida de espacio o de fin de linea; (3) ningun valor de primer nivel empieza por un
+    indicador YAML (comillas, corchete, llave, barra, mayor, ampersand, asterisco, exclamacion, porcentaje, arroba
+    o acento grave); ademas model: tiene la forma `model: <valor simple>` y effort: la forma `effort: <letras>`;
+    la linea siguiente a model: y a effort: es el cierre o empieza por una letra; y la salida tiene las claves de
+    primer nivel de la entrada mas, como mucho, effort, sin repetidas."""
     text = data.replace(b"\r\n", b"\n").decode("iso-8859-1")
     lines = text.split("\n")
     if lines[0] != "---":
@@ -149,12 +163,26 @@ def render_expected(data, model, effort):
     close = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
     if close is None:
         raise ValueError("frontmatter sin cierre")
+    front = lines[1:close]
+    if any(ord(c) < 0x20 or ord(c) > 0x7E for l in front for c in l):
+        raise ValueError("caracter fuera de ASCII imprimible en el frontmatter")
+    if any(not l.startswith(" ") and not re.match(r"[A-Za-z][A-Za-z0-9_-]*:(?: |\Z)", l) for l in front):
+        raise ValueError("linea de primer nivel sin la forma clave:")
+    if any(re.match(r"[A-Za-z][A-Za-z0-9_-]*: +[\"'\[{|>&*!%@`]", l) for l in front):
+        raise ValueError("valor de primer nivel que empieza por un indicador YAML")
     model_idx = [i for i in range(1, close) if lines[i].startswith("model:")]
     effort_idx = [i for i in range(1, close) if lines[i].startswith("effort:")]
     if len(model_idx) != 1:
         raise ValueError("debe haber exactamente una linea model:")
     if len(effort_idx) > 1:
         raise ValueError("hay mas de una linea effort:")
+    if not re.fullmatch(r"model: [A-Za-z0-9][A-Za-z0-9._-]*", lines[model_idx[0]]):
+        raise ValueError("la linea model: del origen no tiene la forma esperada")
+    if effort_idx and not re.fullmatch(r"effort: [a-z]+", lines[effort_idx[0]]):
+        raise ValueError("la linea effort: del origen no tiene la forma esperada")
+    for i in model_idx + effort_idx:
+        if lines[i + 1] != "---" and not re.match(r"[A-Za-z]", lines[i + 1]):
+            raise ValueError("continuacion de model: o effort: en la linea siguiente")
     out = list(lines)
     out[model_idx[0]] = "model: " + model
     if effort != NO_EFFORT:
@@ -162,4 +190,10 @@ def render_expected(data, model, effort):
             out[effort_idx[0]] = "effort: " + effort
         else:
             out.insert(model_idx[0] + 1, "effort: " + effort)
+    # Autocomprobacion estructural: claves de primer nivel de la salida = las de la entrada (mas effort).
+    out_close = out.index("---", 1)
+    out_keys = _front_keys(out[1:out_close])
+    want = set(_front_keys(lines[1:close])) | ({"effort"} if effort != NO_EFFORT else set())
+    if len(out_keys) != len(set(out_keys)) or set(out_keys) != want:
+        raise ValueError("autocomprobacion: claves de primer nivel repetidas o distintas")
     return "\n".join(out).encode("iso-8859-1")

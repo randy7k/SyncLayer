@@ -2,22 +2,50 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 3, T4: renderizado y aplicación de los niveles 1 a 4)
+
+- Un nivel de 1 a 4 válido **se aplica**: para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle`
+  el instalador escribe en el destino el `model:` y, según la tabla (`$LevelRows`), el `effort:`.
+  `auditor`, `shield`, `debugger`, el hook, `rules/agentes.md`, `docs/agentes.md` y el resto quedan con los
+  bytes del origen. El nivel 5 es el repositorio y no se renderiza. La guardia temporal de T3 se retiró.
+- La salida muestra `Nivel: N (...)` en todos los niveles y, con 1 a 4, líneas
+  `Ajuste: agents/<nombre>.md  model: <modelo>  effort: <esfuerzo>` tras `Resumen:`. Con `-DryRun` muestra
+  el plan y no escribe.
+- El renderizado falla cerrado: exit 1 antes de escribir (también en `-DryRun`) con
+  `error: no se puede aplicar el nivel N a agents/<nombre>.md: <motivo>. No se escribio nada.` si el
+  frontmatter del origen de un agente que se renderiza no tiene cierre, no tiene `model:` o lo repite,
+  repite `effort:`, trae BOM, empieza por una línea en blanco, tiene un retorno de carro suelto o un
+  tabulador, tiene un `model:` que no es un escalar simple o un `effort:` con comentario o continuación,
+  tiene `---` con espacios finales o una línea `...`, o falla la autocomprobación estructural. El mismo
+  defecto no detiene el nivel 5 ni a un agente fijo.
+- La clasificación compara con `outHash` (lo que se escribiría para el nivel) y con `written` (lo que
+  escribió la instalación anterior): cambiar de nivel con archivos intactos es `ACTUALIZAR` (con respaldo),
+  reinstalar el mismo nivel es `IGUAL` y una edición a mano es `MODIFICADO` (exit 3 sin `-Force`). El estado
+  guarda `written` y `level` por archivo. Con el nivel 5 la salida es la de siempre («coinciden con el
+  manifiesto»); con 1 a 4, los Pasos 7 y 8 dicen «lo esperado para el nivel N».
+- El estado de esquema 1 tiene lista cerrada de claves y `Read-State` lee una sola vez con tope.
+- La compuerta G1 (comprobar en Claude Code real que `effort:` se reconoce) no se corrió: T4 se hizo sin
+  ella por decisión del propietario. El efecto real de `effort:` y de un valor no soportado sólo está
+  verificado por la documentación. No hay medición de ahorro ni de calidad por nivel.
+- Pendiente (T5): la línea `Nivel anterior:`, la frase «Si cambiaste model: o effort: a mano, usa
+  synclayer-config.json.» del mensaje del exit 3 y los casos 31 a 37 como pruebas formales.
+
 ### Añadido (niveles, Fase 3)
 
 Resumen parcial de la Fase 3 (esfuerzo configurable por niveles, plan
-`docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). **Hoy ningún nivel distinto de 5 se aplica**: un
-nivel de 1 a 4 es válido pero sale con exit 1 (guardia temporal). El detalle está en las entradas por task,
-más abajo:
+`docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Los niveles 1 a 4 se aplican (T4), sin la
+compuerta G1. El detalle está en las entradas por task:
 
 - T1, tabla de niveles de esfuerzo (24 filas, listas cerradas, validada al arrancar; misma tabla en el README).
 - T2, estado del instalador con esquema 2 y migración desde el esquema 1.
-- T3, lectura y validación de `<Target>/synclayer-config.json` y guardia temporal.
+- T3, lectura y validación de `<Target>/synclayer-config.json` y guardia temporal (retirada en T4).
+- T4, renderizado y aplicación de los niveles 1 a 4.
 - T6, avisos de variables de entorno que anulan el nivel (adelantada a T4 y T5).
-- T7 (parcial), documentación de lo que existe: README (sección «Niveles», estado del instalador, límites),
-  CLAUDE.md, `docs/agentes.md`, `rules/agentes.md` y el estado de la fase en el backlog.
-- Pendiente: T4 (renderizado de `model:` y `effort:`, bloqueada por la compuerta G1 del propietario) y T5
-  (clasificación y escritura con niveles); al cerrarlas se completa T7 (renderizado, tabla aplicada,
-  límites del renderizado). No hay medición de ahorro ni de calidad por nivel.
+- T7 (parcial, abierta hasta después de T5), documentación de lo que existe: README (sección «Niveles»,
+  estado del instalador, límites), CLAUDE.md, `docs/agentes.md`, `rules/agentes.md` y el estado de la
+  fase en el backlog.
+- Pendiente: T5 (pruebas de transiciones, `Nivel anterior:` y frase del exit 3); al cerrarla se completa
+  T7. No hay medición de ahorro ni de calidad por nivel.
 
 ### Añadido (Fase 3, T6: avisos de variables de entorno)
 
@@ -25,8 +53,8 @@ más abajo:
   valor no vacío, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`, que anulan el `model:` y
   el `effort:` del frontmatter. Sólo imprime el nombre y un texto fijo, nunca el valor; no cambia el código
   de salida, no escribe nada y no define, cambia ni borra variables. Con nivel 5 no añade ninguna línea.
-  El aviso va después de leer el nivel y antes de la guardia temporal de T3, así que seguirá saliendo
-  cuando T4 la retire.
+  El aviso va después de leer el nivel y antes de la guardia temporal de T3 (retirada en T4); el aviso sigue
+  saliendo.
 - T6 se adelantó a T4 y T5 por decisión del propietario (sólo depende de T3 en la práctica); las
   unidades de la fase siguen siendo 8.
 - Pruebas: casos 38 y 39 de la Fase 3 y una prueba estática de que el script nunca define ni borra
@@ -45,8 +73,8 @@ más abajo:
   silencio). Cualquier problema sale con exit 1 antes de escribir nada, también en `-DryRun`. Ningún valor
   del archivo llega al estado ni al destino salvo el entero validado. El instalador no lo escribe, no lo
   respalda, no lo clasifica ni lo borra.
-- La salida muestra `Nivel: N (...)` y el estado guarda el nivel leído. **Guardia temporal:** un nivel 1 a 4
-  válido termina con exit 1 («el nivel N aun no se puede aplicar en esta version») hasta que T4 aplique
+- La salida muestra `Nivel: N (...)` y el estado guarda el nivel leído. **Guardia temporal (retirada en T4):** un nivel 1 a 4
+  válido terminaba con exit 1 («el nivel N aun no se puede aplicar en esta version») hasta que T4 aplique
   la tabla; así ningún commit acepta un nivel que no se escribe.
 - Límites conocidos, para documentar en T7: PowerShell 5.1 acepta más que JSON estricto (comillas
   simples, claves sin comillas, `+3`, `03`); con una clave `level` repetida gana la última; entre la

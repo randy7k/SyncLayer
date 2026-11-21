@@ -68,6 +68,68 @@ SAMPLE = {
 LINE = re.compile(r"^(NUEVO|IGUAL|ACTUALIZAR|MODIFICADO|HUERFANO) +(\S.*)$")
 
 
+def agent_md(name, model, before=(), after=()):
+    """Agente de prueba con frontmatter minimo. `before` y `after` son lineas extra del frontmatter antes y
+    despues de `model:` (model=None: sin esa linea). El cuerpo trae una linea `model:` en la columna 0."""
+    lines = ["---", "name: " + name, "description: agente de prueba " + name, "tools: Read, Grep"] + list(before)
+    if model is not None:
+        lines.append("model: " + model)
+    lines += list(after) + ["color: blue", "---", "Cuerpo de " + name + ".", "model: linea del cuerpo, no se toca", ""]
+    return "\n".join(lines).encode("latin-1")
+
+
+# Bloque hooks: de sentinel, con un model: indentado dentro (no cuenta como la linea model: del frontmatter).
+SENTINEL_HOOKS = ["hooks:", "  PreToolUse:", '    - matcher: "Write|Edit"', "      hooks:", "        - type: command",
+                  '          command: "python guard.py"', "          model: dentro-de-hooks"]
+
+# Fixture de los niveles (Fase 3, T4): los seis agentes modificables, los tres agentes fijos y las tres
+# rutas fijas, con el model: del repositorio (nivel 5).
+LEVEL_SAMPLE = {
+    "agents/atlas.md": agent_md("atlas", "claude-fable-5-2"),
+    "agents/forge.md": agent_md("forge", "sonnet"),
+    "agents/sentinel.md": agent_md("sentinel", "sonnet", after=SENTINEL_HOOKS),
+    "agents/scribe.md": agent_md("scribe", "sonnet"),
+    "agents/scout.md": agent_md("scout", "sonnet"),
+    "agents/oracle.md": agent_md("oracle", "haiku"),
+    "agents/auditor.md": agent_md("auditor", "opus"),
+    "agents/shield.md": agent_md("shield", "opus"),
+    "agents/debugger.md": agent_md("debugger", "opus"),
+    "rules/agentes.md": b"reglas\n",
+    "hooks/agent_guard.py": b"print('guard')\n",
+    "docs/agentes.md": b"guia\n",
+}
+LEVEL_FIXED = [rel for rel in LEVEL_SAMPLE
+               if not (rel.startswith("agents/") and rel.split("/")[1][:-3] in lr.read_ps_list("LevelAgents"))]
+
+
+def level_expected(files, level):
+    """{ruta: bytes esperados en el destino} segun la referencia de Python (render_expected) y la tabla de
+    install.ps1: los seis agentes modificables se renderizan en los niveles 1 a 4; el resto, y todo en el
+    nivel 5, son los bytes canonicos (CRLF a LF) del origen."""
+    table = lr.read_script_table()
+    agents = lr.read_ps_list("LevelAgents")
+    out = {}
+    for rel, data in files.items():
+        canon = data.replace(b"\r\n", b"\n")
+        m = re.match(r"^agents/([a-z0-9_-]+)\.md$", rel)
+        if level != 5 and m and m.group(1) in agents:
+            model, effort = table[(level, m.group(1))]
+            canon = lr.render_expected(canon, model, effort)
+        out[rel] = canon
+    return out
+
+
+def level_hashes(files, level):
+    return {rel: bm.canonical_sha256(data) for rel, data in level_expected(files, level).items()}
+
+
+def split_front(data):
+    """(lineas del frontmatter sin los separadores, lineas desde el cierre) de un agente en LF."""
+    lines = data.decode("ascii").split("\n")
+    close = lines.index("---", 1)
+    return lines[1:close], lines[close:]
+
+
 def write(base, rel, data):
     path = os.path.join(base, *rel.split("/"))
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -132,6 +194,18 @@ class StaticChecks(unittest.TestCase):
         # el detector mismo: una linea de escritura de entorno se detecta
         self.assertRegex("[System.Environment]::SetEnvironmentVariable('X', 'y')", r"(?i)SetEnvironmentVariable")
         self.assertRegex("$env:X = 'y'", r"(?i)\benv:")
+
+    def test_real_agents_pass_the_structural_rules_of_the_renderer(self):
+        # Los nueve agents/*.md del repositorio no quedan rechazados por la referencia (misma forma que el instalador)
+        # en ninguna celda de la tabla: las reglas de falla cerrada no rompen a los agentes reales.
+        names = ["atlas", "auditor", "debugger", "forge", "oracle", "scout", "scribe", "sentinel", "shield"]
+        self.assertEqual(sorted(os.listdir(os.path.join(ROOT, "agents"))), [n + ".md" for n in names])
+        for name in names:
+            data = read(ROOT, "agents/%s.md" % name)
+            for model in ("opus", "sonnet", "haiku"):
+                for effort in ("-", "low", "medium"):
+                    with self.subTest(agent=name, model=model, effort=effort):
+                        lr.render_expected(data, model, effort)
 
     def test_allowed_pattern_matches_generator(self):
         # Con core.autocrlf git deja install.ps1 en CRLF al hacer checkout o merge: el ancla `$`
@@ -2308,15 +2382,14 @@ class InstallCases:
 
     def test_t3_case17_duplicate_level_key_last_one_wins_in_windows_powershell_5_1(self):
         # Comportamiento medido de ConvertFrom-Json de 5.1: sin error, gana la ultima clave. Se fija aqui;
-        # el estado final depende del valor que gana, y un 1 a 4 sigue topando con la guarda.
+        # el estado final depende del valor que gana.
         self.make_source()
         self.write_config(b'{"level": 3, "level": 5}')
         out, err = self.install_ok("-DryRun")
         self.assertIn("Nivel: 5 (synclayer-config.json)", out.splitlines())
         self.write_config(b'{"level": 5, "level": 3}')
-        code, out, err = self.run_install("-DryRun")
-        self.assertEqual(code, 1, out + err)
-        self.assertIn("error: el nivel 3 aun no se puede aplicar en esta version.", err)
+        out, err = self.install_ok("-DryRun")
+        self.assertIn("Nivel: 3 (synclayer-config.json)", out.splitlines())
 
     def test_t3_case18_config_is_never_touched_backed_up_or_listed(self):
         self.make_source()
@@ -2371,60 +2444,574 @@ class InstallCases:
                     self.assertNotIn(secret, err + out)
                 shutil.rmtree(self.target)
 
-    def test_t3_valid_level_1_to_4_is_stopped_by_the_temporary_guard(self):
-        # Guarda temporal de T3: T4 la retira junto con esta prueba. Ningun commit acepta un nivel que no aplica.
+    # --- Fase 3, T4: renderizado y aplicacion de los niveles 1 a 4 (casos 20 a 30 del plan) ---
+
+    def make_level_source(self, files=None, crlf=False):
+        files = dict(LEVEL_SAMPLE) if files is None else files
+        self.make_source(files, crlf=crlf)
+        return files
+
+    def set_level(self, level):
+        self.write_config(('{"level": %d}' % level).encode("ascii"))
+
+    def assert_level_installed(self, files, level):
+        """Cada archivo del destino es lo que da la referencia de Python (render_expected) y el estado
+        guarda written = hash de lo escrito y level = nivel."""
+        for rel, data in level_expected(files, level).items():
+            self.assertEqual(read(self.target, rel), data, rel)
+        self.assert_state(level, level_hashes(files, level))
+
+    def real_repo_source(self):
+        raw = read(ROOT, "install-manifest.json")
+        write(self.src, "install-manifest.json", raw)
+        files = {}
+        for entry in json.loads(raw)["files"]:
+            files[entry["path"]] = read(ROOT, entry["path"])
+            write(self.src, entry["path"], files[entry["path"]])
+        return files
+
+    def test_t4_case20_clean_install_levels_1_to_4(self):
+        spots = {1: ("atlas", b"model: sonnet\neffort: medium\n"), 3: ("atlas", b"model: opus\neffort: medium\n"),
+                 4: ("atlas", b"model: opus\n")}
         for level in (1, 2, 3, 4):
             with self.subTest(level=level):
-                self.make_source()
-                self.write_config(('{"level": %d}' % level).encode("ascii"))
-                before = snapshot(self.target)
+                files = self.make_level_source()
+                self.set_level(level)
+                self.install_ok()
+                self.assert_level_installed(files, level)
+                for rel in LEVEL_FIXED:
+                    self.assertEqual(read(self.target, rel), files[rel], rel)
+                if level in spots:
+                    agent, lines = spots[level]
+                    self.assertIn(lines, read(self.target, "agents/%s.md" % agent))
+                state = json.loads(read(self.target, "synclayer-manifest.json"))
+                self.assertEqual({f["level"] for f in state["files"]}, {level})
+                for f in state["files"]:
+                    self.assertEqual(f["written"], bm.canonical_sha256(read(self.target, f["path"])))
+                    self.assertEqual(f["sha256"], bm.canonical_sha256(files[f["path"]]))
+                self.assertEqual(self.leftover_temps(), [])
+                shutil.rmtree(self.target)
+
+    def test_t4_case21_only_model_and_effort_lines_change(self):
+        hooks_block = "\n".join(SENTINEL_HOOKS).encode("ascii") + b"\n"
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                files = self.make_level_source()
+                self.set_level(level)
+                self.install_ok()
+                for rel, data in files.items():
+                    got = read(self.target, rel)
+                    self.assertNotIn(b"\r", got, rel)
+                    self.assertTrue(got.endswith(b"\n"), rel)
+                    if not rel.startswith("agents/"):
+                        continue
+                    front_in, rest_in = split_front(data)
+                    front_out, rest_out = split_front(got)
+                    keep = lambda lines: [l for l in lines if not l.startswith(("model:", "effort:"))]
+                    self.assertEqual(keep(front_out), keep(front_in), rel)
+                    self.assertEqual(rest_out, rest_in, rel)
+                    self.assertIn(len(front_out) - len(front_in), (0, 1), rel)
+                    self.assertEqual(got.count(b"\nmodel: linea del cuerpo, no se toca\n"), 1, rel)
+                self.assertIn(hooks_block, read(self.target, "agents/sentinel.md"))
+                shutil.rmtree(self.target)
+
+    def test_t4_case22_crlf_source_gives_the_same_result_as_lf(self):
+        for level in (2, 3):
+            with self.subTest(level=level):
+                files = self.make_level_source(crlf=True)
+                self.assertIn(b"\r\n", read(self.src, "agents/atlas.md"))
+                self.set_level(level)
+                self.install_ok()
+                self.assert_level_installed(files, level)
+                for rel in files:
+                    self.assertNotIn(b"\r", read(self.target, rel), rel)
+                shutil.rmtree(self.target)
+
+    def test_t4_case23_existing_effort_is_replaced_or_kept(self):
+        files = dict(LEVEL_SAMPLE)
+        files["agents/atlas.md"] = agent_md("atlas", "claude-fable-5-2", before=["effort: max"])
+        files["agents/forge.md"] = agent_md("forge", "sonnet", after=["effort: xhigh"])
+        files["agents/scout.md"] = agent_md("scout", "sonnet", before=["effort: low"])
+        for level in (2, 3):
+            with self.subTest(level=level):
+                self.make_level_source(files)
+                self.set_level(level)
+                self.install_ok()
+                self.assert_level_installed(files, level)
+                table = lr.read_script_table()
+                for agent in ("atlas", "forge", "scout"):
+                    front, _rest = split_front(read(self.target, "agents/%s.md" % agent))
+                    efforts = [l for l in front if l.startswith("effort:")]
+                    self.assertEqual(len(efforts), 1, agent)
+                    effort = table[(level, agent)][1]
+                    if effort != "-":
+                        self.assertEqual(efforts, ["effort: " + effort], agent)
+                    else:
+                        self.assertEqual(efforts, [{"forge": "effort: xhigh", "scout": "effort: low"}[agent]], agent)
+                # en su sitio: la linea de atlas sigue antes de model:
+                front, _rest = split_front(read(self.target, "agents/atlas.md"))
+                self.assertLess([l.split(":")[0] for l in front].index("effort"), [l.split(":")[0] for l in front].index("model"))
+                shutil.rmtree(self.target)
+
+    DEFECTS = [
+        ("sin model:", agent_md("atlas", None), "debe haber exactamente una linea model:"),
+        ("model: duplicado", agent_md("atlas", "claude-fable-5-2", after=["model: opus"]),
+         "debe haber exactamente una linea model:"),
+        ("effort: duplicado", agent_md("atlas", "claude-fable-5-2", before=["effort: low", "effort: high"]),
+         "hay mas de una linea effort:"),
+        ("sin cierre", agent_md("atlas", "claude-fable-5-2").replace(b"\n---\n", b"\n", 1), "frontmatter sin cierre"),
+        ("primera linea en blanco", b"\n" + agent_md("atlas", "claude-fable-5-2"), "la primera linea no es ---"),
+        ("BOM", b"\xef\xbb\xbf" + agent_md("atlas", "claude-fable-5-2"), "la primera linea no es ---"),
+        # Renderizado estructural (auditor y shield): un origen manipulado que pasa el Paso 2 no puede dejar YAML distinto.
+        ("CR suelto tras model:", agent_md("atlas", "sonnet\rhooks:", after=["  PreToolUse: x"]), "retorno de carro"),
+        ("CR suelto antes de model:", agent_md("atlas", "claude-fable-5-2", before=["color: green\rmodel: opus"]),
+         "retorno de carro"),
+        ("CR suelto antes de effort:", agent_md("atlas", "claude-fable-5-2", before=["color: green\reffort: max"]),
+         "retorno de carro"),
+        ("tabulador", agent_md("atlas", "claude-fable-5-2", before=["extra:\tvalor"]), "tabulador"),
+        ("model: bloque literal", agent_md("atlas", "|", after=["  claude-fable-5-2"]), "indicador YAML"),
+        ("model: bloque plegado", agent_md("atlas", ">", after=["  claude-fable-5-2"]), "indicador YAML"),
+        ("model: lista", agent_md("atlas", None, after=["model:", "  - x"]), "linea model: del origen"),
+        ("model: ancla", agent_md("atlas", "&m sonnet"), "indicador YAML"),
+        ("model: comentario", agent_md("atlas", "sonnet # nota"), "linea model: del origen"),
+        ("model: comilla sin cerrar", agent_md("atlas", "'sonnet"), "indicador YAML"),
+        ("effort: comentario", agent_md("atlas", "claude-fable-5-2", before=["effort: max # c"]), "linea effort: del origen"),
+        ("model: continuacion", agent_md("atlas", "sonnet", after=["  mas"]), "continuacion"),
+        ("effort: continuacion", agent_md("atlas", "claude-fable-5-2", before=["effort: max", "  mas"]), "continuacion"),
+        ("segundo hooks:", agent_md("atlas", "claude-fable-5-2", after=["hooks:", "  a: b", "hooks:", "  c: d"]),
+         "autocomprobacion"),
+        ("--- con espacio final", agent_md("atlas", "claude-fable-5-2", before=["--- "]), "forma clave"),
+        ("linea ...", agent_md("atlas", "claude-fable-5-2", before=["..."]), "forma clave"),
+        # Regla comun (shield y auditor): ASCII imprimible, lineas de primer nivel con forma `clave:` y valores sin indicador.
+        ("NEL (U+0085) entre dos claves", agent_md("atlas", "claude-fable-5-2", before=["color: green\x85model: opus"]),
+         "retorno de carro"),
+        ("U+2028 en una linea", agent_md("atlas", "claude-fable-5-2", before=["color: green\xe2\x80\xa8x: y"]),
+         "retorno de carro"),
+        ("--- seguido de NBSP", agent_md("atlas", "claude-fable-5-2", before=["---\xc2\xa0"]), "retorno de carro"),
+        ("--- seguido de U+2028", agent_md("atlas", "claude-fable-5-2", before=["---\xe2\x80\xa8"]), "retorno de carro"),
+        ("... seguido de NBSP", agent_md("atlas", "claude-fable-5-2", before=["...\xc2\xa0"]), "retorno de carro"),
+        ("BOM interior delante de hooks: x", agent_md("atlas", "claude-fable-5-2", before=["\xef\xbb\xbfhooks: x"]),
+         "retorno de carro"),
+        ("hooks : x", agent_md("atlas", "claude-fable-5-2", before=["hooks : x"]), "forma clave"),
+        ('"hooks": x', agent_md("atlas", "claude-fable-5-2", before=['"hooks": x']), "forma clave"),
+        ("? hooks / : x", agent_md("atlas", "claude-fable-5-2", before=["? hooks", ": x"]), "forma clave"),
+        ("{hooks: none}", agent_md("atlas", "claude-fable-5-2", before=["{hooks: none}"]), "forma clave"),
+        ("model : opus", agent_md("atlas", "claude-fable-5-2", before=["model : opus"]), "forma clave"),
+        ("lista de flujo abierta con model: dentro", agent_md("atlas", "sonnet", before=["flow: [Read, Write,"],
+                                                              after=["Grep]"]), "forma clave"),
+        ("lista de flujo abierta con la continuacion sangrada", agent_md("atlas", "sonnet", before=["flow: [Read, Write,"],
+                                                                         after=["  Grep]"]), "indicador YAML"),
+        ("comillas abiertas de otra clave", agent_md("atlas", "sonnet", before=['zz: "a'], after=['b: c"']),
+         "indicador YAML"),
+        ("valor con corchete", agent_md("atlas", "claude-fable-5-2", before=["k: [a]"]), "indicador YAML"),
+        ("valor con llave", agent_md("atlas", "claude-fable-5-2", before=["k: {a: b}"]), "indicador YAML"),
+        ("valor con ancla de alias", agent_md("atlas", "claude-fable-5-2", before=["k: *a"]), "indicador YAML"),
+        ("valor con etiqueta", agent_md("atlas", "claude-fable-5-2", before=["k: !tag x"]), "indicador YAML"),
+        ("valor con porcentaje", agent_md("atlas", "claude-fable-5-2", before=["k: %x"]), "indicador YAML"),
+        ("valor con arroba", agent_md("atlas", "claude-fable-5-2", before=["k: @x"]), "indicador YAML"),
+        ("valor con acento grave", agent_md("atlas", "claude-fable-5-2", before=["k: `x"]), "indicador YAML"),
+        ("valor con comilla doble", agent_md("atlas", "claude-fable-5-2", before=['k: "x']), "indicador YAML"),
+    ]
+
+    def test_t4_the_reference_renderer_rejects_the_same_defects(self):
+        # render_expected (referencia independiente, Python) tiene las mismas reglas: no comparte el punto ciego.
+        for name, data, _motivo in self.DEFECTS:
+            for effort in ("-", "medium"):
+                with self.subTest(case=name, effort=effort):
+                    with self.assertRaises(ValueError):
+                        lr.render_expected(data, "sonnet", effort)
+
+    def test_t4_case24_defective_frontmatter_exit1_in_both_modes_and_writes_nothing(self):
+        for name, data, motivo in self.DEFECTS:
+            for level in (3, 1):
+                with self.subTest(case=name, level=level):
+                    files = dict(LEVEL_SAMPLE)
+                    files["agents/atlas.md"] = data
+                    self.make_level_source(files)
+                    self.set_level(level)
+                    before = snapshot(self.target)
+                    listing = sorted(os.listdir(self.tmp))
+                    for mode in (["-DryRun"], []):
+                        code, out, err = self.run_install(*mode)
+                        self.assertEqual(code, 1, out + err)
+                        self.assertIn("error: no se puede aplicar el nivel %d a agents/atlas.md: " % level, err)
+                        self.assertIn(motivo, err)
+                        self.assertIn(". No se escribio nada.", err)
+                        self.assertTrue(err.isascii(), repr(err))
+                        self.assertNotIn("Copiado", out)
+                        self.assertEqual(snapshot(self.target), before)
+                        self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+                    shutil.rmtree(self.target)
+
+    def test_t4_case24_a_defect_only_matters_where_the_agent_is_rendered(self):
+        # Nivel 5 no renderiza; auditor no es modificable: el mismo defecto no detiene la instalacion.
+        for name, data, _motivo in self.DEFECTS:
+            with self.subTest(case=name, level=5):
+                files = dict(LEVEL_SAMPLE)
+                files["agents/atlas.md"] = data
+                self.make_level_source(files)
+                self.install_ok()
+                self.assertEqual(read(self.target, "agents/atlas.md"), data.replace(b"\r\n", b"\n"))
+                shutil.rmtree(self.target)
+            with self.subTest(case=name, fixed_agent_at_level=3):
+                files = dict(LEVEL_SAMPLE)
+                files["agents/auditor.md"] = data
+                self.make_level_source(files)
+                self.set_level(3)
+                self.install_ok()
+                self.assertEqual(read(self.target, "agents/auditor.md"), data)
+                shutil.rmtree(self.target)
+
+    def test_t4_case25_indented_model_and_body_model_are_not_touched(self):
+        files = dict(LEVEL_SAMPLE)
+        files["agents/atlas.md"] = agent_md("atlas", "claude-fable-5-2",
+                                            before=["meta:", "  model: indentado-antes", "  effort: indentado-antes"])
+        self.make_level_source(files)
+        self.set_level(3)
+        self.install_ok()
+        self.assert_level_installed(files, 3)
+        got = read(self.target, "agents/atlas.md")
+        self.assertIn(b"\n  model: indentado-antes\n  effort: indentado-antes\nmodel: opus\neffort: medium\n", got)
+        self.assertIn(b"\nmodel: linea del cuerpo, no se toca\n", got)
+        self.assertEqual(got.count(b"effort: medium"), 1)
+
+    def test_t4_case26_cell_equal_to_the_source_keeps_the_bytes_and_is_igual(self):
+        files = self.make_level_source()
+        self.install_ok()
+        self.set_level(4)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        states = self.states(out)
+        expected = level_expected(files, 4)
+        for rel, data in files.items():
+            self.assertEqual(states[rel], "IGUAL" if expected[rel] == data else "ACTUALIZAR", rel)
+        self.assertEqual(states["agents/forge.md"], "IGUAL")
+        self.assertEqual(states["agents/atlas.md"], "ACTUALIZAR")
+        self.assertEqual(read(self.target, "agents/forge.md"), files["agents/forge.md"])
+        self.assert_level_installed(files, 4)
+        self.assertEqual(sorted(self.tree(backup)),
+                         sorted([os.path.join(*r.split("/")) for r in files if expected[r] != files[r]] + ["synclayer-manifest.json"]))
+
+    def test_t4_levels_down_and_up_with_intact_files_are_actualizar_with_backup(self):
+        files = self.make_level_source()
+        self.install_ok()
+        previous = 5
+        for step, level in enumerate((3, 1, 5, 2)):
+            with self.subTest(step=step, level=level):
+                self.set_level(level)
+                backup = os.path.join(self.tmp, "respaldo%d" % step)
+                old = level_expected(files, previous)
+                new = level_expected(files, level)
+                out, err = self.install_ok("-BackupDir", backup)
+                states = self.states(out)
+                changed = [rel for rel in files if old[rel] != new[rel]]
+                self.assertTrue(changed)
+                for rel in files:
+                    self.assertEqual(states[rel], "ACTUALIZAR" if rel in changed else "IGUAL", rel)
+                self.assert_level_installed(files, level)
+                saved = self.tree(backup)
+                self.assertEqual(sorted(saved), sorted([os.path.join(*r.split("/")) for r in changed] + ["synclayer-manifest.json"]))
+                for rel in changed:
+                    self.assertEqual(saved[os.path.join(*rel.split("/"))], old[rel], rel)
+                previous = level
+
+    def test_t4_back_to_level_5_restores_the_repository_bytes(self):
+        files = self.make_level_source()
+        self.set_level(1)
+        self.install_ok()
+        self.assertNotEqual(read(self.target, "agents/atlas.md"), files["agents/atlas.md"])
+        self.set_level(5)
+        out, err = self.install_ok()
+        for rel, data in files.items():
+            self.assertEqual(read(self.target, rel), data, rel)
+        self.assert_state(5)
+
+    def test_t4_reinstalling_the_same_level_is_igual_and_writes_nothing(self):
+        for level in (1, 3, 4):
+            with self.subTest(level=level):
+                self.make_level_source()
+                self.set_level(level)
+                self.install_ok()
+                snap = snapshot(self.target)
                 listing = sorted(os.listdir(self.tmp))
+                out, err = self.install_ok()
+                self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+                self.assertEqual(snapshot(self.target), snap)
+                self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+                self.assertIn("escritos=0", out)
+                self.assertNotIn("Respaldo", out)
+                shutil.rmtree(self.target)
+
+    def test_t4_case27_modifiable_agent_missing_from_the_manifest_is_not_an_error(self):
+        files = {rel: data for rel, data in LEVEL_SAMPLE.items() if rel not in ("agents/oracle.md", "agents/scout.md")}
+        self.make_level_source(files)
+        self.set_level(2)
+        out, err = self.install_ok()
+        self.assertNotIn("oracle", out)
+        self.assertNotIn("scout", out)
+        self.assertEqual(len([l for l in out.splitlines() if l.startswith("Ajuste:")]), 4)
+        self.assert_level_installed(files, 2)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "oracle.md")))
+
+    def test_t4_case28_dryrun_level_3_prints_nivel_and_ajuste_lines_and_writes_nothing(self):
+        self.make_level_source()
+        self.set_level(3)
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        lines = out.splitlines()
+        self.assertIn("Nivel: 3 (synclayer-config.json)", lines)
+        table = lr.read_script_table()
+        want = ["Ajuste: agents/%s.md  model: %s  effort: %s" % ((a,) + table[(3, a)])
+                for a in sorted(lr.read_ps_list("LevelAgents"))]
+        got = [l for l in lines if l.startswith("Ajuste:")]
+        self.assertEqual(got, want)
+        self.assertIn("Ajuste: agents/atlas.md  model: opus  effort: medium", got)
+        self.assertIn("Ajuste: agents/sentinel.md  model: sonnet  effort: -", got)
+        self.assertGreater(lines.index(got[0]), [i for i, l in enumerate(lines) if l.startswith("Resumen:")][0])
+        self.assertEqual(self.states(out), {rel: "NUEVO" for rel in LEVEL_SAMPLE})
+        self.assertEqual(snapshot(self.target), before)
+        self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+
+    def test_t4_case29_real_repo_as_source_levels_1_to_4(self):
+        agents = lr.read_ps_list("LevelAgents")
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                files = self.real_repo_source()
+                self.set_level(level)
+                self.install_ok()
+                got = sorted(os.path.relpath(os.path.join(d, f), self.target).replace("\\", "/")
+                             for d, _s, fs in os.walk(self.target) for f in fs)
+                self.assertEqual(got, sorted(list(files) + ["synclayer-manifest.json", self.CONFIG]))
+                self.assertEqual(len(files), 12)
+                manifest = {e["path"]: e["sha256"] for e in json.loads(read(ROOT, "install-manifest.json"))["files"]}
+                modifiable = ["agents/%s.md" % a for a in agents]
+                self.assertEqual(len([r for r in files if r in modifiable]), 6)
+                for rel in files:
+                    if rel in modifiable:
+                        name = rel.split("/")[1][:-3]
+                        model, effort = lr.read_script_table()[(level, name)]
+                        self.assertEqual(read(self.target, rel), lr.render_expected(files[rel].replace(b"\r\n", b"\n"), model, effort), rel)
+                    else:
+                        self.assertEqual(bm.canonical_sha256(read(self.target, rel)), manifest[rel], rel)
+                self.assert_level_installed(files, level)
+                self.assertIn(b"hooks:", read(self.target, "agents/sentinel.md"))
+                self.assertFalse(os.path.exists(os.path.join(self.target, "docs", "brand")))
+                shutil.rmtree(self.target)
+
+    def test_t4_case30_post_verification_catches_an_altered_file_at_level_3(self):
+        self.make_level_source()
+        self.set_level(3)
+        atlas = os.path.join(self.target, "agents", "atlas.md").replace("'", "''")
+        self.patch_script("# Paso 8:", "[System.IO.File]::AppendAllText('%s', 'x')" % atlas)
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("la verificacion posterior fallo", err)
+        self.assertIn("agents/atlas.md", err)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "synclayer-manifest.json")))
+
+    def test_t4_the_renderer_runs_only_for_the_six_agents_and_never_at_level_5(self):
+        marker = "[Console]::Out.WriteLine('RENDER-LLAMADO ' + $Model + ' ' + $Effort)"
+        for config, calls in ((None, 0), (b'{"level": 5}', 0), (b"{}", 0), (b'{"level": 3}', 6)):
+            with self.subTest(config=config):
+                self.make_level_source()
+                self.patch_script("function ConvertTo-LevelBytes", marker)
+                if config is not None:
+                    self.write_config(config)
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 0, out + err)
+                    self.assertEqual(len([l for l in out.splitlines() if l.startswith("RENDER-LLAMADO")]), calls)
+                    self.assertEqual(len([l for l in out.splitlines() if l.startswith("Ajuste:")]), calls)
+                shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+                shutil.rmtree(self.target, ignore_errors=True)
+
+    def test_t4_level_5_writes_the_source_bytes_and_prints_no_ajuste(self):
+        files = self.make_level_source()
+        out, err = self.install_ok()
+        for rel, data in files.items():
+            self.assertEqual(read(self.target, rel), data, rel)
+        self.assertNotIn("Ajuste:", out)
+        self.assert_state(5)
+
+    def test_t4_a_value_outside_the_closed_lists_is_never_rendered(self):
+        # La funcion se invoca directamente con celdas fuera de las listas cerradas: exit 1 antes de escribir.
+        self.make_level_source()
+        path = os.path.join(self.src, "install.ps1")
+        with open(path, "rb") as f:
+            text = f.read().decode("ascii")
+        call = "$cell = Get-LevelCell $level $agentMatch.Groups[1].Value"
+        self.assertEqual(text.count(call), 1)
+        for bad in ("@{ Model = 'opus-9'; Effort = '-' }", "@{ Model = 'opus'; Effort = 'extreme' }",
+                    "@{ Model = 'Opus'; Effort = '-' }", "@{ Model = 'opus'; Effort = '' }"):
+            with self.subTest(cell=bad):
+                with open(path, "wb") as f:
+                    f.write(text.replace(call, "$cell = " + bad).encode("ascii"))
+                self.set_level(3)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("fuera de la lista cerrada", err)
+                self.assertIn(". No se escribio nada.", err)
+                shutil.rmtree(self.target)
+
+    def test_t4_self_check_catches_a_corrupted_result_with_coverage(self):
+        # Se estropea $result justo despues de construirlo (hooks: pasa a hookz:): la autocomprobacion debe
+        # detenerlo con exit 1 en ambos modos y sin escribir nada.
+        self.make_level_source()
+        self.set_level(3)
+        self.patch_script("$result = $latin1.GetBytes(",
+                          "$result = $latin1.GetBytes($latin1.GetString($result).Replace('hooks:', 'hookz:'))")
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("autocomprobacion", err)
+                self.assertIn(". No se escribio nada.", err)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(snapshot(self.target), before)
+
+    def test_t4_case25_variants(self):
+        base = "claude-fable-5-2"
+        ok = [
+            ("sin salto final", agent_md("atlas", base).rstrip(b"\n")),
+            ("--- y model: en el cuerpo", agent_md("atlas", base) + b"---\nmodel: otro\neffort: low\nmas texto\n"),
+            ("Model: en mayusculas", agent_md("atlas", base, before=["Model: no-tocar"])),
+            ("effort: max antes de model:", agent_md("atlas", base, before=["effort: max"])),
+        ]
+        rejected = [
+            ("model: con comentario", agent_md("atlas", "x # nota")),
+            ("effort: con comentario antes de model:", agent_md("atlas", base, before=["effort: max # c"])),
+            ("CR suelto", agent_md("atlas", base, before=["color: green\rx: y"])),
+        ]
+        for name, data in ok:
+            with self.subTest(case=name):
+                files = dict(LEVEL_SAMPLE)
+                files["agents/atlas.md"] = data
+                self.make_level_source(files)
+                self.set_level(3)
+                self.install_ok()
+                self.assert_level_installed(files, 3)
+                got = read(self.target, "agents/atlas.md")
+                if name.startswith("Model:"):
+                    self.assertIn(b"\nModel: no-tocar\n", got)
+                if name.startswith("---"):
+                    self.assertIn(b"\n---\nmodel: otro\neffort: low\nmas texto\n", got)
+                if name == "sin salto final":
+                    self.assertFalse(got.endswith(b"\n"))
+                shutil.rmtree(self.target)
+        for name, data in rejected:
+            with self.subTest(case=name):
+                files = dict(LEVEL_SAMPLE)
+                files["agents/atlas.md"] = data
+                self.make_level_source(files)
+                self.set_level(3)
+                before = snapshot(self.target)
                 for mode in (["-DryRun"], []):
                     code, out, err = self.run_install(*mode)
                     self.assertEqual(code, 1, out + err)
-                    self.assertIn("error: el nivel %d aun no se puede aplicar en esta version." % level, err.splitlines())
-                    self.assertNotIn("Copiado", out)
+                    self.assertIn("agents/atlas.md", err)
                     self.assertEqual(snapshot(self.target), before)
-                    self.assertEqual(sorted(os.listdir(self.tmp)), listing)
                 shutil.rmtree(self.target)
 
-    def test_t3_level_read_reaches_the_state_when_the_temporary_guard_is_patched_out(self):
-        # La guarda temporal impide un nivel 1 a 4 real; sin ella, el nivel leido va al estado (campo level
-        # de cada entrada) y los archivos siguen siendo los del origen. T4 sustituye esta prueba.
-        for level in (1, 3, 4):
+    def test_t4_level_5_output_is_the_same_as_before_the_levels(self):
+        # Quien no configura nada ve la misma salida que antes de T4 (literal fijado a partir del commit 2f25a64).
+        self.make_source()
+        out, err = self.install_ok()
+        lines = out.splitlines()
+        self.assertTrue(lines[0].startswith("Destino: "), lines[0])
+        self.assertEqual(lines[1:], [
+            "Nivel: 5 (por defecto; no hay synclayer-config.json)",
+            "NUEVO       agents/alfa.md",
+            "NUEVO       agents/beta.md",
+            "NUEVO       docs/agentes.md",
+            "NUEVO       hooks/agent_guard.py",
+            "NUEVO       rules/agentes.md",
+            "Resumen: NUEVO=5 IGUAL=0 ACTUALIZAR=0 MODIFICADO=0 HUERFANO=0",
+            "Copiado: hooks/agent_guard.py",
+            "Copiado: agents/alfa.md",
+            "Copiado: agents/beta.md",
+            "Copiado: docs/agentes.md",
+            "Copiado: rules/agentes.md",
+            "Verificado: 5 archivo(s) escritos coinciden con el manifiesto.",
+            "Estado: synclayer-manifest.json actualizado.",
+            "Instalacion terminada: escritos=5 IGUAL=0.",
+            "Recordatorio: reinicia las sesiones de Claude Code abiertas; no ven agentes nuevos o modificados.",
+            "Recordatorio: este instalador no toca settings.json ni CLAUDE.md; ~/.claude/CLAUDE.md debe apuntar a ~/.claude/rules/agentes.md.",
+            "Recordatorio: no hay sincronizacion automatica; repite la instalacion cuando cambien los archivos del repositorio.",
+        ])
+
+    def test_t4_verification_messages_name_what_they_compare_with(self):
+        for level, what in ((5, "el manifiesto"), (3, "lo esperado para el nivel 3"), (1, "lo esperado para el nivel 1")):
             with self.subTest(level=level):
-                self.make_source()
-                path = os.path.join(self.src, "install.ps1")
-                with open(path, "rb") as f:
-                    text = f.read().decode("ascii")
-                guard = "Stop-Install 1 ('error: el nivel ' + $level + ' aun no se puede aplicar en esta version.')"
-                self.assertEqual(text.count(guard), 1)
-                with open(path, "wb") as f:
-                    f.write(text.replace(guard, "$null = 0").encode("ascii"))
-                self.write_config(('{"level": %d}' % level).encode("ascii"))
+                self.make_level_source()
+                if level != 5:
+                    self.set_level(level)
                 out, err = self.install_ok()
-                self.assertIn("Nivel: %d (synclayer-config.json)" % level, out.splitlines())
-                self.assert_state(level)
-                for rel, data in SAMPLE.items():
-                    self.assertEqual(read(self.target, rel), data)
+                self.assertIn("Verificado: 12 archivo(s) escritos coinciden con %s." % what, out.splitlines())
                 shutil.rmtree(self.target)
-                shutil.copyfile(SCRIPT, path)
+                # Paso 7: los bytes escritos no son los esperados (inyectado antes de la escritura): exit 4.
+                self.make_level_source()
+                if level != 5:
+                    self.set_level(level)
+                self.patch_script("Write-Atomic $dest $outBytes[$rel] $existing", "$outBytes[$rel] = [byte[]]@(88)",
+                                  before=True)
+                code, out, err = self.run_install()
+                self.assertEqual(code, 4, out + err)
+                self.assertIn("el hash del archivo escrito no coincide con %s" % what, err)
+                shutil.rmtree(self.target)
+                shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+
+    # --- Fase 3, T2 (pendientes): Read-State con lectura unica y claves cerradas en el esquema 1 ---
+
+    def test_t2_read_state_reads_once_with_a_cap_on_what_was_read(self):
+        # Prueba estatica: la funcion no mide con FileInfo ni lee con ReadAllBytes; abre una vez (FileShare.Read) y
+        # lee como maximo el tope mas uno, como Read-LevelConfig. El limite exacto lo fija la prueba de 1048576 bytes.
+        with open(SCRIPT, "rb") as f:
+            text = f.read().decode("ascii").replace(chr(13) + chr(10), chr(10))
+        body = text.split("function Read-State(", 1)[1].split(chr(10) + "}" + chr(10), 1)[0]
+        self.assertNotIn("FileInfo", body)
+        self.assertNotIn("ReadAllBytes", body)
+        self.assertIn("[System.IO.FileShare]::Read", body)
+        self.assertIn("$StateMaxBytes + 1", body)
+
+    def test_t2_schema1_state_with_unknown_keys_is_absent_and_never_actualizar(self):
+        old = dict(SAMPLE)
+        old["agents/alfa.md"] = b"version anterior\n"
+        cases = [("control sin clave extra", None, 0), ("clave extra en la raiz", "root", 3),
+                 ("clave extra en una entrada", "entry", 3)]
+        for name, where, expected_code in cases:
+            with self.subTest(case=name):
+                self.make_source()
+                oldsrc = os.path.join(self.tmp, "viejo")
+                for rel, data in old.items():
+                    write(oldsrc, rel, data)
+                state = json.loads(manifest_for(oldsrc, sorted(old)))
+                if where == "root":
+                    state["extra"] = 1
+                elif where == "entry":
+                    state["files"][0]["extra"] = 1
+                write(self.target, "synclayer-manifest.json", (json.dumps(state, indent=2) + "\n").encode("ascii"))
+                for rel, data in old.items():
+                    write(self.target, rel, data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, expected_code, out + err)
+                if where is None:
+                    self.assertEqual(self.states(out)["agents/alfa.md"], "ACTUALIZAR")
+                else:
+                    self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+                    self.assertNotIn("ACTUALIZAR", self.states(out).values())
+                    self.assertIn("clave desconocida", err)
+                    self.assertIn("Se trata como ausente", err)
+                shutil.rmtree(self.target)
+                shutil.rmtree(oldsrc)
 
     # --- T6: avisos de variables de entorno (casos 38 y 39 del plan) ---
 
     WARN_FORCE = ("aviso: CLAUDE_CODE_SUBAGENT_MODEL_FORCE esta definida: Claude Code ignora el model: de los "
                   "agentes y el nivel %d no cambia el modelo.")
     WARN_EFFORT = "aviso: CLAUDE_CODE_EFFORT_LEVEL esta definida: tiene prioridad sobre el effort: de los agentes."
-
-    def patch_out_guard(self):
-        path = os.path.join(self.src, "install.ps1")
-        with open(path, "rb") as f:
-            text = f.read().decode("ascii")
-        guard = "Stop-Install 1 ('error: el nivel ' + $level + ' aun no se puede aplicar en esta version.')"
-        if guard not in text:
-            return  # ya parcheada en esta copia (una prueba que repite subpruebas)
-        with open(path, "wb") as f:
-            f.write(text.replace(guard, "$null = 0").encode("ascii"))
 
     def env_warnings(self, err):
         return [l for l in err.splitlines() if "CLAUDE_CODE_" in l]
@@ -2445,7 +3032,6 @@ class InstallCases:
         for level, name, env, expected, mode in cases:
             with self.subTest(level=level, combo=name, mode=mode):
                 self.make_source()
-                self.patch_out_guard()
                 self.write_config(('{"level": %d}' % level).encode("ascii"))
                 code, out, err = self.run_install(*mode, env_extra=env)
                 self.assertEqual(code, 0, out + err)
@@ -2463,23 +3049,22 @@ class InstallCases:
                 results = []
                 for env in ({}, {ENV_FORCE: "1", ENV_EFFORT: "high"}):
                     self.make_source()
-                    self.patch_out_guard()
                     self.write_config(b'{"level": 3}')
                     code, out, err = self.run_install(*mode, env_extra=env)
                     results.append((code, out, self.tree(self.target)))
                     shutil.rmtree(self.target)
                 self.assertEqual(results[0], results[1])
 
-    def test_t6_case38_warnings_are_seen_even_with_the_temporary_guard(self):
-        # La guarda temporal sigue dando exit 1; los avisos salen antes y no la cambian.
+    def test_t6_case38_warnings_come_before_the_dryrun_exit(self):
+        # Los avisos salen por stderr en -DryRun (que termina con exit 0) y no cambian el codigo.
         self.make_source()
         self.write_config(b'{"level": 2}')
         code, out, err = self.run_install("-DryRun", env_extra={ENV_FORCE: "x", ENV_EFFORT: "y"})
-        self.assertEqual(code, 1, out + err)
+        self.assertEqual(code, 0, out + err)
         lines = err.splitlines()
         self.assertIn(self.WARN_FORCE % 2, lines)
         self.assertIn(self.WARN_EFFORT, lines)
-        self.assertIn("error: el nivel 2 aun no se puede aplicar en esta version.", lines)
+        self.assertIn("Modo: -DryRun (no se escribe nada)", out.splitlines())
 
     def test_t6_case38_value_is_never_printed_and_control_characters_do_not_break(self):
         secret = "SECRETO-12345"
@@ -2494,7 +3079,6 @@ class InstallCases:
             for mode in (["-DryRun"], []):
                 with self.subTest(case=i, mode=mode):
                     self.make_source()
-                    self.patch_out_guard()
                     self.write_config(b'{"level": 4}')
                     code, out, err = self.run_install(*mode, env_extra={ENV_FORCE: value, ENV_EFFORT: value})
                     self.assertEqual(code, 0, out + err)
@@ -2508,7 +3092,6 @@ class InstallCases:
         # Dentro del proceso del instalador, justo antes de salir, las variables siguen como llegaron.
         # (Que el instalador no las defina ni las borre lo exige la prueba estatica de StaticChecks.)
         self.make_source()
-        self.patch_out_guard()
         self.patch_script("# Paso 10:", (
             "[Console]::Out.WriteLine('ENVCHK F=' + [System.Environment]::GetEnvironmentVariable('%s') + "
             "' E=' + [System.Environment]::GetEnvironmentVariable('%s'))" % ENV_OVERRIDE_VARS))
@@ -2520,7 +3103,6 @@ class InstallCases:
     def test_t6_run_install_strips_inherited_override_variables(self):
         # run_install no hereda las variables aunque la sesion que corre la suite las defina.
         self.make_source()
-        self.patch_out_guard()
         self.write_config(b'{"level": 3}')
         saved = {n: os.environ.get(n) for n in ENV_OVERRIDE_VARS}
         try:
@@ -2562,7 +3144,6 @@ class InstallCases:
         # Una variable "" pasada desde Python llega al instalador como ausente ($null en PS 5.1): esta
         # prueba fija «ausente / cadena vacia: sin aviso». La otra variable, con valor, si avisa.
         self.make_source()
-        self.patch_out_guard()
         self.write_config(b'{"level": 3}')
         code, out, err = self.run_install("-DryRun", env_extra={ENV_FORCE: "", ENV_EFFORT: ""})
         self.assertEqual(code, 0, out + err)
@@ -2574,7 +3155,6 @@ class InstallCases:
     def test_t6_whitespace_only_variable_with_level_3_does_warn(self):
         # Decision fijada: «existe y no esta vacia» (3.8). Solo espacios no es vacia: avisa (T7 lo documenta).
         self.make_source()
-        self.patch_out_guard()
         self.write_config(b'{"level": 3}')
         code, out, err = self.run_install("-DryRun", env_extra={ENV_FORCE: "   ", ENV_EFFORT: "   "})
         self.assertEqual(code, 0, out + err)
@@ -2706,7 +3286,7 @@ class InstallCases:
         self.make_source()
         os.makedirs(self.outside)
         link = os.path.join(self.target, "hooks")
-        self.patch_script("Write-Atomic $dest $canonSrc[$rel] $existing",
+        self.patch_script("Write-Atomic $dest $outBytes[$rel] $existing",
                           "[void][System.IO.Directory]::CreateDirectory('%s'); New-Item -ItemType Junction -Path '%s' -Value '%s' | Out-Null"
                           % (self.target.replace("'", "''"), link.replace("'", "''"), self.outside.replace("'", "''")),
                           before=True)
