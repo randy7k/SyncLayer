@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1172 pruebas, 152 saltadas (149 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1191 pruebas, 161 saltadas (158 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -218,7 +218,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (149 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (158 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

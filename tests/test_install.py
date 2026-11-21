@@ -34,6 +34,9 @@ PWSH = shutil.which("pwsh")
 NO_SHELL = "no hay powershell.exe ni pwsh en el PATH: pruebas de install.ps1 omitidas"
 PWSH_SKIP = "pwsh no esta en el PATH: compatibilidad con pwsh 7 NO verificada en este equipo"
 TIMEOUT = 120
+ENV_FORCE = "CLAUDE_CODE_SUBAGENT_MODEL_FORCE"
+ENV_EFFORT = "CLAUDE_CODE_EFFORT_LEVEL"
+ENV_OVERRIDE_VARS = (ENV_FORCE, ENV_EFFORT)
 
 
 def shell_version(exe):
@@ -122,6 +125,14 @@ class StaticChecks(unittest.TestCase):
         for personal in personal_tokens():
             self.assertNotIn(personal, text.lower())
 
+    def test_script_never_sets_or_removes_environment_variables(self):
+        # T6: el instalador solo lee el entorno (GetEnvironmentVariable); nunca define, cambia ni borra.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        self.assertNotRegex(text, r"(?i)SetEnvironmentVariable|\bsetx\b|\benv:|\[Environment\]::Set")
+        # el detector mismo: una linea de escritura de entorno se detecta
+        self.assertRegex("[System.Environment]::SetEnvironmentVariable('X', 'y')", r"(?i)SetEnvironmentVariable")
+        self.assertRegex("$env:X = 'y'", r"(?i)\benv:")
+
     def test_allowed_pattern_matches_generator(self):
         # Con core.autocrlf git deja install.ps1 en CRLF al hacer checkout o merge: el ancla `$`
         # de la regex no tolera el retorno de carro (CR), asi que se normaliza antes de buscar.
@@ -179,6 +190,10 @@ class InstallCases:
             cmd += ["-Target", self.target]
         cmd += list(args)
         env = dict(os.environ)
+        # Las dos variables que anulan model: y effort: (avisos de T6) no se heredan: la suite puede correr
+        # dentro de una sesion que las defina. Una prueba que las necesite las pasa en env_extra.
+        for name in ENV_OVERRIDE_VARS:
+            env.pop(name, None)
         drive, tail = os.path.splitdrive(self.home)
         env.update({"USERPROFILE": self.home, "HOME": self.home,
                     "HOMEDRIVE": drive, "HOMEPATH": tail or self.home})
@@ -2394,6 +2409,176 @@ class InstallCases:
                     self.assertEqual(read(self.target, rel), data)
                 shutil.rmtree(self.target)
                 shutil.copyfile(SCRIPT, path)
+
+    # --- T6: avisos de variables de entorno (casos 38 y 39 del plan) ---
+
+    WARN_FORCE = ("aviso: CLAUDE_CODE_SUBAGENT_MODEL_FORCE esta definida: Claude Code ignora el model: de los "
+                  "agentes y el nivel %d no cambia el modelo.")
+    WARN_EFFORT = "aviso: CLAUDE_CODE_EFFORT_LEVEL esta definida: tiene prioridad sobre el effort: de los agentes."
+
+    def patch_out_guard(self):
+        path = os.path.join(self.src, "install.ps1")
+        with open(path, "rb") as f:
+            text = f.read().decode("ascii")
+        guard = "Stop-Install 1 ('error: el nivel ' + $level + ' aun no se puede aplicar en esta version.')"
+        if guard not in text:
+            return  # ya parcheada en esta copia (una prueba que repite subpruebas)
+        with open(path, "wb") as f:
+            f.write(text.replace(guard, "$null = 0").encode("ascii"))
+
+    def env_warnings(self, err):
+        return [l for l in err.splitlines() if "CLAUDE_CODE_" in l]
+
+    def test_t6_case38_warnings_for_each_variable_with_level_1_to_4(self):
+        # Nivel 3: las cuatro combinaciones en los dos modos. Niveles 1, 2 y 4: solo «ambas» en -DryRun
+        # (la condicion es la misma para todo nivel 1 a 4; el nivel va en el texto del aviso de FORCE).
+        secret = "SECRETO-12345"
+        both = {ENV_FORCE: secret, ENV_EFFORT: secret}
+        combos = [
+            ("solo FORCE", {ENV_FORCE: secret}, [self.WARN_FORCE]),
+            ("solo EFFORT", {ENV_EFFORT: secret}, [self.WARN_EFFORT]),
+            ("ambas", both, [self.WARN_FORCE, self.WARN_EFFORT]),
+            ("ninguna", {}, []),
+        ]
+        cases = [(3, name, env, expected, mode) for name, env, expected in combos for mode in (["-DryRun"], [])]
+        cases += [(level, "ambas", both, [self.WARN_FORCE, self.WARN_EFFORT], ["-DryRun"]) for level in (1, 2, 4)]
+        for level, name, env, expected, mode in cases:
+            with self.subTest(level=level, combo=name, mode=mode):
+                self.make_source()
+                self.patch_out_guard()
+                self.write_config(('{"level": %d}' % level).encode("ascii"))
+                code, out, err = self.run_install(*mode, env_extra=env)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.env_warnings(err), [w % level if "%d" in w else w for w in expected])
+                self.assertNotIn(secret, out + err)
+                self.assertEqual(self.states(out), {rel: "NUEVO" for rel in SAMPLE})
+                if mode:
+                    self.assertFalse(os.path.exists(os.path.join(self.target, "agents")))
+                shutil.rmtree(self.target)
+
+    def test_t6_case38_warning_does_not_change_exit_code_or_output(self):
+        # Con y sin las variables: mismo codigo, mismo stdout, mismo resultado en disco.
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                results = []
+                for env in ({}, {ENV_FORCE: "1", ENV_EFFORT: "high"}):
+                    self.make_source()
+                    self.patch_out_guard()
+                    self.write_config(b'{"level": 3}')
+                    code, out, err = self.run_install(*mode, env_extra=env)
+                    results.append((code, out, self.tree(self.target)))
+                    shutil.rmtree(self.target)
+                self.assertEqual(results[0], results[1])
+
+    def test_t6_case38_warnings_are_seen_even_with_the_temporary_guard(self):
+        # La guarda temporal sigue dando exit 1; los avisos salen antes y no la cambian.
+        self.make_source()
+        self.write_config(b'{"level": 2}')
+        code, out, err = self.run_install("-DryRun", env_extra={ENV_FORCE: "x", ENV_EFFORT: "y"})
+        self.assertEqual(code, 1, out + err)
+        lines = err.splitlines()
+        self.assertIn(self.WARN_FORCE % 2, lines)
+        self.assertIn(self.WARN_EFFORT, lines)
+        self.assertIn("error: el nivel 2 aun no se puede aplicar en esta version.", lines)
+
+    def test_t6_case38_value_is_never_printed_and_control_characters_do_not_break(self):
+        secret = "SECRETO-12345"
+        values = [
+            secret,
+            "\x1b[31m" + secret + "\x07\x08",
+            secret + "\r\n" + secret + "\tfin",
+            "é‮" + secret,
+            secret * 2000,
+        ]
+        for i, value in enumerate(values):
+            for mode in (["-DryRun"], []):
+                with self.subTest(case=i, mode=mode):
+                    self.make_source()
+                    self.patch_out_guard()
+                    self.write_config(b'{"level": 4}')
+                    code, out, err = self.run_install(*mode, env_extra={ENV_FORCE: value, ENV_EFFORT: value})
+                    self.assertEqual(code, 0, out + err)
+                    self.assertEqual(self.env_warnings(err), [self.WARN_FORCE % 4, self.WARN_EFFORT])
+                    self.assertNotIn("SECRETO", out + err)
+                    self.assertNotIn("\x1b", out + err)
+                    self.assertTrue(err.isascii(), repr(err))
+                    shutil.rmtree(self.target)
+
+    def test_t6_case38_the_installer_reads_the_override_variables_unchanged(self):
+        # Dentro del proceso del instalador, justo antes de salir, las variables siguen como llegaron.
+        # (Que el instalador no las defina ni las borre lo exige la prueba estatica de StaticChecks.)
+        self.make_source()
+        self.patch_out_guard()
+        self.patch_script("# Paso 10:", (
+            "[Console]::Out.WriteLine('ENVCHK F=' + [System.Environment]::GetEnvironmentVariable('%s') + "
+            "' E=' + [System.Environment]::GetEnvironmentVariable('%s'))" % ENV_OVERRIDE_VARS))
+        self.write_config(b'{"level": 3}')
+        code, out, err = self.run_install(env_extra={ENV_FORCE: "valorF", ENV_EFFORT: "valorE"})
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("ENVCHK F=valorF E=valorE", out.splitlines())
+
+    def test_t6_run_install_strips_inherited_override_variables(self):
+        # run_install no hereda las variables aunque la sesion que corre la suite las defina.
+        self.make_source()
+        self.patch_out_guard()
+        self.write_config(b'{"level": 3}')
+        saved = {n: os.environ.get(n) for n in ENV_OVERRIDE_VARS}
+        try:
+            for n in ENV_OVERRIDE_VARS:
+                os.environ[n] = "HEREDADO-SECRETO"
+            code, out, err = self.run_install("-DryRun")
+        finally:
+            for n, v in saved.items():
+                if v is None:
+                    os.environ.pop(n, None)
+                else:
+                    os.environ[n] = v
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.env_warnings(err), [])
+        self.assertNotIn("HEREDADO", out + err)
+
+    def test_t6_case39_no_warning_with_level_5(self):
+        env = {ENV_FORCE: "SECRETO-12345", ENV_EFFORT: "SECRETO-12345"}
+        for mode in (["-DryRun"], []):
+            for config in (None, b'{"level": 5}', b"{}"):
+                with self.subTest(mode=mode, config=config):
+                    self.make_source()
+                    if config is not None:
+                        self.write_config(config)
+                    clean = self.run_install(*mode)
+                    code0, out0, err0 = clean
+                    snap0 = self.tree(self.target)
+                    shutil.rmtree(self.target, ignore_errors=True)
+                    if config is not None:
+                        self.write_config(config)
+                    code, out, err = self.run_install(*mode, env_extra=env)
+                    self.assertEqual((code, out, err), clean)
+                    self.assertEqual(code, 0, out + err)
+                    self.assertEqual(self.env_warnings(err), [])
+                    self.assertEqual(self.tree(self.target), snap0)
+                    shutil.rmtree(self.target, ignore_errors=True)
+
+    def test_t6_case39_absent_or_empty_string_variable_with_level_3_gives_no_warning(self):
+        # Una variable "" pasada desde Python llega al instalador como ausente ($null en PS 5.1): esta
+        # prueba fija «ausente / cadena vacia: sin aviso». La otra variable, con valor, si avisa.
+        self.make_source()
+        self.patch_out_guard()
+        self.write_config(b'{"level": 3}')
+        code, out, err = self.run_install("-DryRun", env_extra={ENV_FORCE: "", ENV_EFFORT: ""})
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.env_warnings(err), [])
+        code, out, err = self.run_install("-DryRun", env_extra={ENV_FORCE: "", ENV_EFFORT: "high"})
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.env_warnings(err), [self.WARN_EFFORT])
+
+    def test_t6_whitespace_only_variable_with_level_3_does_warn(self):
+        # Decision fijada: «existe y no esta vacia» (3.8). Solo espacios no es vacia: avisa (T7 lo documenta).
+        self.make_source()
+        self.patch_out_guard()
+        self.write_config(b'{"level": 3}')
+        code, out, err = self.run_install("-DryRun", env_extra={ENV_FORCE: "   ", ENV_EFFORT: "   "})
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.env_warnings(err), [self.WARN_FORCE % 3, self.WARN_EFFORT])
 
     def test_t3_config_validation_runs_before_any_write_even_with_a_valid_state(self):
         # Instalacion previa y configuracion invalida despues: nada cambia (ni el estado ni los archivos).

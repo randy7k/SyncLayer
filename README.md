@@ -578,7 +578,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1172 pruebas, 152 saltadas: 149 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1191 pruebas, 161 saltadas: 158 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 
@@ -607,18 +607,18 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-20** (T3 de la Fase 3 cerrada: lectura y validación de `synclayer-config.json`).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-20** (T6 de la Fase 3 cerrada, adelantada a T4 y T5: avisos de variables de entorno).
 
 ### Avance global
 
-**El proyecto completo va en 48%.** Cuenta las cinco fases con el mismo peso; las fases 4 y 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 3 está desglosada pero sin ninguna unidad cerrada, así que el número sube cuando se desglosen en sub-fases.
+**El proyecto completo va en 50%.** Cuenta las cinco fases con el mismo peso; las fases 4 y 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 3 está desglosada pero sin ninguna unidad cerrada, así que el número sube cuando se desglosen en sub-fases.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **48%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **50%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
-| **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | **38%** | 3 de 8 | Plan aprobado, en curso (T1 a T3 cerradas); antes de T4 el propietario corre la compuerta G1 ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
+| **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **50%** | 4 de 8 | Plan aprobado, en curso (T1 a T3 y T6 cerradas); antes de T4 el propietario corre la compuerta G1 ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
 | **4. Nombres de agentes configurables** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 
@@ -648,7 +648,7 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 |:--|:--|--:|:--|
 | Tabla y estado | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T1, T2) |
 | Configuración y renderizado | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **33%** | 1 de 3 (T3, T4, T5) |
-| Avisos | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 1 (T6) |
+| Avisos | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 1 de 1 (T6) |
 | Documentación y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 2 (T7, cierre) |
 
 - **Tabla y estado**
@@ -661,7 +661,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
   - ⬜ Falta: T4 renderizado de `model:` y `effort:` (bloqueada hasta la compuerta G1 del propietario); T5 clasificación y escritura.
 - **Avisos**
   - ✅ Hecho: nada.
-  - ⬜ Falta: T6 aviso de variables de entorno que anulan el nivel.
+  - ✅ Hecho: T6 (adelantada a T4 y T5 por decisión del propietario) aviso por `stderr` si el nivel es 1 a 4 y el entorno trae `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`; nunca imprime el valor y con nivel 5 no añade ninguna línea.
+  - ⬜ Falta: nada.
 - **Documentación y cierre**
   - ✅ Hecho: nada.
   - ⬜ Falta: T7 documentación; cierre con `sentinel`, `shield` y `auditor`.
@@ -693,8 +694,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-20 | T1 de la Fase 3: tabla nivel por agente como datos en `install.ps1` y en el README, con pruebas de igualdad y de las reglas R1 a R5; revisada por `auditor` | ✅ |
 | 2026-11-20 | T2 de la Fase 3: estado con esquema 2 y migración; la clasificación distingue un cambio de origen de una edición manual y un estado no reconocido nunca produce `ACTUALIZAR`; revisada por `auditor` | ✅ |
 | 2026-11-20 | T3 de la Fase 3: lectura y validación de `synclayer-config.json` (entrada no confiable, falla cerrado, guardia temporal para niveles 1 a 4); revisada por `auditor` y `shield` | ✅ |
+| 2026-11-20 | T6 de la Fase 3 (adelantada): avisos de variables de entorno que anulan el nivel, sin imprimir su valor; revisada por `auditor` y `shield` | ✅ |
 | **Ahora** | **Compuerta G1 del propietario** (`effort:` con `claude --debug`), que desbloquea T4, y, del propietario, comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
-| Luego | T4 a T7 y cierre de la Fase 3 (compuerta G1 antes de T4) y desglosar las fases 4 y 5 (backlog) | ⬜ |
+| Luego | T4, T5, T7 y cierre de la Fase 3 (compuerta G1 antes de T4) y desglosar las fases 4 y 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
 

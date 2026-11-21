@@ -2,6 +2,23 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 3, T6: avisos de variables de entorno)
+
+- `install.ps1` avisa por `stderr` cuando el nivel leído es 1 a 4 y el entorno del instalador trae, con
+  valor no vacío, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`, que anulan el `model:` y
+  el `effort:` del frontmatter. Sólo imprime el nombre y un texto fijo, nunca el valor; no cambia el código
+  de salida, no escribe nada y no define, cambia ni borra variables. Con nivel 5 no añade ninguna línea.
+  El aviso va después de leer el nivel y antes de la guardia temporal de T3, así que seguirá saliendo
+  cuando T4 la retire.
+- T6 se adelantó a T4 y T5 por decisión del propietario (sólo depende de T3 en la práctica); las
+  unidades de la fase siguen siendo 8.
+- Pruebas: casos 38 y 39 de la Fase 3 y una prueba estática de que el script nunca define ni borra
+  variables de entorno. `run_install` quita ambas variables del entorno heredado.
+- Para T4: reescribir el comentario de la guardia y retirar `patch_out_guard` de las pruebas. Para T7,
+  documentar que el aviso sólo mira el ámbito `Process` (una variable definida con `setx` y sin reiniciar
+  la consola no avisa), que una variable de sólo espacios avisa y que `FORCE=0` también avisa aunque
+  Claude Code quizá lo trate como inactivo (no verificado).
+
 ### Añadido (Fase 3, T3: archivo de configuración del nivel)
 
 - `install.ps1` lee `<Target>/synclayer-config.json` (opcional): un único campo `level`, entero de 1 a 5.

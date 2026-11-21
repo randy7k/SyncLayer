@@ -700,6 +700,19 @@ try {
         if ($null -ne $badLink) { Stop-Install 1 ((Get-ReparseMessage $badLink) + ' No se escribio nada.') }
         $levelFromFile = $true
     }
+    # Avisos de entorno (T6): con el nivel 1 a 4, dos variables anulan el model: y el effort: de los agentes
+    # y el nivel no lo puede lograr. Solo lectura (GetEnvironmentVariable): el instalador no define, cambia ni
+    # borra variables, y NUNCA imprime el valor, solo el nombre y un texto fijo. Salen por stderr, antes de la
+    # salida de -DryRun y de la guarda temporal (asi se ven aunque T4 la retire), sin cambiar el codigo de
+    # salida. Con el nivel 5 no hay aviso: quien no configuro nada no ve una linea nueva.
+    if ($level -ne 5) {
+        if (-not [string]::IsNullOrEmpty([System.Environment]::GetEnvironmentVariable('CLAUDE_CODE_SUBAGENT_MODEL_FORCE'))) {
+            Write-Err ('aviso: CLAUDE_CODE_SUBAGENT_MODEL_FORCE esta definida: Claude Code ignora el model: de los agentes y el nivel ' + $level + ' no cambia el modelo.')
+        }
+        if (-not [string]::IsNullOrEmpty([System.Environment]::GetEnvironmentVariable('CLAUDE_CODE_EFFORT_LEVEL'))) {
+            Write-Err 'aviso: CLAUDE_CODE_EFFORT_LEVEL esta definida: tiene prioridad sobre el effort: de los agentes.'
+        }
+    }
     # Guarda temporal (T3): los niveles 1 a 4 aun no se aplican; T4 la retira junto con su prueba.
     if ($level -ne 5) {
         Stop-Install 1 ('error: el nivel ' + $level + ' aun no se puede aplicar en esta version.')
