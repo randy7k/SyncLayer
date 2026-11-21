@@ -2,6 +2,24 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 3, T3: archivo de configuración del nivel)
+
+- `install.ps1` lee `<Target>/synclayer-config.json` (opcional): un único campo `level`, entero de 1 a 5.
+  Sin archivo o con `{}` el nivel es 5. Lectura única con tope de 64 KiB sobre lo leído, UTF-8 estricto,
+  rechazo de enlaces, junctions, carpetas y archivos bloqueados, claves de lista cerrada con
+  comparaciones ordinales (también se rechaza `__type`, que `ConvertFrom-Json` de 5.1 descartaría en
+  silencio). Cualquier problema sale con exit 1 antes de escribir nada, también en `-DryRun`. Ningún valor
+  del archivo llega al estado ni al destino salvo el entero validado. El instalador no lo escribe, no lo
+  respalda, no lo clasifica ni lo borra.
+- La salida muestra `Nivel: N (...)` y el estado guarda el nivel leído. **Guardia temporal:** un nivel 1 a 4
+  válido termina con exit 1 («el nivel N aun no se puede aplicar en esta version») hasta que T4 aplique
+  la tabla; así ningún commit acepta un nivel que no se escribe.
+- Límites conocidos, para documentar en T7: PowerShell 5.1 acepta más que JSON estricto (comillas
+  simples, claves sin comillas, `+3`, `03`); con una clave `level` repetida gana la última; entre la
+  comprobación de enlaces y la apertura del archivo queda una carrera residual que exige escribir en
+  `-Target`; `Format-Safe` no escapa la barra invertida; pwsh 7 no se verificó.
+- Pruebas: casos 12 a 19 de la Fase 3 en `tests/test_install.py` y una prueba de la guardia.
+
 ### Cambiado (Fase 3, T2: estado del instalador con esquema 2)
 
 - `install.ps1` escribe el estado `<Target>/synclayer-manifest.json` con esquema 2: por archivo, el hash

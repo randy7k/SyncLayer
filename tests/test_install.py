@@ -1990,6 +1990,425 @@ class InstallCases:
         self.assert_reparse_rejected(expect_in_err="synclayer-manifest.json", outside_before=snapshot(self.outside))
         self.assertEqual(os.listdir(self.outside), [])
 
+    # --- Fase 3, T3: synclayer-config.json (lectura y validacion del nivel; entrada no confiable) ---
+
+    CONFIG = "synclayer-config.json"
+
+    def write_config(self, data):
+        return write(self.target, self.CONFIG, data)
+
+    def tree(self, base):
+        """Contenido (solo bytes) de todos los archivos bajo base, por ruta relativa."""
+        result = {}
+        for dirpath, _dirs, files in os.walk(base):
+            for name in files:
+                p = os.path.join(dirpath, name)
+                with open(p, "rb") as f:
+                    result[os.path.relpath(p, base)] = f.read()
+        return result
+
+    def assert_config_rejected(self, data, motivo, modes=None, expect_out_nivel=False):
+        """Configuracion invalida: exit 1 en -DryRun y real, mensaje con el motivo, nada escrito ni respaldado."""
+        self.make_source()
+        self.write_config(data)
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in (modes or (["-DryRun"], [])):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("error: synclayer-config.json no es valido: ", err)
+                self.assertIn(motivo, err)
+                self.assertIn("No se escribio nada", err)
+                self.assertTrue(err.isascii(), repr(err))
+                self.assertFalse(any(ord(c) < 0x20 and c not in "\r\n" for c in err), repr(err))
+                self.assertNotIn("Exception", err)
+                self.assertNotIn("ConvertFrom-Json", err)
+                self.assertNotIn("Copiado", out)
+                self.assertNotIn("Nivel:", out)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+
+    def test_t3_case12_no_config_installs_level5_and_says_default(self):
+        self.make_source()
+        out, err = self.install_ok()
+        self.assertIn("Nivel: 5 (por defecto; no hay synclayer-config.json)", out.splitlines())
+        for rel, data in SAMPLE.items():
+            self.assertEqual(read(self.target, rel), data)
+        self.assert_state(5)
+        self.assertFalse(os.path.exists(os.path.join(self.target, self.CONFIG)))
+
+    def test_t3_case12_level_line_comes_after_destino_and_before_the_plan(self):
+        self.make_source()
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        lines = out.splitlines()
+        self.assertTrue(lines[0].startswith("Destino: "), lines)
+        self.assertEqual(lines[1], "Nivel: 5 (por defecto; no hay synclayer-config.json)")
+        self.assertFalse(os.path.exists(self.target))
+
+    def test_t3_case13_level5_config_gives_same_destination_and_state_as_no_config(self):
+        self.make_source()
+        self.install_ok()
+        reference = self.tree(self.target)
+        shutil.rmtree(self.target)
+        self.write_config(b'{"level": 5}')
+        out, err = self.install_ok()
+        self.assertIn("Nivel: 5 (synclayer-config.json)", out.splitlines())
+        got = self.tree(self.target)
+        self.assertEqual(got.pop(self.CONFIG), b'{"level": 5}')
+        self.assertEqual(got, reference)
+        self.assert_state(5)
+
+    def test_t3_case14_invalid_configurations_exit1_in_both_modes_and_write_nothing(self):
+        invalid_level = "level debe ser un entero de 1 a 5"
+        variants = [
+            ("json roto", b'{no es json', "JSON invalido"),
+            ("vacio", b"", "JSON invalido"),
+            ("solo blancos", b" \r\n\t ", "JSON invalido"),
+            ("basura al final", b'{"level": 5} x', "JSON invalido"),
+            ("dos objetos", b'{"level": 5}{"level": 5}', "JSON invalido"),
+            ("lista vacia", b"[]", "debe ser un objeto"),
+            ("lista de numeros", b"[1, 2]", "debe ser un objeto"),
+            ("lista de un objeto valido", b'[{"level": 5}]', "debe ser un objeto"),
+            ("numero", b"5", "debe ser un objeto"),
+            ("cadena", b'"5"', "debe ser un objeto"),
+            ("null", b"null", "debe ser un objeto"),
+            ("true", b"true", "debe ser un objeto"),
+            ("level texto", b'{"level": "3"}', invalid_level),
+            ("level texto 5", b'{"level": "5"}', invalid_level),
+            ("level decimal", b'{"level": 3.0}', invalid_level),
+            ("level decimal 5.0", b'{"level": 5.0}', invalid_level),
+            ("level decimal 2.5", b'{"level": 2.5}', invalid_level),
+            ("level true", b'{"level": true}', invalid_level),
+            ("level false", b'{"level": false}', invalid_level),
+            ("level null", b'{"level": null}', invalid_level),
+            ("level cero", b'{"level": 0}', invalid_level),
+            ("level seis", b'{"level": 6}', invalid_level),
+            ("level negativo", b'{"level": -1}', invalid_level),
+            ("level enorme", b'{"level": 99999999999}', invalid_level),
+            ("level enorme de 30 cifras", b'{"level": 999999999999999999999999999999}', invalid_level),
+            ("level exponente", b'{"level": 5e0}', invalid_level),
+            ("level lista", b'{"level": [5]}', invalid_level),
+            ("level objeto", b'{"level": {"level": 5}}', invalid_level),
+            ("level cadena vacia", b'{"level": ""}', invalid_level),
+            ("clave Level", b'{"Level": 3}', "clave desconocida: Level"),
+            ("clave Level con level", b'{"level": 5, "Level": 5}', "JSON invalido"),
+            ("clave agents", b'{"level": 5, "agents": {}}', "clave desconocida: agents"),
+            ("clave nivel", b'{"nivel": 2}', "clave desconocida: nivel"),
+            ("clave vacia (5.1 la rechaza como JSON)", b'{"": 1}', "JSON invalido"),
+            ("clave con espacio", b'{"level ": 5}', "clave desconocida: level "),
+            ("clave con guion blando", '{"level\u00ad": 5}'.encode("utf-8"), "clave desconocida: level\\u00ad"),
+            ("level 5 con clave extra", b'{"level": 5, "extra": 1}', "clave desconocida: extra"),
+            # ConvertFrom-Json de 5.1 descarta __type en silencio: el instalador debe rechazarlo antes.
+            ("__type solo", b'{"__type":"x"}', "clave desconocida: __type"),
+            ("level con __type", b'{"level":5,"__type":"System.String"}', "clave desconocida: __type"),
+            ("__type antes de level 3", b'{"__type":"x","level":3}', "clave desconocida: __type"),
+            ("__type escapado entero", b'{"\\u005f\\u005ftype":"x"}', "clave desconocida: __type"),
+            ("__type con un guion escapado", b'{"level":5,"_\\u005Ftype":"x"}', "clave desconocida: __type"),
+            ("__type con letra escapada", b'{"level":5,"__t\\u0079pe":"x"}', "clave desconocida: __type"),
+            ("__type como valor", b'{"level":5,"x":"__type"}', "clave desconocida: __type"),
+            ("__TYPE (5.1 lo conserva)", b'{"level":5,"__TYPE":"x"}', "clave desconocida: __TYPE"),
+            ("a__type (se rechaza por contener __type)", b'{"level":5,"a__type":"x"}', "clave desconocida: __type"),
+        ]
+        for name, data, motivo in variants:
+            with self.subTest(case=name):
+                self.assert_config_rejected(data, motivo)
+                shutil.rmtree(self.target)
+
+    def test_t3_case14_type_key_does_not_affect_legitimate_configurations(self):
+        # Control: level y los guiones bajos de otras formas no se ven afectados por el rechazo de __type.
+        for data in (b'{"level": 5}', b'{"level": 5 }', b'{"l\\u0065vel": 5}', b'{}'):
+            with self.subTest(data=data):
+                self.make_source()
+                self.write_config(data)
+                out, err = self.install_ok("-DryRun")
+                self.assertIn("Nivel: 5 (synclayer-config.json)", out.splitlines())
+                shutil.rmtree(self.target)
+
+    def test_t3_case14_encodings_other_than_utf8_are_rejected(self):
+        text = '{"level": 5}'
+        variants = [
+            ("utf-16 con BOM", text.encode("utf-16")),
+            ("utf-16 sin BOM", text.encode("utf-16-le")),
+            ("utf-16 big endian", text.encode("utf-16-be")),
+            ("utf-32", text.encode("utf-32")),
+            ("latin-1 en una clave", b'{"level": 5, "\xe9": 1}'),
+            ("byte suelto invalido", b'{"level": 5}\xff'),
+            ("doble BOM utf-8", b'\xef\xbb\xbf\xef\xbb\xbf{"level": 5}'),
+            ("NUL final", b'{"level": 5}\x00'),
+        ]
+        for name, data in variants:
+            with self.subTest(case=name):
+                self.assert_config_rejected(data, "JSON invalido")
+                shutil.rmtree(self.target)
+
+    def test_t3_case14_size_limit_is_checked_on_what_is_read(self):
+        head = b'{"level": 5}'
+        limit = 65536
+        # exactamente el tope es valido; un byte mas, no; uno enorme, tampoco (sin interpretarlo).
+        self.make_source()
+        self.write_config(head + b" " * (limit - len(head)))
+        self.assertEqual(os.path.getsize(os.path.join(self.target, self.CONFIG)), limit)
+        out, err = self.install_ok("-DryRun")
+        self.assertIn("Nivel: 5 (synclayer-config.json)", out)
+        shutil.rmtree(self.target)
+        for name, size in (("tope mas uno", limit + 1), ("tres megas", 3 * 1024 * 1024)):
+            with self.subTest(case=name):
+                self.assert_config_rejected(head + b" " * (size - len(head)), "supera 65536 bytes")
+                shutil.rmtree(self.target)
+
+    def test_t3_case14_deeply_nested_json_is_a_clean_error(self):
+        data = b'{"a": ' + b"[" * 20000 + b"]" * 20000 + b"}"
+        self.assert_config_rejected(data, "JSON invalido")
+
+    def test_t3_case15_bom_crlf_and_empty_object_are_valid(self):
+        variants = [
+            ("BOM y CRLF", b'\xef\xbb\xbf{\r\n  "level": 5\r\n}\r\n', 5),
+            ("solo LF", b'{\n  "level": 5\n}\n', 5),
+            ("BOM sin saltos", b'\xef\xbb\xbf{"level":5}', 5),
+            ("objeto vacio", b"{}", 5),
+            ("objeto vacio con blancos y BOM", b"\xef\xbb\xbf \r\n{ }\r\n", 5),
+            ("level 5 con tabuladores", b'\t{\t"level"\t:\t5\t}\t', 5),
+        ]
+        for name, data, level in variants:
+            with self.subTest(case=name):
+                self.make_source()
+                self.write_config(data)
+                out, err = self.install_ok()
+                self.assertIn("Nivel: %d (synclayer-config.json)" % level, out.splitlines())
+                self.assert_state(level)
+                for rel, content in SAMPLE.items():
+                    self.assertEqual(read(self.target, rel), content)
+                self.assertEqual(read(self.target, self.CONFIG), data)
+                shutil.rmtree(self.target)
+
+    def test_t3_case15_dryrun_with_valid_config_writes_nothing(self):
+        self.make_source()
+        self.write_config(b'{"level": 5}')
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Nivel: 5 (synclayer-config.json)", out.splitlines())
+        self.assertEqual(self.states(out), {rel: "NUEVO" for rel in SAMPLE})
+        self.assertEqual(snapshot(self.target), before)
+        self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+
+    def test_t3_case16_config_that_is_a_folder_exit1_not_absent(self):
+        self.make_source()
+        os.makedirs(os.path.join(self.target, self.CONFIG, "dentro"))
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("synclayer-config.json no es valido: es una carpeta", err)
+                self.assertIn("No se escribio nada", err)
+                self.assertNotIn("Nivel:", out)
+                self.assertEqual(snapshot(self.target), before)
+
+    def test_t3_case16_config_that_is_a_junction_exit1_and_target_unchanged(self):
+        self.make_source()
+        write(self.outside, "level.json", b'{"level": 5}')
+        os.makedirs(self.target)
+        link = os.path.join(self.target, self.CONFIG)
+        self.make_link_dir(link, self.outside)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        before = snapshot(self.outside)
+        self.assert_reparse_rejected(expect_in_err=self.CONFIG, outside_before=before)
+        self.assertEqual([n for n in os.listdir(self.target)], [self.CONFIG])
+
+    def test_t3_case16_config_that_is_a_file_link_exit1_and_victim_untouched(self):
+        self.make_source()
+        victim = write(self.outside, "victima.json", b'{"level": 5}')
+        os.makedirs(self.target)
+        self.make_link_file(os.path.join(self.target, self.CONFIG), victim)
+        before = snapshot(self.outside)
+        self.assert_reparse_rejected(expect_in_err=self.CONFIG, outside_before=before)
+        self.assertEqual(read(self.outside, "victima.json"), b'{"level": 5}')
+        self.assertEqual(os.listdir(self.target), [self.CONFIG])
+
+    def test_t3_case16_dangling_config_link_is_rejected_not_absent(self):
+        self.make_source()
+        os.makedirs(self.target)
+        missing = os.path.join(self.tmp, "no existe")
+        link = os.path.join(self.target, self.CONFIG)
+        os.makedirs(missing)
+        self.make_link_dir(link, missing)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        os.rmdir(missing)
+        self.assert_reparse_rejected(expect_in_err=self.CONFIG)
+
+    def test_t3_case16_target_that_is_a_reparse_point_with_config_inside_exit1(self):
+        self.make_source()
+        real = os.path.join(self.tmp, "real")
+        write(real, self.CONFIG, b'{"level": 5}')
+        self.make_link_dir(self.target, real)
+        self.addCleanup(lambda: os.path.isdir(self.target) and os.rmdir(self.target))
+        self.assert_reparse_rejected()
+        self.assertEqual(os.listdir(real), [self.CONFIG])
+
+    @unittest.skipUnless(os.name == "nt", "el bloqueo con FileShare 0 es de Windows")
+    def test_t3_case16_locked_config_exit1_not_absent(self):
+        self.make_source()
+        path = self.write_config(b'{"level": 5}')
+        self.lock_file(path, self.GENERIC_READ, 0)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("synclayer-config.json no es valido: no se pudo abrir el archivo", err)
+                self.assertIn("No se escribio nada", err)
+                self.assertTrue(err.isascii(), repr(err))
+                self.assertNotIn("Nivel:", out)
+                self.assertEqual(os.listdir(self.target), [self.CONFIG])
+                self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+
+    @unittest.skipUnless(os.name == "nt", "New-Item -ItemType Junction solo en Windows")
+    def test_t3_config_turned_into_a_junction_after_reading_is_rejected(self):
+        # La segunda comprobacion de reanalisis (tras leer): el archivo valido se sustituye, justo despues
+        # de leerlo, por una junction. Sin esa comprobacion la instalacion terminaria en exit 0.
+        self.make_source()
+        os.makedirs(self.outside)
+        path = self.write_config(b'{"level": 5}')
+        self.patch_script("$level = [int](Read-LevelConfig $configPath)",
+                          "[System.IO.File]::Delete('%s'); New-Item -ItemType Junction -Path '%s' -Value '%s' | Out-Null"
+                          % (path.replace("'", "''"), path.replace("'", "''"), self.outside.replace("'", "''")))
+        self.addCleanup(lambda: os.path.isdir(path) and os.rmdir(path))
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                if not os.path.isdir(path):
+                    self.write_config(b'{"level": 5}')
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("punto de reanalisis", err)
+                self.assertIn("No se escribio nada", err)
+                self.assertNotIn("Copiado", out)
+                self.assertNotIn("Nivel:", out)
+                self.assertEqual(os.listdir(self.outside), [])
+                self.assertEqual(os.listdir(self.target), [self.CONFIG])
+                os.rmdir(path)
+
+    def test_t3_case17_duplicate_level_key_last_one_wins_in_windows_powershell_5_1(self):
+        # Comportamiento medido de ConvertFrom-Json de 5.1: sin error, gana la ultima clave. Se fija aqui;
+        # el estado final depende del valor que gana, y un 1 a 4 sigue topando con la guarda.
+        self.make_source()
+        self.write_config(b'{"level": 3, "level": 5}')
+        out, err = self.install_ok("-DryRun")
+        self.assertIn("Nivel: 5 (synclayer-config.json)", out.splitlines())
+        self.write_config(b'{"level": 5, "level": 3}')
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("error: el nivel 3 aun no se puede aplicar en esta version.", err)
+
+    def test_t3_case18_config_is_never_touched_backed_up_or_listed(self):
+        self.make_source()
+        data = b'\xef\xbb\xbf{"level": 5}\r\n'
+        path = self.write_config(data)
+        old = os.stat(path).st_mtime_ns - 5_000_000_000
+        os.utime(path, ns=(old, old))
+        before = snapshot(self.target)[self.CONFIG]
+        self.install_ok()
+        self.assertEqual(snapshot(self.target)[self.CONFIG], before)
+        # una instalacion con respaldo y -Force: el config ni se respalda ni se sobrescribe
+        write(self.target, "agents/alfa.md", b"editado a mano\n")
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertIn("Respaldado: agents/alfa.md", out)
+        self.assertEqual(snapshot(self.target)[self.CONFIG], before)
+        self.assertEqual(sorted(self.tree(backup)), [os.path.join("agents", "alfa.md")])
+        self.assertNotIn("HUERFANO", self.states(out).values())
+        self.assertNotIn(self.CONFIG, self.states(out))
+        # y una tercera, idempotente, tampoco lo toca
+        out, err = self.install_ok()
+        self.assertEqual(snapshot(self.target)[self.CONFIG], before)
+
+    def test_t3_case19_messages_escape_keys_and_never_echo_values_or_internal_text(self):
+        secret = "SECRETO-DEL-ARCHIVO"
+        variants = [
+            ("clave con NUL, ESC y no ASCII",
+             b'{"a\\u0000b\\u001b[31m\\u00e9\\u202e": 1}',
+             "clave desconocida: a\\u0000b\\u001b[31m\\u00e9\\u202e"),
+            ("clave con CR, LF y tabulador", b'{"a\\r\\n\\tb": 1}', "clave desconocida: a\\u000d\\u000a\\u0009b"),
+            ("clave con barra invertida", b'{"a\\\\u0041": 1}', "clave desconocida: a\\u0041"),
+            ("clave de 60000 caracteres", b'{"' + b"k" * 60000 + b'": 1}', "clave desconocida: " + "k" * 40 + "..."),
+            ("valor de level con control y secreto",
+             ('{"level": "%s\\u001b[31m\\u0000"}' % secret).encode("ascii"), "level debe ser un entero de 1 a 5"),
+            ("valor de otra clave con secreto", ('{"clave": "%s"}' % secret).encode("ascii"), "clave desconocida: clave"),
+            ("json roto con secreto", ('{"%s": ' % secret).encode("ascii"), "JSON invalido"),
+        ]
+        for name, data, motivo in variants:
+            with self.subTest(case=name):
+                self.make_source()
+                self.write_config(data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, out + err)
+                self.assertIn(motivo, err)
+                self.assertTrue(err.isascii(), repr(err))
+                self.assertFalse(any(ord(c) < 0x20 and c not in "\r\n" for c in err + out), repr(err))
+                self.assertNotIn("ConvertFrom-Json", err)
+                self.assertNotIn("Exception", err)
+                self.assertNotIn("System.", err)
+                self.assertLess(len(err), 600)
+                if "SECRETO" in data.decode("ascii", "replace"):
+                    self.assertNotIn(secret, err + out)
+                shutil.rmtree(self.target)
+
+    def test_t3_valid_level_1_to_4_is_stopped_by_the_temporary_guard(self):
+        # Guarda temporal de T3: T4 la retira junto con esta prueba. Ningun commit acepta un nivel que no aplica.
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                self.make_source()
+                self.write_config(('{"level": %d}' % level).encode("ascii"))
+                before = snapshot(self.target)
+                listing = sorted(os.listdir(self.tmp))
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 1, out + err)
+                    self.assertIn("error: el nivel %d aun no se puede aplicar en esta version." % level, err.splitlines())
+                    self.assertNotIn("Copiado", out)
+                    self.assertEqual(snapshot(self.target), before)
+                    self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+                shutil.rmtree(self.target)
+
+    def test_t3_level_read_reaches_the_state_when_the_temporary_guard_is_patched_out(self):
+        # La guarda temporal impide un nivel 1 a 4 real; sin ella, el nivel leido va al estado (campo level
+        # de cada entrada) y los archivos siguen siendo los del origen. T4 sustituye esta prueba.
+        for level in (1, 3, 4):
+            with self.subTest(level=level):
+                self.make_source()
+                path = os.path.join(self.src, "install.ps1")
+                with open(path, "rb") as f:
+                    text = f.read().decode("ascii")
+                guard = "Stop-Install 1 ('error: el nivel ' + $level + ' aun no se puede aplicar en esta version.')"
+                self.assertEqual(text.count(guard), 1)
+                with open(path, "wb") as f:
+                    f.write(text.replace(guard, "$null = 0").encode("ascii"))
+                self.write_config(('{"level": %d}' % level).encode("ascii"))
+                out, err = self.install_ok()
+                self.assertIn("Nivel: %d (synclayer-config.json)" % level, out.splitlines())
+                self.assert_state(level)
+                for rel, data in SAMPLE.items():
+                    self.assertEqual(read(self.target, rel), data)
+                shutil.rmtree(self.target)
+                shutil.copyfile(SCRIPT, path)
+
+    def test_t3_config_validation_runs_before_any_write_even_with_a_valid_state(self):
+        # Instalacion previa y configuracion invalida despues: nada cambia (ni el estado ni los archivos).
+        self.make_source()
+        self.install_ok()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        self.write_config(b'{"level": "x"}')
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode)
+            self.assertEqual(code, 1, out + err)
+            self.assertEqual(snapshot(self.target), before)
+            self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+
     def test_backup_dir_inside_target_exit1_in_both_modes(self):
         self.make_source()
         for name, backup in (("subcarpeta", os.path.join(self.target, "agents", "old")),

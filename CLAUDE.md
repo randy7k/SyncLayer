@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1126 pruebas, 129 saltadas (126 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1172 pruebas, 152 saltadas (149 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -207,12 +207,18 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   Cambiar una celda exige cambiarla en los dos sitios. `auditor`, `shield` y `debugger` no entran en la
   tabla. Todavía no se usa para escribir: eso llega con T4. Los textos que hablen de niveles no pueden
   prometer ahorro: `promise_hits` de `tests/test_levels.py` es la guarda.
+- `<Target>/synclayer-config.json` (opcional, campo `level` de 1 a 5, sin archivo = 5) es entrada no
+  confiable: lectura única con tope de 64 KiB, UTF-8 estricto, sin enlaces, claves de lista cerrada
+  (incluida `__type`, que `ConvertFrom-Json` de 5.1 descarta en silencio) y errores con exit 1 antes de
+  escribir. El instalador nunca lo escribe, respalda ni borra. Mientras T4 no exista, un nivel 1 a 4 sale
+  con exit 1 (guardia temporal). Con `level` repetido gana el último, y 5.1 acepta sintaxis laxa
+  (comillas simples, `+3`, `03`): no es JSON estricto.
 - Las pruebas del instalador pasan SIEMPRE `-Target` a una carpeta temporal, nunca
   `~/.claude`, y no escriben el nombre de usuario como literal.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (126 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (149 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

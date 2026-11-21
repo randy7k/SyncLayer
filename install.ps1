@@ -8,6 +8,11 @@ archivo y muestra el plan. Sin -DryRun respalda lo que va a sobrescribir (verifi
 el hook primero (temporal en la misma carpeta + movimiento), verifica el destino y escribe el
 estado <Target>/synclayer-manifest.json. Nunca borra. No hace rollback: si falla, informa.
 
+Configuracion: <Target>/synclayer-config.json es opcional y tiene un solo campo, level (entero de 1 a 5;
+sin archivo, o con un objeto vacio, el nivel es 5). Un archivo invalido, o una carpeta o un enlace con ese
+nombre, detiene la instalacion con exit 1 antes de escribir nada (tambien con -DryRun). Hoy solo el nivel 5
+puede aplicarse: del 1 al 4 termina con exit 1. El instalador nunca escribe, respalda ni borra ese archivo.
+
 Estado: esquema 2, por archivo el hash del origen (sha256), el hash de lo escrito (written) y el
 nivel (level, siempre 5 por ahora). La clasificacion compara el destino con el hash escrito por la
 instalacion previa (written) y el origen con el manifiesto. Lee tambien el esquema 1 (copia del
@@ -62,6 +67,10 @@ $ManifestName = 'install-manifest.json'
 # Tamano maximo del estado previo que se interpreta (entrada no confiable): el de trece archivos son
 # unos 3 KB; un estado mayor se trata como no valido.
 $StateMaxBytes = 1048576
+# Archivo de configuracion del nivel (Fase 3): <Target>/synclayer-config.json, lo escribe el usuario a mano.
+# Es entrada no confiable: tope de tamano, validacion cerrada y el instalador solo lo lee (una vez).
+$ConfigName = 'synclayer-config.json'
+$ConfigMaxBytes = 65536
 
 # Tabla de niveles (Fase 3). Aun no se usa para escribir nada: la instalacion no cambia. Una fila
 # por linea, nivel|agente|modelo|esfuerzo, con - para "sin effort:". El nivel 5 es el repositorio y
@@ -478,6 +487,86 @@ function Read-State([string]$FilePath) {
     return @{ Order = $entries.Order; Hashes = $entries.Hashes; Written = $written; Levels = $levels; Schema = [int]$schema; Bytes = $bytes }
 }
 
+# Texto no confiable para un mensaje: recortado a 40 caracteres y escapado (Format-Safe).
+function Format-SafeShort([string]$Text) {
+    if ($Text.Length -gt 40) { $Text = $Text.Substring(0, 40) + '...' }
+    return Format-Safe $Text
+}
+
+# Lee y valida <Target>/synclayer-config.json (entrada no confiable) y devuelve el nivel (entero de 1 a 5;
+# un objeto vacio es el nivel 5). Lectura unica: se abre una vez (solo lectura) y se leen como maximo
+# $ConfigMaxBytes mas uno, asi el tope vale sobre lo leido y no sobre una medida previa. UTF-8 estricto, con
+# o sin BOM. Raiz: un objeto. Claves: lista cerrada (solo level), comparadas de forma ordinal. level: entero
+# de 1 a 5 (ni texto, ni decimal, ni bool, ni null). Lanza un motivo fijo y escapado: nunca el contenido del
+# archivo ni el texto de .NET. El llamador comprueba antes que no sea carpeta ni punto de reanalisis.
+function Read-LevelConfig([string]$FilePath) {
+    try {
+        $fs = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    }
+    catch {
+        throw 'no se pudo abrir el archivo (bloqueado, sin permiso o desaparecio)'
+    }
+    $buf = New-Object byte[] ($ConfigMaxBytes + 1)
+    $count = 0
+    try {
+        while ($count -lt $buf.Length) {
+            $got = $fs.Read($buf, $count, $buf.Length - $count)
+            if ($got -le 0) { break }
+            $count += $got
+        }
+    }
+    catch {
+        throw 'no se pudo leer el archivo'
+    }
+    finally {
+        $fs.Dispose()
+    }
+    if ($count -gt $ConfigMaxBytes) { throw ('supera ' + $ConfigMaxBytes + ' bytes') }
+    $bytes = New-Object byte[] $count
+    [System.Array]::Copy($buf, $bytes, $count)
+    try {
+        $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($bytes)
+    }
+    catch {
+        throw 'JSON invalido (no es UTF-8)'
+    }
+    if ($text.Length -gt 0 -and [int]$text[0] -eq 0xFEFF) { $text = $text.Substring(1) }
+    if ([string]::IsNullOrWhiteSpace($text)) { throw 'JSON invalido (archivo vacio)' }
+    # El ConvertFrom-Json de 5.1 (JavaScriptSerializer) descarta en silencio la clave __type, tambien escrita
+    # con escapes de la forma backslash-u y cuatro hex, antes de que se pueda comprobar la lista cerrada de
+    # claves. Un archivo valido solo tiene la clave level: cualquier aparicion de __type (comparacion ordinal,
+    # con esos escapes ya resueltos) se rechaza.
+    $unescaped = [regex]::Replace($text, '\\u([0-9a-fA-F]{4})', [System.Text.RegularExpressions.MatchEvaluator]{
+        param($hit)
+        return [string][char][System.Convert]::ToInt32($hit.Groups[1].Value, 16)
+    })
+    if ($unescaped.IndexOf('__type', [System.StringComparison]::Ordinal) -ge 0) {
+        throw 'clave desconocida: __type (el instalador puede ser anterior al archivo)'
+    }
+    try {
+        $m = $text | ConvertFrom-Json
+    }
+    catch {
+        throw 'JSON invalido'
+    }
+    # ConvertFrom-Json de 5.1 desenrolla una lista de un elemento: la raiz debe empezar por llave.
+    if (-not ($text.TrimStart().StartsWith('{', [System.StringComparison]::Ordinal)) -or -not ($m -is [System.Management.Automation.PSCustomObject])) {
+        throw 'debe ser un objeto'
+    }
+    foreach ($p in $m.PSObject.Properties) {
+        if (-not (Test-OrdinalEqual $p.Name 'level')) {
+            throw ('clave desconocida: ' + (Format-SafeShort $p.Name) + ' (el instalador puede ser anterior al archivo)')
+        }
+    }
+    $levelProp = Get-PropRaw $m 'level'
+    if ($null -eq $levelProp) { return 5 }
+    $lv = $levelProp.Value
+    if (-not (($lv -is [int] -or $lv -is [long]) -and $lv -ge 1 -and $lv -le 5)) {
+        throw 'level debe ser un entero de 1 a 5'
+    }
+    return [int]$lv
+}
+
 # Bytes del estado con esquema 2: ASCII, LF, sangria de dos espacios y salto final. Coinciden byte a
 # byte con json.dumps(obj, indent=2, ensure_ascii=True) + LF de Python con este orden de claves
 # (ConvertTo-Json de 5.1 da otro formato). Las rutas son [a-z0-9_/.-] por AllowedPattern: no se escapa nada.
@@ -589,10 +678,36 @@ try {
             "`nSi eres mantenedor y el cambio es intencional, regenera el manifiesto con: python -B tools/build_manifest.py")
     }
 
-    # Nivel: en esta version el nivel es siempre 5 (el repositorio): se escriben los bytes canonicos del
-    # origen y el hash escrito de cada archivo es el del manifiesto. $outHash es lo que clasifica,
-    # verifica y se guarda en el estado como written.
+    # Configuracion: leer y validar <Target>/synclayer-config.json (solo lectura; nunca se escribe, respalda,
+    # clasifica ni borra). Ausente: nivel 5. Carpeta, punto de reanalisis, ilegible o invalido: exit 1 antes
+    # de escribir nada, tambien en -DryRun. El punto de reanalisis se vuelve a comprobar tras leer.
+    $configPath = Join-Path $TargetFull $ConfigName
     $level = 5
+    $levelFromFile = $false
+    $badLink = Find-Reparse $TargetFull $ConfigName
+    if ($null -ne $badLink) { Stop-Install 1 ((Get-ReparseMessage $badLink) + ' No se escribio nada.') }
+    if ([System.IO.Directory]::Exists($configPath)) {
+        Stop-Install 1 ('error: ' + $ConfigName + ' no es valido: es una carpeta, no un archivo. No se escribio nada.')
+    }
+    if ([System.IO.File]::Exists($configPath)) {
+        try {
+            $level = [int](Read-LevelConfig $configPath)
+        }
+        catch {
+            Stop-Install 1 ('error: ' + $ConfigName + ' no es valido: ' + (Get-ErrorText $_) + '. No se escribio nada.')
+        }
+        $badLink = Find-Reparse $TargetFull $ConfigName
+        if ($null -ne $badLink) { Stop-Install 1 ((Get-ReparseMessage $badLink) + ' No se escribio nada.') }
+        $levelFromFile = $true
+    }
+    # Guarda temporal (T3): los niveles 1 a 4 aun no se aplican; T4 la retira junto con su prueba.
+    if ($level -ne 5) {
+        Stop-Install 1 ('error: el nivel ' + $level + ' aun no se puede aplicar en esta version.')
+    }
+
+    # Nivel: con el nivel 5 (el repositorio) se escriben los bytes canonicos del origen y el hash escrito
+    # de cada archivo es el del manifiesto. $outHash es lo que clasifica, verifica y se guarda en el
+    # estado como written.
     $outHash = @{}
     foreach ($rel in $manifest.Order) { $outHash[$rel] = $manifest.Hashes[$rel] }
 
@@ -703,6 +818,12 @@ try {
     }
     # Paso 5: mostrar el plan.
     Write-Out ('Destino: ' + (Format-Safe $TargetFull))
+    if ($levelFromFile) {
+        Write-Out ('Nivel: ' + $level + ' (' + $ConfigName + ')')
+    }
+    else {
+        Write-Out ('Nivel: ' + $level + ' (por defecto; no hay ' + $ConfigName + ')')
+    }
     if ($backupItems.Count -gt 0) { Write-Out ('Respaldo: ' + (Format-Safe $BackupFull)) }
     if ($DryRun) { Write-Out 'Modo: -DryRun (no se escribe nada)' }
     foreach ($row in $rows) {
