@@ -442,6 +442,17 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
   `IGUAL`.
 - Un instalador anterior no sabe leer un estado de esquema 2: lo trata como ausente, así que sus
   archivos salen `MODIFICADO` (exit 3) y nunca se sobrescriben sin `-Force`.
+- La frase final del exit 3 («Si cambiaste model: o effort: a mano, usa synclayer-config.json.») se
+  añade siempre que hay exit 3, también cuando el único `MODIFICADO` no tiene `model:` (por ejemplo,
+  el hook) o cuando se perdió el estado y el destino trae los bytes del repositorio: en esos casos
+  el arreglo es `-Force`, no la configuración.
+- Tras un fallo parcial (exit 1 o 4 a mitad de la copia) el estado no se reescribe y queda desfasado
+  respecto de lo copiado. Si entonces cambias de nivel, los archivos ya copiados salen `MODIFICADO`
+  (exit 3; nada se sobrescribe sin `-Force`). Repite antes la instalación con el mismo nivel: da
+  `IGUAL` o `ACTUALIZAR` y reescribe el estado. Restaurar a mano un estado viejo desde un respaldo
+  tiene el mismo efecto.
+- Quien puede escribir el estado puede forjar `written` y convertir una edición a mano en
+  `ACTUALIZAR` (con respaldo): se acepta por el modelo de amenazas (integridad, no autenticidad).
 - Los bytes que se escriben con un nivel de 1 a 4 (el frontmatter renderizado) no los cubre el hash
   del manifiesto: parten de bytes verificados contra él, pero `install.ps1`, que los transforma, no
   está en el manifiesto. Lo escrito se verifica contra lo esperado para el nivel, no contra el
@@ -488,7 +499,7 @@ hook). La tabla es un orden razonado, no una medición: no promete ahorro de tok
 > conoce por su documentación: la compuerta G1 no se corrió. Para comprobarlo, sigue el
 > procedimiento de G1 del plan
 > ([`docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md))
-> y mira la ejecución del agente con `/tasks`. Lo que falta está en «Pendiente (T5)».
+> y mira la ejecución del agente con `/tasks`. Los cambios de nivel y las ediciones a mano están en «Cambiar de nivel, ediciones a mano y `-Force`».
 
 <!-- niveles:inicio -->
 | Agente | Nivel 5 (repo) | Nivel 4 | Nivel 3 | Nivel 2 | Nivel 1 |
@@ -597,18 +608,27 @@ definida con `setx` y sin reiniciar la consola no avisa); una variable de sólo 
 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=0` también avisa, aunque Claude Code quizá la trate como inactiva
 (no verificado). El instalador no define, cambia ni borra variables.
 
-### Pendiente (T5)
+### Cambiar de nivel, ediciones a mano y `-Force`
 
-Lo siguiente **no existe todavía**; no lo des por hecho:
+La clasificación compara el destino con lo que se escribiría para el nivel y con lo que escribió la
+instalación anterior (`written` en el estado):
 
-- La línea `Nivel anterior:` del plan.
-- La frase del mensaje del exit 3 que remite a la configuración («Si cambiaste model: o effort: a
-  mano, usa synclayer-config.json.»).
-- Los casos 31 a 37 del plan como pruebas formales de las transiciones de nivel, de las ediciones a
-  mano y de `-Force`. La clasificación contra `written` ya funciona y tiene pruebas de T2 y T4; falta
-  cubrir cada situación del plan con una prueba propia.
+| Situación | Resultado |
+|---|---|
+| Cambio de nivel, archivos intactos, estado válido | `ACTUALIZAR` en los archivos cuya celda cambia (con respaldo de la versión y del estado anteriores); el resto, `IGUAL`. Nunca `MODIFICADO` |
+| Mismo nivel, sin cambios | `IGUAL` |
+| Edición a mano de `model:` o `effort:`, o de cualquier archivo (incluidos `auditor`, `shield` y `debugger`) | `MODIFICADO` en cualquier nivel: exit 3 y no se escribe nada. Con `-Force` se respalda la versión local y se sobrescribe |
+| Estado ausente, ilegible o de esquema desconocido, con nivel 1 a 4 | Se trata como ausente: lo que ya coincide con lo esperado para el nivel es `IGUAL`; lo que difiere es `MODIFICADO`. Nunca `ACTUALIZAR` |
+| Estado de esquema 1 intacto y nivel 3 | `ACTUALIZAR`; el estado migra a esquema 2 |
 
-La documentación de la Fase 3 (T7) sigue abierta hasta completarla después de T5.
+Tras `Nivel:`, el instalador imprime `Nivel anterior: M` sólo si el estado previo es válido, todas
+sus entradas tienen el mismo nivel M y M es distinto del nivel actual. No se imprime sin estado, con
+el mismo nivel ni con niveles mezclados (que este instalador nunca escribe).
+
+El mensaje del exit 3 termina con la línea `Si cambiaste model: o effort: a mano, usa
+synclayer-config.json.` Se añade siempre que hay exit 3; ver sus límites en «Límites del instalador».
+
+La documentación de la Fase 3 (T7) sigue abierta hasta el cierre de la fase.
 
 ## Reporte de uso
 
@@ -761,7 +781,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1238 pruebas, 184 saltadas: 181 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1262 pruebas, 196 saltadas: 193 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 
@@ -792,18 +812,18 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-21** (T4 de la Fase 3 cerrada: renderizado y aplicación de los niveles 1 a 4).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-21** (T5 de la Fase 3 cerrada: cambios de nivel, ediciones a mano y `-Force`).
 
 ### Avance global
 
-**El proyecto completo va en 53%.** Cuenta las cinco fases con el mismo peso; las fases 4 y 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 3 está desglosada pero sin ninguna unidad cerrada, así que el número sube cuando se desglosen en sub-fases.
+**El proyecto completo va en 55%.** Cuenta las cinco fases con el mismo peso; las fases 4 y 5 son backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 3 está desglosada pero sin ninguna unidad cerrada, así que el número sube cuando se desglosen en sub-fases.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **53%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | **55%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
-| **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | **63%** | 5 de 8 | Plan aprobado, en curso (T1 a T4 y T6 cerradas); antes de T4 el propietario corre la compuerta G1 ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
+| **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **75%** | 6 de 8 | Plan aprobado, en curso (T1 a T6 cerradas); antes de T4 el propietario corre la compuerta G1 ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
 | **4. Nombres de agentes configurables** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 
@@ -832,7 +852,7 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | Frente | Avance | % | Unidades |
 |:--|:--|--:|:--|
 | Tabla y estado | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T1, T2) |
-| Configuración y renderizado | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | **67%** | 2 de 3 (T3, T4, T5) |
+| Configuración y renderizado | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 3 de 3 (T3, T4, T5) |
 | Avisos | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 1 de 1 (T6) |
 | Documentación y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 2 (T7, cierre) |
 
@@ -844,7 +864,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
   - ✅ Hecho: nada.
   - ✅ Hecho: T3 lectura y validación de `<Target>/synclayer-config.json` (campo `level` de 1 a 5, ausente o `{}` = nivel 5; lectura única con tope de 64 KiB, rechazo de enlaces, claves de lista cerrada incluido `__type`), línea `Nivel:` y guardia temporal que impide aplicar un nivel 1 a 4.
   - ✅ Hecho también: T4 renderizado y aplicación de los niveles 1 a 4 (sólo `model:` y `effort:` de seis agentes, con valores de lista cerrada; falla cerrado ante un frontmatter que no entiende), clasificación contra lo que se escribiría y lo ya escrito, líneas `Ajuste:` y retirada de la guardia temporal. Se hizo sin la compuerta G1: el efecto real de `effort:` en Claude Code sólo está verificado por documentación.
-  - ⬜ Falta: T5 cambios de nivel, ediciones a mano y `-Force` (línea `Nivel anterior:`, frase del exit 3 y casos 31 a 37).
+  - ✅ Hecho también: T5 cambios de nivel, ediciones a mano y `-Force`: la tabla de situaciones tiene prueba (cambio de nivel con archivos intactos es `ACTUALIZAR`, una edición a mano es `MODIFICADO`, estado perdido se trata como ausente), línea `Nivel anterior:` y frase del exit 3.
+  - ⬜ Falta: nada.
 - **Avisos**
   - ✅ Hecho: nada.
   - ✅ Hecho: T6 (adelantada a T4 y T5 por decisión del propietario) aviso por `stderr` si el nivel es 1 a 4 y el entorno trae `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`; nunca imprime el valor y con nivel 5 no añade ninguna línea.
@@ -882,8 +903,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-20 | T3 de la Fase 3: lectura y validación de `synclayer-config.json` (entrada no confiable, falla cerrado, guardia temporal para niveles 1 a 4); revisada por `auditor` y `shield` | ✅ |
 | 2026-11-20 | T6 de la Fase 3 (adelantada): avisos de variables de entorno que anulan el nivel, sin imprimir su valor; revisada por `auditor` y `shield` | ✅ |
 | 2026-11-21 | T4 de la Fase 3: renderizado y aplicación de los niveles 1 a 4 (frontmatter de seis agentes, valores de lista cerrada, falla cerrado), guardia temporal retirada; revisada por `auditor` y `shield` en tres rondas; sin la compuerta G1 | ✅ |
-| **Ahora** | **T5 de la Fase 3** (cambios de nivel, ediciones a mano y `-Force`) y, del propietario, la compuerta G1 (`effort:` con `/tasks`, sin bloquear ya), del propietario, comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
-| Luego | T7 (completar la documentación) y cierre de la Fase 3 y desglosar las fases 4 y 5 (backlog) | ⬜ |
+| 2026-11-21 | T5 de la Fase 3: cambios de nivel, ediciones a mano y `-Force` (casos 31 a 37 y cada fila de la tabla de situaciones, línea `Nivel anterior:` y frase del exit 3); revisada por `auditor` | ✅ |
+| **Ahora** | **Cierre de la Fase 3** (T7 completar la documentación, `sentinel`, `shield` y `auditor` sobre el cambio completo) y, del propietario, la compuerta G1 (`effort:` con `/tasks`, sin bloquear ya), del propietario, comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
+| Luego | Desglosar las fases 4 y 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
 

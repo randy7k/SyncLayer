@@ -2,6 +2,25 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 3, T5: cambios de nivel, ediciones a mano y `-Force`)
+
+- Tras `Nivel:`, el instalador imprime `Nivel anterior: M` sólo cuando el estado previo es válido, todas
+  sus entradas tienen el mismo nivel M y M es distinto del nivel actual.
+- El mensaje del exit 3 (`MODIFICADO` sin `-Force`) termina con la línea `Si cambiaste model: o effort: a
+  mano, usa synclayer-config.json.` Se añade siempre que hay exit 3, también cuando el único `MODIFICADO`
+  no tiene `model:` (el hook) o cuando se perdió el estado (entonces el arreglo es `-Force`).
+- Comportamiento verificado con pruebas (casos 31 a 37 del plan): cambiar de nivel con archivos intactos y
+  estado válido es `ACTUALIZAR` (con respaldo de la versión y del estado anteriores), nunca `MODIFICADO`;
+  una edición a mano es `MODIFICADO` en cualquier nivel y archivo, también en los fijos, con exit 3 y sin
+  escribir nada sin `-Force` (con `-Force` se respalda la versión local); con estado ilegible, ausente o de
+  esquema desconocido, lo que coincide con lo esperado es `IGUAL` y lo que difiere `MODIFICADO`, nunca
+  `ACTUALIZAR`; un estado de esquema 1 intacto con nivel 3 es `ACTUALIZAR` y migra a esquema 2.
+- Límite nuevo: tras un fallo parcial (exit 1 o 4 a mitad de la copia) el estado no se reescribe y queda
+  desfasado; si luego se cambia de nivel, los archivos ya copiados salen `MODIFICADO`. Hay que repetir la
+  instalación con el mismo nivel antes de cambiarlo; restaurar a mano un estado viejo tiene el mismo
+  efecto. Quien puede escribir el estado puede forjar `written` (aceptado por el modelo de amenazas).
+- T7 sigue abierta hasta el cierre de la fase.
+
 ### Añadido (Fase 3, T4: renderizado y aplicación de los niveles 1 a 4)
 
 - Un nivel de 1 a 4 válido **se aplica**: para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle`
@@ -27,8 +46,8 @@
 - La compuerta G1 (comprobar en Claude Code real que `effort:` se reconoce) no se corrió: T4 se hizo sin
   ella por decisión del propietario. El efecto real de `effort:` y de un valor no soportado sólo está
   verificado por la documentación. No hay medición de ahorro ni de calidad por nivel.
-- Pendiente (T5): la línea `Nivel anterior:`, la frase «Si cambiaste model: o effort: a mano, usa
-  synclayer-config.json.» del mensaje del exit 3 y los casos 31 a 37 como pruebas formales.
+- Lo que T4 dejó pendiente (la línea `Nivel anterior:`, la frase del exit 3 y los casos 31 a 37) lo
+  cerró T5, arriba.
 
 ### Añadido (niveles, Fase 3)
 
@@ -40,12 +59,12 @@ compuerta G1. El detalle está en las entradas por task:
 - T2, estado del instalador con esquema 2 y migración desde el esquema 1.
 - T3, lectura y validación de `<Target>/synclayer-config.json` y guardia temporal (retirada en T4).
 - T4, renderizado y aplicación de los niveles 1 a 4.
+- T5, cambios de nivel, ediciones a mano y `-Force` (`Nivel anterior:`, frase del exit 3, casos 31 a 37).
 - T6, avisos de variables de entorno que anulan el nivel (adelantada a T4 y T5).
-- T7 (parcial, abierta hasta después de T5), documentación de lo que existe: README (sección «Niveles»,
-  estado del instalador, límites), CLAUDE.md, `docs/agentes.md`, `rules/agentes.md` y el estado de la
-  fase en el backlog.
-- Pendiente: T5 (pruebas de transiciones, `Nivel anterior:` y frase del exit 3); al cerrarla se completa
-  T7. No hay medición de ahorro ni de calidad por nivel.
+- T7 (abierta hasta el cierre de la fase), documentación: README (sección «Niveles», estado del
+  instalador, límites), CLAUDE.md, `docs/agentes.md`, `rules/agentes.md` y el estado de la fase en el
+  backlog.
+- Pendiente: el cierre de la fase. No hay medición de ahorro ni de calidad por nivel.
 
 ### Añadido (Fase 3, T6: avisos de variables de entorno)
 

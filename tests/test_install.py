@@ -3347,6 +3347,382 @@ class InstallCases:
         self.assertIn("Aparecio mientras se escribia", err)
         self.assertTrue(os.path.exists(os.path.join(real, "synclayer-manifest.json")))
 
+    # --- Fase 3, T5: cambios de nivel, ediciones a mano y -Force (casos 31 a 37 y la tabla de situaciones de 3.5) ---
+    #
+    # Mapa de la tabla «Cómo quedan las situaciones que importan» (3.5) a sus pruebas:
+    #   Sin configuracion, destino de la Fase 1 ........ test_t5_situation_phase1_target_without_config_is_igual_and_migrates
+    #   Nivel 5 a 3 / 3 a 5 ............................ test_t5_case31_level_changes_are_actualizar_with_backup_and_the_previous_level
+    #   Edicion a mano de model: tras instalar ......... test_t5_case32_manual_edit_is_modified_exit3_writes_nothing_and_force_backs_up
+    #   Edicion a mano de un agente fijo ............... (la misma, con auditor, shield y debugger)
+    #   Edicion a mano y luego cambio de nivel ......... test_t5_case32_manual_edit_then_level_change_is_modified_for_that_file_only
+    #   Cambio de nivel y del origen a la vez .......... test_t5_case34_level_change_and_source_change_together_are_actualizar
+    #   Estado schema 1, destino intacto, nivel 3 ...... test_t5_case33_schema1_state_with_intact_destination_at_level_3_is_actualizar
+    #   Sin estado, destino del repositorio, nivel 3 ... test_t5_case35_unreadable_absent_or_unknown_state_is_treated_as_absent
+    #   Estado ilegible, destino ya en el nivel ........ (la misma)
+    #   Estado de otro nivel, archivos ya en el nuevo .. test_t5_state_of_another_level_with_files_already_at_the_new_level_is_igual
+    #   HUERFANO con cambio de nivel ................... test_t5_orphan_is_reported_and_kept_on_a_level_change
+
+    PHRASE = "Si cambiaste model: o effort: a mano, usa synclayer-config.json."
+
+    def t5_first_install(self, level):
+        files = self.make_level_source()
+        if level != 5:
+            self.set_level(level)
+        self.install_ok()
+        return files
+
+    def t5_world(self):
+        return snapshot(self.target), sorted(os.listdir(self.tmp))
+
+    def t5_changed(self, files, old_level, new_level):
+        old = level_expected(files, old_level)
+        new = level_expected(files, new_level)
+        return [rel for rel in files if old[rel] != new[rel]]
+
+    def t5_prev_lines(self, out):
+        return [l for l in out.splitlines() if l.startswith("Nivel anterior:")]
+
+    def t5_assert_previous_level(self, out, previous):
+        """Una sola linea `Nivel anterior: M`, justo despues de la linea `Nivel:`."""
+        lines = out.splitlines()
+        idx = [n for n, l in enumerate(lines) if l.startswith("Nivel: ")]
+        self.assertEqual(len(idx), 1, out)
+        self.assertEqual(lines[idx[0] + 1], "Nivel anterior: %d" % previous, out)
+        self.assertEqual(self.t5_prev_lines(out), ["Nivel anterior: %d" % previous])
+
+    def t5_path(self, rel):
+        return os.path.join(*rel.split("/"))
+
+    def test_t5_case31_level_changes_are_actualizar_with_backup_and_the_previous_level(self):
+        files = self.t5_first_install(5)
+        previous = 5
+        for step, level in enumerate((3, 1, 3, 5)):
+            # `previous` avanza antes de las aserciones; si el paso falla, se resincroniza el destino con -Force
+            # para que los pasos siguientes no fallen en cascada por un punto de partida equivocado.
+            prior, previous = previous, level
+            ok = False
+            with self.subTest(step=step, previous=prior, level=level):
+                self.set_level(level)
+                backup = os.path.join(self.tmp, "respaldo%d" % step)
+                old = level_expected(files, prior)
+                changed = self.t5_changed(files, prior, level)
+                self.assertTrue(changed)
+                old_state = read(self.target, self.STATE)
+                wanted = {rel: ("ACTUALIZAR" if rel in changed else "IGUAL") for rel in files}
+                before = self.t5_world()
+                code, out, err = self.run_install("-DryRun", "-BackupDir", backup)
+                self.assertEqual(code, 0, out + err)
+                self.t5_assert_previous_level(out, prior)
+                self.assertEqual(self.states(out), wanted)
+                self.assertIn("Respaldo: ", out)
+                self.assertEqual(self.t5_world(), before)
+                self.assertFalse(os.path.exists(backup))
+                out, err = self.install_ok("-BackupDir", backup)
+                self.t5_assert_previous_level(out, prior)
+                self.assertEqual(self.states(out), wanted)
+                self.assert_level_installed(files, level)
+                saved = self.tree(backup)
+                self.assertEqual(sorted(saved), sorted([self.t5_path(r) for r in changed] + [self.STATE]))
+                for rel in changed:
+                    self.assertEqual(saved[self.t5_path(rel)], old[rel], rel)
+                self.assertEqual(saved[self.STATE], old_state)
+                ok = True
+            if not ok:
+                self.run_install("-Force", "-BackupDir", os.path.join(self.tmp, "resync%d" % step))
+        for rel, data in files.items():
+            self.assertEqual(read(self.target, rel), data, rel)
+
+    def test_t5_the_previous_level_line_appears_only_when_a_valid_state_has_another_level(self):
+        self.make_level_source()
+        self.set_level(3)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.t5_prev_lines(out), [], "sin estado")
+        self.install_ok()
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(self.t5_prev_lines(out), [], "mismo nivel")
+        out, err = self.install_ok()
+        self.assertEqual(self.t5_prev_lines(out), [], "mismo nivel, ejecucion real")
+        self.set_level(4)
+        code, out, err = self.run_install("-DryRun")
+        self.t5_assert_previous_level(out, 3)
+        # un estado con niveles mezclados (no lo escribe este instalador) no dice un nivel anterior
+        state = json.loads(read(self.target, self.STATE))
+        state["files"][0]["level"] = 2
+        write(self.target, self.STATE, (json.dumps(state, indent=2) + "\n").encode("ascii"))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.t5_prev_lines(out), [], "niveles mezclados")
+
+    def test_t5_situation_phase1_target_without_config_is_igual_and_migrates(self):
+        files = self.make_level_source()
+        for rel, data in files.items():
+            write(self.target, rel, data)
+        self.write_state(files, schema=1)
+        old_state = read(self.target, self.STATE)
+        backup = os.path.join(self.tmp, "respaldo")
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode, "-BackupDir", backup)
+            self.assertEqual(code, 0, out + err)
+            self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+            self.assertEqual(self.t5_prev_lines(out), [], "el esquema 1 es el nivel 5: no hay nivel anterior")
+            self.assertIn("Nivel: 5 (por defecto", out)
+        self.assert_level_installed(files, 5)
+        self.assertEqual(self.tree(backup), {self.STATE: old_state})
+
+    def test_t5_case32_manual_edit_is_modified_exit3_writes_nothing_and_force_backs_up(self):
+        combos = [(5, "agents/atlas.md"), (5, "agents/auditor.md"), (3, "agents/atlas.md"), (3, "agents/auditor.md"),
+                  (3, "agents/shield.md"), (3, "agents/debugger.md"), (3, "agents/forge.md"),
+                  (1, "agents/atlas.md"), (1, "agents/auditor.md")]
+        for n, (level, rel) in enumerate(combos):
+            with self.subTest(level=level, rel=rel):
+                shutil.rmtree(self.target, ignore_errors=True)
+                files = self.t5_first_install(5)
+                if level != 5:
+                    # la edicion llega despues de un cambio de nivel, no de una instalacion limpia
+                    self.set_level(level)
+                    self.install_ok()
+                expected = level_expected(files, level)
+                edited = read(self.target, rel).replace(b"\nmodel: ", b"\nmodel: manual-", 1)
+                self.assertNotEqual(edited, expected[rel])
+                write(self.target, rel, edited)
+                before = self.t5_world()
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 3, out + err)
+                    self.assertEqual(self.states(out), {r: ("MODIFICADO" if r == rel else "IGUAL") for r in files})
+                    self.assertIn(self.PHRASE, err)
+                    self.assertEqual(self.t5_world(), before)
+                backup = os.path.join(self.tmp, "respaldo%d" % n)
+                self.install_ok("-Force", "-BackupDir", backup)
+                self.assertEqual(self.tree(backup), {self.t5_path(rel): edited})
+                self.assertEqual(read(self.target, rel), expected[rel])
+                self.assert_level_installed(files, level)
+                shutil.rmtree(self.target)
+
+    def test_t5_case32_manual_edit_then_level_change_is_modified_for_that_file_only(self):
+        files = self.t5_first_install(3)
+        rel = "agents/atlas.md"
+        old = level_expected(files, 3)
+        edited = read(self.target, rel).replace(b"\nmodel: ", b"\nmodel: manual-", 1)
+        write(self.target, rel, edited)
+        old_state = read(self.target, self.STATE)
+        self.set_level(1)
+        changed = self.t5_changed(files, 3, 1)
+        self.assertIn(rel, changed)
+        self.assertGreater(len(changed), 1)
+        wanted = {r: ("MODIFICADO" if r == rel else ("ACTUALIZAR" if r in changed else "IGUAL")) for r in files}
+        before = self.t5_world()
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode)
+            self.assertEqual(code, 3, out + err)
+            self.assertEqual(self.states(out), wanted)
+            self.assertIn(self.PHRASE, err)
+            self.assertEqual(self.t5_world(), before, "ni los ACTUALIZAR se escriben si hay un MODIFICADO")
+        backup = os.path.join(self.tmp, "respaldo")
+        self.install_ok("-Force", "-BackupDir", backup)
+        saved = self.tree(backup)
+        self.assertEqual(sorted(saved), sorted([self.t5_path(r) for r in changed] + [self.STATE]))
+        self.assertEqual(saved[self.t5_path(rel)], edited)
+        for r in changed:
+            if r != rel:
+                self.assertEqual(saved[self.t5_path(r)], old[r], r)
+        self.assertEqual(saved[self.STATE], old_state)
+        self.assert_level_installed(files, 1)
+
+    def test_t5_case33_schema1_state_with_intact_destination_at_level_3_is_actualizar(self):
+        files = self.make_level_source()
+        for rel, data in files.items():
+            write(self.target, rel, data)
+        self.write_state(files, schema=1)
+        self.set_level(3)
+        old_state = read(self.target, self.STATE)
+        self.assertEqual(json.loads(old_state)["schema"], 1)
+        changed = self.t5_changed(files, 5, 3)
+        self.assertTrue(changed)
+        wanted = {rel: ("ACTUALIZAR" if rel in changed else "IGUAL") for rel in files}
+        backup = os.path.join(self.tmp, "respaldo")
+        before = self.t5_world()
+        code, out, err = self.run_install("-DryRun", "-BackupDir", backup)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(out), wanted)
+        self.t5_assert_previous_level(out, 5)
+        self.assertEqual(self.t5_world(), before)
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(self.states(out), wanted)
+        self.assertEqual(json.loads(read(self.target, self.STATE))["schema"], 2)
+        self.assert_level_installed(files, 3)
+        saved = self.tree(backup)
+        self.assertEqual(sorted(saved), sorted([self.t5_path(r) for r in changed] + [self.STATE]))
+        for rel in changed:
+            self.assertEqual(saved[self.t5_path(rel)], files[rel], rel)
+        self.assertEqual(saved[self.STATE], old_state)
+
+    def test_t5_case34_level_change_and_source_change_together_are_actualizar(self):
+        files = self.t5_first_install(5)
+        new = dict(files)
+        new["agents/atlas.md"] = agent_md("atlas", "claude-fable-5-2", before=["version: 2"])
+        new["agents/forge.md"] = agent_md("forge", "sonnet", before=["version: 2"])
+        new["agents/auditor.md"] = agent_md("auditor", "opus", before=["version: 2"])
+        new["rules/agentes.md"] = b"reglas 2\n"
+        self.make_level_source(new)
+        self.set_level(3)
+        old = level_expected(files, 5)
+        want = level_expected(new, 3)
+        changed = [rel for rel in new if old[rel] != want[rel]]
+        for rel in ("agents/atlas.md", "agents/forge.md", "agents/auditor.md", "rules/agentes.md", "agents/scribe.md"):
+            self.assertIn(rel, changed)
+        backup = os.path.join(self.tmp, "respaldo")
+        wanted = {rel: ("ACTUALIZAR" if rel in changed else "IGUAL") for rel in new}
+        before = self.t5_world()
+        code, out, err = self.run_install("-DryRun", "-BackupDir", backup)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(out), wanted)
+        self.t5_assert_previous_level(out, 5)
+        self.assertEqual(self.t5_world(), before)
+        self.assertFalse(os.path.exists(backup))
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(self.states(out), wanted)
+        self.t5_assert_previous_level(out, 5)
+        self.assert_level_installed(new, 3)
+        self.assertIn(b"version: 2", read(self.target, "agents/forge.md"))
+        saved = self.tree(backup)
+        self.assertEqual(sorted(saved), sorted([self.t5_path(r) for r in changed] + [self.STATE]))
+        for rel in changed:
+            self.assertEqual(saved[self.t5_path(rel)], old[rel], rel)
+
+    def t5_bad_state(self, kind):
+        """Escribe en el destino un estado que el instalador no puede usar (o ninguno)."""
+        if kind == "absent":
+            return
+        if kind == "ilegible":
+            data = b"{ esto no es json"
+        elif kind == "schema3":
+            data = b'{"schema": 3, "algorithm": "sha256", "eol": "lf", "files": []}'
+        else:
+            state = json.loads(lr.state_for(read(self.src, "install-manifest.json")))
+            state["files"][0]["written"] = "no-es-hexadecimal"
+            data = (json.dumps(state, indent=2) + "\n").encode("ascii")
+        write(self.target, self.STATE, data)
+
+    def test_t5_case35_unreadable_absent_or_unknown_state_is_treated_as_absent(self):
+        variants = [("absent", 3), ("absent", 1), ("ilegible", 3), ("ilegible", 1), ("schema3", 3), ("written", 3)]
+        for n, (kind, level) in enumerate(variants):
+            with self.subTest(state=kind, level=level):
+                shutil.rmtree(self.target, ignore_errors=True)
+                files = self.make_level_source()
+                self.set_level(level)
+                # (a) el destino ya esta en el nivel pedido: IGUAL, el estado se reescribe y no se respalda
+                for rel, data in level_expected(files, level).items():
+                    write(self.target, rel, data)
+                self.t5_bad_state(kind)
+                backup = os.path.join(self.tmp, "respaldo-a%d" % n)
+                out, err = self.install_ok("-BackupDir", backup)
+                self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+                self.assertIn("escritos=0", out)
+                self.assertEqual(self.t5_prev_lines(out), [])
+                self.assertEqual("Se trata como ausente" in err, kind != "absent", err)
+                self.assertFalse(os.path.exists(backup))
+                self.assert_level_installed(files, level)
+                shutil.rmtree(self.target)
+                # (b) el destino tiene los bytes del repositorio: lo que difiere del esperado es MODIFICADO,
+                # nunca ACTUALIZAR (sin estado valido no se reconoce ningun archivo como propio)
+                self.set_level(level)
+                for rel, data in level_expected(files, 5).items():
+                    write(self.target, rel, data)
+                self.t5_bad_state(kind)
+                changed = self.t5_changed(files, 5, level)
+                self.assertTrue(changed)
+                wanted = {rel: ("MODIFICADO" if rel in changed else "IGUAL") for rel in files}
+                before = self.t5_world()
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 3, out + err)
+                    self.assertEqual(self.states(out), wanted)
+                    self.assertNotIn("ACTUALIZAR ", out)
+                    self.assertIn(self.PHRASE, err)
+                    self.assertEqual(self.t5_prev_lines(out), [])
+                    self.assertEqual(self.t5_world(), before)
+                backup = os.path.join(self.tmp, "respaldo-b%d" % n)
+                self.install_ok("-Force", "-BackupDir", backup)
+                saved = self.tree(backup)
+                self.assertEqual(sorted(saved), sorted(self.t5_path(r) for r in changed), "un estado invalido no se respalda")
+                for rel in changed:
+                    self.assertEqual(saved[self.t5_path(rel)], files[rel], rel)
+                self.assert_level_installed(files, level)
+                shutil.rmtree(self.target)
+
+    def test_t5_state_of_another_level_with_files_already_at_the_new_level_is_igual(self):
+        files = self.make_level_source()
+        for rel, data in level_expected(files, 3).items():
+            write(self.target, rel, data)
+        old_state = lr.state_for(read(self.src, "install-manifest.json"), None, 5)
+        write(self.target, self.STATE, old_state)
+        self.set_level(3)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertIn("escritos=0", out)
+        self.t5_assert_previous_level(out, 5)
+        self.assert_level_installed(files, 3)
+        self.assertEqual(self.tree(backup), {self.STATE: old_state})
+
+    def test_t5_orphan_is_reported_and_kept_on_a_level_change(self):
+        files = self.make_level_source()
+        old = dict(files)
+        old["agents/viejo.md"] = b"de una version anterior\n"
+        for rel, data in old.items():
+            write(self.target, rel, data)
+        self.write_state(old)
+        self.set_level(3)
+        changed = self.t5_changed(files, 5, 3)
+        code, out, err = self.run_install("-DryRun", "-BackupDir", os.path.join(self.tmp, "respaldo-dry"))
+        self.assertEqual(code, 0, out + err)
+        out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        wanted = {rel: ("ACTUALIZAR" if rel in changed else "IGUAL") for rel in files}
+        wanted["agents/viejo.md"] = "HUERFANO"
+        self.assertEqual(self.states(out), wanted)
+        self.t5_assert_previous_level(out, 5)
+        self.assertEqual(read(self.target, "agents/viejo.md"), b"de una version anterior\n")
+
+    def test_t5_case36_hook_goes_first_in_a_level_change_that_also_updates_the_hook(self):
+        files = self.t5_first_install(5)
+        new = dict(files)
+        new["hooks/agent_guard.py"] = b"print('guard 2')\n"
+        self.make_level_source(new)
+        self.set_level(3)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        copied = [l[len("Copiado: "):] for l in out.splitlines() if l.startswith("Copiado: ")]
+        saved = [l[len("Respaldado: "):] for l in out.splitlines() if l.startswith("Respaldado: ")]
+        self.assertEqual(copied[0], "hooks/agent_guard.py", out)
+        self.assertEqual(saved[0], "hooks/agent_guard.py", out)
+        self.assertIn("agents/atlas.md", copied[1:])
+        self.assertEqual(sorted(copied), sorted(r for r in new if level_expected(files, 5)[r] != level_expected(new, 3)[r]))
+        self.assert_level_installed(new, 3)
+
+    def test_t5_case37_destination_in_crlf_with_the_content_of_the_level_is_igual_and_not_rewritten(self):
+        files = self.t5_first_install(3)
+        for rel, data in level_expected(files, 3).items():
+            write(self.target, rel, data.replace(b"\n", b"\r\n"))
+        snap = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        out, err = self.install_ok()
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertIn("escritos=0", out)
+        self.assertEqual(snapshot(self.target), snap)
+        self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+        # con un estado que dice otro nivel: los archivos que ya coinciden en CRLF siguen siendo IGUAL
+        write(self.target, self.STATE, lr.state_for(read(self.src, "install-manifest.json"), None, 5))
+        for rel in ("agents/atlas.md", "agents/scribe.md"):
+            write(self.target, rel, level_expected(files, 3)[rel].replace(b"\n", b"\r\n"))
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertEqual(read(self.target, "agents/atlas.md"), level_expected(files, 3)["agents/atlas.md"].replace(b"\n", b"\r\n"))
+        self.assert_state(3, level_hashes(files, 3))
+        self.assertEqual(sorted(self.tree(backup)), [self.STATE])
+
 
 def _make_class(label, exe, reason):
     cls = type("Install" + label, (InstallCases, unittest.TestCase), {"exe": exe, "label": label})

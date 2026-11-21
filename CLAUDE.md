@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1238 pruebas, 184 saltadas (181 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1262 pruebas, 196 saltadas (193 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -202,8 +202,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: T1,
-  T2, T3, T4 y T6 hechas; T5 (pruebas de transiciones, línea `Nivel anterior:` y frase del exit 3) y
-  el cierre pendientes; T7 abierta hasta después de T5. Los niveles 1 a 4 se aplican (el instalador
+  T2, T3, T4, T5 y T6 hechas; el cierre pendiente; T7 abierta hasta el cierre de la fase. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
   Claude Code sólo está verificado por documentación. No lo documentes como probado en una máquina real.
   - Contrato con las pruebas: la tabla nivel por agente vive en `install.ps1` (`$LevelRows`, niveles 1 a 4;
@@ -233,8 +232,15 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   - La clasificación compara con `$outHash` (lo que se escribiría) y con `written` del estado previo:
     cambio de nivel con archivos intactos = `ACTUALIZAR`; mismo nivel = `IGUAL`; edición a mano =
     `MODIFICADO`. `Read-State` lee una sola vez con tope y el esquema 1 tiene lista cerrada de claves.
-  - Pendiente de T5: línea `Nivel anterior:`, la frase del exit 3 que remite a la configuración y los
-    casos 31 a 37 del plan como pruebas formales.
+  - Contrato de T5: `Nivel anterior: M` sólo con estado previo válido cuyas entradas tienen todas el
+    mismo nivel M distinto del actual (nunca sin estado, con el mismo nivel ni con niveles mezclados). El
+    mensaje del exit 3 termina SIEMPRE con «Si cambiaste model: o effort: a mano, usa
+    synclayer-config.json.», aunque el `MODIFICADO` no tenga `model:` (el hook) o se haya perdido el
+    estado (entonces el arreglo es `-Force`). Una edición a mano es `MODIFICADO` en cualquier nivel y
+    archivo, incluidos los fijos; con estado ilegible, ausente o de esquema desconocido nunca hay
+    `ACTUALIZAR`. Tras un fallo parcial el estado queda desfasado: cambiar de nivel entonces da
+    `MODIFICADO` en lo ya copiado; repite antes con el mismo nivel. Casos 31 a 37 del plan: pruebas
+    `test_t5_case31`..`case37` en `tests/test_install.py`.
   - Límites conocidos de la configuración (README, «Límites del instalador»): 5.1 acepta sintaxis laxa
     (comillas simples, `+3`, `03`); con `level` repetido gana el último; carrera residual de lectura de
     enlace; `Format-Safe` no escapa `\`; pwsh 7 sin verificar.
@@ -245,7 +251,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (181 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (193 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

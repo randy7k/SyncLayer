@@ -978,6 +978,15 @@ try {
                 (Get-ErrorText $_) + '). Se trata como ausente: no se respalda.')
         }
     }
+    # Nivel de la instalacion previa, solo para informar (linea "Nivel anterior:"): hay estado valido y todas sus
+    # entradas dicen el mismo nivel (asi lo escribe este instalador). Un estado ausente, no valido o con niveles
+    # mezclados no tiene nivel anterior. No interviene en la clasificacion.
+    $prevLevel = $null
+    if ($null -ne $prev) {
+        $prevLevels = @{}
+        foreach ($rel in $prev.Order) { $prevLevels[[string]$prev.Levels[$rel]] = $true }
+        if ($prevLevels.Count -eq 1) { $prevLevel = [int]@($prevLevels.Keys)[0] }
+    }
 
     # Paso 4: clasificar.
     $rows = New-Object System.Collections.Generic.List[object]
@@ -1066,6 +1075,9 @@ try {
     else {
         Write-Out ('Nivel: ' + $level + ' (por defecto; no hay ' + $ConfigName + ')')
     }
+    if ($null -ne $prevLevel -and $prevLevel -ne $level) {
+        Write-Out ('Nivel anterior: ' + $prevLevel)
+    }
     if ($backupItems.Count -gt 0) { Write-Out ('Respaldo: ' + (Format-Safe $BackupFull)) }
     if ($DryRun) { Write-Out 'Modo: -DryRun (no se escribe nada)' }
     foreach ($row in $rows) {
@@ -1083,7 +1095,8 @@ try {
         $mod = @($rows | Where-Object { $_.State -eq 'MODIFICADO' } | ForEach-Object { $_.Path })
         Stop-Install 3 ("error: hay cambios locales en el destino (MODIFICADO):`n  " + ($mod -join "`n  ") +
             "`nNo se escribio nada. Opciones: lleva el cambio al repositorio (regla de copia inversa del README)" +
-            " o repite con -Force (se respalda lo que se sobrescribe).")
+            " o repite con -Force (se respalda lo que se sobrescribe)." +
+            "`nSi cambiaste model: o effort: a mano, usa synclayer-config.json.")
     }
 
     # Destino no escribible: archivo de solo lectura que hay que reemplazar (o el estado). Exit 1 en ambos modos.
