@@ -1,7 +1,9 @@
 # Plan: Fase 4, nombres de agentes configurables (`aliases` en `synclayer-config.json`)
 
 Fecha: 2026-11-22. Estado: **aprobado por el propietario el 2026-11-22** (el plan y los valores por
-defecto de P1 a P9, sin cambios).
+defecto de P1 a P9). **Enmienda E1 incorporada tras T1 (2026-11-22):** regla del límite de palabra
+(3.5, casos 3, 5, 6, 34, 40, 42, 55 y 56, tarea T1-E). Ver «Enmiendas» al final. Los valores por
+defecto y el resto del plan quedaron aprobados el 2026-11-22; la enmienda E1 fue aprobada por el propietario el 2026-11-22.
 
 Fuentes: [`2026-11-22-fase4-nombres-exploracion.md`](2026-11-22-fase4-nombres-exploracion.md)
 (hechos verificados por `scout`, mapa de `oracle`, riesgos y opciones),
@@ -84,7 +86,9 @@ Los marcados **[G1]** los confirma el propietario en la compuerta G1.
    frontmatter nombra un rol (comprobado en el repositorio; T1 lo fija con una prueba).
 5. En `agents/*.md`, `rules/agentes.md` y `docs/agentes.md` los nueve nombres sólo aparecen como
    nombre de agente, en tres formas (`forge`, `Forge`, `FORGE`). «scribe» aparece además como
-   subcadena de «escribe», «describe», «reescribe» y «sobrescribe» (T1 fija el inventario).
+   subcadena de «escribe», «escriben», «describe», «reescribe» y «sobrescribe» (T1 fija el
+   inventario). Algunos nombres van pegados a comillas angulares: `docs/agentes.md` trae
+   `«SENTINEL sólo escribe tests»` y `«AUDITOR, SHIELD y…` (hallado por `forge` en T1; enmienda E1).
 6. Ningún nombre de rol aparece hoy dentro de un bloque de código cercado, del destino de un enlace
    ni de una URL en esos archivos (comprobado: el único bloque cercado de `docs/agentes.md` no nombra
    roles; T1 lo fija).
@@ -94,6 +98,9 @@ Los marcados **[G1]** los confirma el propietario en la compuerta G1.
 8. Las fases 1 a 3 están cerradas: el estado actual es esquema 2 y `Read-State` lee 1 y 2.
 9. Ningún agente ejecuta el instalador sin `-Target` y `HOME` temporales ni toca el `~/.claude` real.
    Los prompts de `forge`, `sentinel`, `auditor` y `shield` lo dicen de forma explícita.
+10. Los once archivos de texto gestionados son UTF-8 válido (T1-E lo fija con una prueba): en UTF-8
+    válido el byte `C3` siempre abre un carácter de dos bytes (U+00C0 a U+00FF). La regla de 3.5 se
+    apoya en eso.
 
 ## 3. Diseño
 
@@ -263,11 +270,57 @@ mayúsculas y mezclaría `forge`, `Forge` y `FORGE`):
 | Mayúsculas (`ToUpperInvariant`) | `SENTINEL` | `AMIGO-QA` |
 | `@agent-<rol>` | `@agent-sentinel` | `@agent-amigo-qa` (sale de la forma minúscula: `-` es límite por la izquierda; tiene prueba propia) |
 
-**Límite de palabra.** Una forma casa sólo si el carácter anterior y el siguiente (si existen) no
-están en `[A-Za-z0-9_]` ni son un byte de 0x80 a 0xFF (el texto se decodifica en ISO-8859-1, así que
-una letra acentuada en UTF-8 son bytes altos). `-`, `/`, `.`, `` ` ``, `@`, espacio y puntuación son
-límite. Patrón: una sola alternación con las formas de la tabla efectiva, sin `IgnoreCase`, con
-`RegexOptions.CultureInvariant`. Otras grafías (`sCribe`) no se tocan.
+**Límite de palabra — regla incorporada tras T1 (2026-11-22), enmienda E1.**
+
+Motivo: la regla original contaba como letra todo byte de 0x80 a 0xFF del texto decodificado en
+ISO-8859-1. Un rol pegado a `«` o `»` (UTF-8 `C2 AB` y `C2 BB`) no se reemplazaba:
+`«SENTINEL sólo escribe tests»` y `«AUDITOR, SHIELD y…` de `docs/agentes.md` conservaban `SENTINEL` y
+`AUDITOR` en la copia instalada, contra la aceptación de T6 y el caso 42.
+
+Regla vigente, sobre el texto decodificado en ISO-8859-1 (un byte, un carácter):
+
+- Una **letra** es un carácter de `[A-Za-z0-9_]`, o la **secuencia de dos caracteres** `\xC3`
+  seguido de uno de `\x80` a `\xBF` (en UTF-8, los caracteres U+00C0 a U+00FF: las letras latinas
+  acentuadas `á é í ó ú ñ ü` y sus mayúsculas).
+- **Todo lo demás es límite**, incluidos los demás bytes altos: `C2 AB` y `C2 BB` (`«` `»`), `C2 BF`
+  y `C2 A1` (`¿` `¡`), `C2 A0` (espacio duro), `E2 80 xx` (comillas tipográficas, raya y semirraya,
+  puntos suspensivos), `E2 86 92` (`→`), `E2 88 A5` (`∥`), y también `-`, `/`, `.`, `` ` ``, `@`,
+  espacio y puntuación ASCII.
+- Una forma casa sólo si **no** hay una letra justo antes ni justo después.
+- Límite izquierdo, dicho como procedimiento: se mira el carácter anterior; si está en
+  `[A-Za-z0-9_]`, es letra; si está entre `\x80` y `\xBF` **y** el anterior a ése es `\xC3`, es
+  letra; en cualquier otro caso (incluido un `\xC3` suelto o un byte de continuación sin `\xC3`
+  delante) es límite. Límite derecho: el carácter siguiente está en `[A-Za-z0-9_]`, o es `\xC3`
+  seguido de uno de `\x80` a `\xBF`.
+
+Expresión, la misma en los dos lenguajes. Dos lookbehind negativos de **ancho fijo** (uno y dos
+caracteres) en vez de uno de ancho variable: el módulo `re` de Python no admite lookbehind de ancho
+variable y .NET sí, así que esta forma vale en ambos.
+
+PowerShell 5.1 (fuente en ASCII, sin asterisco; `$alt` es la alternación de las formas, cada una con
+`[regex]::Escape`; opciones `RegexOptions.CultureInvariant`, sin `IgnoreCase`):
+
+```powershell
+$pattern = '(?<![A-Za-z0-9_])(?<!\u00C3[\u0080-\u00BF])(?:' + $alt + ')(?![A-Za-z0-9_])(?!\u00C3[\u0080-\u00BF])'
+```
+
+Python (`tests/aliases_ref.py`, sobre `data.decode("iso-8859-1")`, sin `re.I`):
+
+```python
+pattern = r"(?<![A-Za-z0-9_])(?<!\xc3[\x80-\xbf])(?:" + alt + r")(?![A-Za-z0-9_])(?!\xc3[\x80-\xbf])"
+```
+
+Límites reconocidos de la regla (se documentan):
+
+- `C3 97` (`×`) y `C3 B7` (`÷`) cuentan como letra: un rol pegado a ellos no se reemplaza. Falla
+  hacia el lado conservador.
+- Las letras de fuera de U+00C0 a U+00FF (`ő`, griego, cirílico) son límite: un rol pegado a una de
+  ellas sí se reemplaza. Hoy no hay ninguna en los once textos; el caso 5 lo vigila
+  (`foreign_letter_hits`).
+- Las marcas combinantes (categoría Unicode M, texto en NFD, p. ej. `forge` seguido de U+0301) son
+  límite: un rol pegado a una se reemplazaría y el acento quedaría sobre el alias. Hoy los once textos
+  son NFC y no tienen ninguna; el caso 5 también la vigila.
+- Otras grafías (`sCribe`) no se tocan.
 
 **Una sola pasada.** Se recorre el texto una vez, de izquierda a derecha, y lo ya reemplazado no se
 vuelve a examinar. Nunca reemplazos sucesivos rol por rol.
@@ -307,8 +360,8 @@ y obliga a decidir.
   sigue cumpliendo la forma del paso 3; mismo conjunto de claves de primer nivel, sin repetidas.
 - Recorrido en paralelo de entrada y salida: fuera de las coincidencias, carácter a carácter iguales;
   en cada coincidencia, la salida trae el texto esperado.
-- Residuo: la salida no contiene ninguna forma con límite de palabra de un rol con alias (lo
-  garantiza V7).
+- Residuo: la salida no contiene ninguna forma con límite de palabra (misma regla) de un rol con
+  alias (lo garantiza V7).
 
 Un error de transformación es un defecto del origen que el manifiesto no detecta: exit 1 antes de
 escribir, también con `-DryRun`.
@@ -326,14 +379,17 @@ Casos límite:
 |---|---|
 | Tabla efectiva vacía | No se llama a `ConvertTo-AliasBytes`; bytes del origen |
 | Agente sin alias propio, con otro rol aliado | `name:` intacto; `description:` y cuerpo con el alias del otro (referencias cruzadas: «ATLAS plan», «SHIELD review», «implemented by FORGE», «ORACLE report») |
-| «escribe», «describe», «reescribe», «sobrescribe», «Describe» con `scribe` aliado | No se tocan |
+| «escribe», «escriben», «describe», «reescribe», «sobrescribe», «Describe» con `scribe` aliado | No se tocan (letra ASCII pegada) |
+| Rol pegado a `«`, `»`, `¿`, `¡`, comilla tipográfica (`“` `”` `‘` `’`), raya (`—`), `…`, `→` o espacio duro | **Se reemplaza** (`«SENTINEL sólo…` pasa a `«AMIGO-QA sólo…`) |
+| Rol pegado a una letra acentuada, antes o después (`Sentinelé`, `ñforge`, `SCRIBEÁ`) | **No se reemplaza** |
+| Rol seguido de espacio y palabra acentuada (`SENTINEL sólo`) | Se reemplaza (el espacio es límite) |
 | `agents/forge.md`, `~/.claude/agents/forge.md` dentro de un texto | La ruta pasa al alias (es la ruta real en el destino) |
 | `Forge (Sonnet): ...` | `Dev (Sonnet): ...` |
 | Alias que contiene otro alias como subcadena (`qa` y `qa2`) | Sin interferencia: una sola pasada, límites de palabra |
 | `name:` duplicado, ausente o con otro valor; `description:` multilínea, ausente o duplicada | Error, exit 1 |
 | `name:` o rol en el cuerpo (`name: forge` tras el cierre) | Es cuerpo: pasa por el reemplazo de palabras |
 | Origen con CRLF | Llega en LF (bytes canónicos) |
-| Bytes altos (acentos, `→`, `∥`) junto a un nombre | Cuentan como letra: no hay coincidencia pegada a un byte alto |
+| Bytes altos del texto | Se conservan byte a byte (ida y vuelta por ISO-8859-1) |
 | Archivo que no nombra ningún rol con alias | Bytes idénticos al origen; sale `IGUAL` |
 | Hook (`hooks/agent_guard.py`) | Nunca se transforma |
 | Agente del manifiesto que no es uno de los nueve | No se transforma |
@@ -474,13 +530,14 @@ Se documentan (README y guía), no se comprueban:
   Python: `validate_table(aliases)`, `forms(table)`, `transform_text(text, table)`,
   `transform_agent(data, role, table)`, `transform_doc(data, table)`, `dest_for(path, table)` y
   `state_for3(manifest, out_hashes, level, dests)`. Lee `$AliasRoles`, `$ReservedAliases` y
-  `$YamlWords` con `levels_ref.read_ps_list`.
+  `$YamlWords` con `levels_ref.read_ps_list`. El límite de palabra es la expresión de 3.5.
 - `tests/test_aliases.py`: pruebas sin PowerShell (listas, inventario del repositorio, referencia).
 - `tests/test_install.py`: casos con `powershell.exe`, siempre con `-Target` y `HOME` temporales.
   Fixture nuevo `ALIAS_SAMPLE`: `agents/sentinel.md` (con `hooks:`), `agents/forge.md` (cuya
   `description:` nombra a `ATLAS`), `agents/atlas.md`, `agents/scribe.md`, `rules/agentes.md` y
-  `docs/agentes.md` mínimos (con «escribe», «describe», `@agent-forge`, `Forge (Sonnet):`, una tabla
-  en mayúsculas y un bloque cercado sin roles) y el hook. Ayudas: `set_config(level=None,
+  `docs/agentes.md` mínimos (en UTF-8, con «escribe», «describe», `@agent-forge`, `Forge (Sonnet):`,
+  una tabla en mayúsculas, un rol entre `«` y `»`, un rol tras `¿`, un rol pegado a una letra
+  acentuada y un bloque cercado sin roles) y el hook. Ayudas: `set_config(level=None,
   aliases=None)`, `assert_alias_installed(files, level, aliases)`, `write_state(..., schema=3,
   dests=...)`.
 - Las pruebas existentes no se modifican, salvo las anclas si alguna cambiara (no debería: 3.3).
@@ -493,10 +550,10 @@ Casos:
 |---|---|---|---|
 | 1 | `$AliasRoles` frente a `agents/*.md` | Los mismos nueve nombres | T1 |
 | 2 | `$ReservedAliases` y `$YamlWords` | Listas esperadas, en minúsculas, sin repetidos | T1 |
-| 3 | Inventario del repositorio | En los once archivos de texto, cada rol sólo aparece en las tres formas; conteo por archivo fijado; «escribe», «describe», «reescribe» y «sobrescribe» no cuentan | T1 |
+| 3 | Inventario del repositorio | En los once archivos de texto, cada rol sólo aparece en las tres formas; conteo de coincidencias reemplazables por archivo fijado **con la regla de E1** (los `SENTINEL` y `AUDITOR` de `docs/agentes.md` pegados a `«` cuentan como reemplazables); «escribe», «escriben», «describe», «reescribe» y «sobrescribe» no cuentan; ninguna aparición de un nombre de rol queda sin clasificar: o es reemplazable o es una de esas subcadenas | T1, T1-E |
 | 4 | Frontmatter real de los nueve | Una `name: <rol>`, una `description:` de una línea; ninguna otra línea del frontmatter nombra un rol | T1 |
-| 5 | Zonas sensibles | Ningún rol dentro de un bloque cercado, del destino de un enlace ni de una URL en `rules/agentes.md` y `docs/agentes.md` | T1 |
-| 6 | Referencia: nueve alias a la vez sobre el repositorio real | Sólo cambian `name:`, `description:` y líneas del cuerpo con roles; `hooks:` de los cuatro agentes con guarda idéntico; sin residuo | T1 |
+| 5 | Zonas sensibles | Ningún rol dentro de un bloque cercado, del destino de un enlace ni de una URL en `rules/agentes.md` y `docs/agentes.md`; los once textos son UTF-8 válido; ningún rol queda pegado a una letra de fuera de ASCII y de U+00C0 a U+00FF | T1, T1-E |
+| 6 | Referencia: nueve alias a la vez sobre el repositorio real | Sólo cambian `name:`, `description:` y líneas del cuerpo con roles; `hooks:` de los cuatro agentes con guarda idéntico; **sin residuo: ninguna aparición de un rol salvo las subcadenas del caso 3** | T1, T1-E |
 | 7 | Referencia: orden con el nivel | `render_expected(transform_agent(x))` = `transform_agent(render_expected(x))` para los seis modificables y los niveles 1 a 4 | T1 |
 | 8 | Referencia: validación | Cada regla V1 a V7 con un caso que falla y uno que pasa; ciclo A a B y B a A | T1 |
 | 9 | Sin `aliases`, y `"aliases": {}` | Destino, estado y stdout idénticos byte a byte a la corrida sin configuración; sin línea `Alias:` | T2 |
@@ -524,15 +581,15 @@ Casos:
 | 31 | Idempotencia con `destRel` no identidad | Segunda corrida: todo `IGUAL`, estado sin reescribir | T4 |
 | 32 | Instalación limpia con un alias (`ALIAS_SAMPLE`) | Cada archivo = referencia; `agents/<rol>.md` no existe; `name: <alias>`; estado esquema 3 | T5 |
 | 33 | Diferencia línea a línea | Sólo `name:`, `description:` y cuerpo; `hooks:` de `sentinel` byte a byte; LF y salto final | T5 |
-| 34 | Las cuatro formas y el límite de palabra | `forge`, `Forge (Sonnet):`, `FORGE`, `@agent-forge`, `agents/forge.md`; «escribe», «describe», «reescribe», «sobrescribe» intactos con `scribe` aliado | T5 |
+| 34 | Las cuatro formas y el límite de palabra | `forge`, `Forge (Sonnet):`, `FORGE`, `@agent-forge`, `agents/forge.md`; «escribe», «escriben», «describe», «reescribe», «sobrescribe» intactos con `scribe` aliado | T5 |
 | 35 | Referencias cruzadas | Agente sin alias propio cambia sólo donde nombra a otro; un archivo que no nombra roles con alias queda en los bytes del origen | T5 |
 | 36 | Frontmatter defectuoso: sin `name:`, `name:` duplicado o con otro valor, `description:` multilínea o duplicada, rol en `tools:` o en `hooks:`, sin cierre | Exit 1 en ambos modos; nada escrito; el mensaje nombra el rol | T5 |
 | 37 | Un defecto sólo importa si hay alias | El mismo origen instala sin alias | T5 |
 | 38 | La transformación sólo corre con tabla efectiva no vacía | Marcador inyectado en `function ConvertTo-AliasBytes` no se alcanza sin alias | T5 |
 | 39 | Autocomprobación | Resultado corrompido por inyección: exit 1, nada escrito | T5 |
-| 40 | Origen con CRLF y con bytes altos | Mismo resultado que con LF; bytes altos intactos | T5 |
+| 40 | Origen con CRLF y con bytes altos | Mismo resultado que con LF; los bytes altos se conservan byte a byte y el archivo sigue siendo UTF-8 válido | T5 |
 | 41 | Alias y nivel juntos, niveles 1 a 4 | El archivo con alias trae el `model:` y el `effort:` de la celda del **rol** y línea `Ajuste:` con la ruta de destino; bytes = referencia en los dos órdenes | T6 |
-| 42 | Repositorio real como origen, nueve alias, niveles 5 y 3 | 13 archivos; ninguno con nombre de rol; los once textos = referencia; el hook con el hash del manifiesto; sin residuo de roles | T6 |
+| 42 | Repositorio real como origen, nueve alias, niveles 5 y 3 | 13 archivos; ninguno con nombre de rol; los once textos = referencia; el hook con el hash del manifiesto; sin residuo de roles: ningún nombre de rol en los once textos instalados salvo las subcadenas del caso 3 (incluye los roles entre `«` y `»` de la guía) | T6 |
 | 43 | `-DryRun` con alias | Líneas `Alias:`, filas con rutas de destino, nada escrito | T6 |
 | 44 | Mensajes de verificación | `lo esperado para el nivel N y los alias`; sin alias, los textos de hoy | T6 |
 | 45 | Verificación posterior con alias (archivo alterado en el Paso 8) | Exit 4 | T6 |
@@ -545,6 +602,8 @@ Casos:
 | 52 | Exit 3 con alias | Frase añadida sólo si un `MODIFICADO` está en una ruta con alias | T7 |
 | 53 | Configuración intacta | Bytes y mtime de `synclayer-config.json` iguales tras instalar con alias y con `-Force`; no aparece en el respaldo | T7 |
 | 54 | `install.ps1` sigue en ASCII, sin asterisco, `&&`, `??` ni datos personales | Pruebas estáticas existentes | T1 a T7 |
+| 55 | Referencia: límite pegado a bytes altos (E1) | **Reemplaza** un rol pegado, antes y después, a `«`, `»`, `¿`, `¡`, `“`, `”`, `‘`, `’`, `—`, `–`, `…`, `→` y espacio duro. **No reemplaza** pegado a letra acentuada, antes o después: `Sentinelé`, `ñforge`, `éSCRIBE`, `SCRIBEÁ`. `\xC3` suelto y byte de continuación sin `\xC3` delante: límite (reemplaza). Las subcadenas del caso 3 siguen sin reemplazarse | T1-E |
+| 56 | Lo mismo en el instalador (E1) | Con `ALIAS_SAMPLE` en UTF-8: `«SENTINEL sólo escribe tests»` sale con el alias en mayúsculas y «escribe» intacto; `Sentinelé` y `ñforge` no cambian; bytes = `aliases_ref` | T5 |
 
 ## 4. Tareas
 
@@ -600,6 +659,29 @@ global sigue en 60 %. Este plan pasa a «aprobado».
 - **Dependencias:** aprobación del plan.
 - **Revisa:** `auditor`.
 
+#### T1-E. Enmienda de T1: límite de palabra de E1 — tamaño S — no cuenta como unidad
+
+Forma parte de T1 (mismo `forge`, misma unidad de la línea de tiempo). T1 no se da por cerrada sin
+ella.
+
+- **Objetivo:** que la referencia y sus pruebas usen la regla de 3.5 vigente (letra = `[A-Za-z0-9_]`
+  o la pareja `\xC3[\x80-\xBF]`; todo otro byte alto es límite).
+- **Archivos:** modificar `tests/aliases_ref.py`, `tests/test_aliases.py`. `install.ps1` no cambia
+  (aún no tiene la transformación).
+- **Pasos:** primero las pruebas rojas: caso 55, y los casos 3, 5 y 6 con la aserción de residuo
+  («ningún nombre de rol salvo las subcadenas permitidas») y los conteos nuevos. Después, sustituir en
+  `transform_text` el límite por la expresión Python de 3.5 (dos lookbehind de ancho fijo y dos
+  lookahead). Recalcular los conteos por archivo del caso 3 con la regla nueva y fijarlos: en
+  `docs/agentes.md` suben por los roles pegados a `«`. Añadir la comprobación de UTF-8 válido de los
+  once textos.
+- **Pruebas:** casos 3, 5, 6 y 55; el resto de `test_aliases.py` sin cambios.
+- **Aceptación:** la suite pasa; con los nueve alias, la referencia no deja ningún nombre de rol en
+  `docs/agentes.md`, `rules/agentes.md` ni en los nueve agentes, salvo «escribe», «escriben»,
+  «describe», «reescribe» y «sobrescribe»; `Sentinelé` y `ñforge` no se reemplazan; el patrón no usa
+  lookbehind de ancho variable ni `re.I`.
+- **Dependencias:** T1.
+- **Revisa:** `auditor` (junto con T1).
+
 #### T2. Clave `aliases`: lectura y validación de la tabla — tamaño M — revisión de seguridad
 
 - **Objetivo:** leer y validar `aliases` según 3.1 y 3.2 y mostrar las líneas `Alias:` (3.8), sin
@@ -616,7 +698,7 @@ global sigue en 60 %. Este plan pasa a «aprobado».
 - **Aceptación:** la suite pasa; ningún valor de `aliases` llega a un archivo del destino; ningún
   mensaje contiene el valor de un alias inválido; ningún camino de error escribe; la configuración no
   se abre para escritura; las pruebas de la Fase 3 sobre la configuración pasan sin cambios.
-- **Dependencias:** T1.
+- **Dependencias:** T1 y T1-E.
 - **Revisa:** `auditor` y `shield`.
 
 ### Fase B: rol y ruta
@@ -655,16 +737,16 @@ global sigue en 60 %. Este plan pasa a «aprobado».
 
 - **Objetivo:** el algoritmo de 3.5 y su uso: los alias se aplican de punta a punta.
 - **Archivos:** modificar `install.ps1`, `tests/test_install.py`.
-- **Pasos:** `ConvertTo-AliasText` y `ConvertTo-AliasBytes` (puras, con autocomprobación); el bloque
-  `# Alias:` calcula `$destRel` desde la tabla efectiva y los bytes con alias de los nueve agentes y
-  los dos textos; el bloque `# Nivel:` parte de esos bytes (la celda se sigue buscando por rol);
-  mensajes de error de transformación; retirar la guarda temporal de T2 y su prueba; fixture
-  `ALIAS_SAMPLE` y ayudas.
-- **Pruebas:** casos 32 a 40.
+- **Pasos:** `ConvertTo-AliasText` (con la expresión PowerShell de 3.5, tal cual) y
+  `ConvertTo-AliasBytes` (puras, con autocomprobación); el bloque `# Alias:` calcula `$destRel` desde
+  la tabla efectiva y los bytes con alias de los nueve agentes y los dos textos; el bloque `# Nivel:`
+  parte de esos bytes (la celda se sigue buscando por rol); mensajes de error de transformación;
+  retirar la guarda temporal de T2 y su prueba; fixture `ALIAS_SAMPLE` y ayudas.
+- **Pruebas:** casos 32 a 40 y 56.
 - **Aceptación:** la suite pasa; sin alias no se llama a la transformación (caso 38) y los bytes son
-  los de antes; con alias, todo byte escrito coincide con `aliases_ref`; el bloque `hooks:` de los
-  agentes con guarda queda idéntico; el hook no se transforma; ningún archivo fuera de los once textos
-  cambia.
+  los de antes; con alias, todo byte escrito coincide con `aliases_ref`; un rol pegado a `«`, `»`,
+  `¿` o `¡` se reemplaza y uno pegado a una letra acentuada no; el bloque `hooks:` de los agentes con
+  guarda queda idéntico; el hook no se transforma; ningún archivo fuera de los once textos cambia.
 - **Dependencias:** T4. G1 recomendada antes (no bloquea, P6).
 - **Revisa:** `auditor` y `shield`.
 
@@ -678,8 +760,9 @@ global sigue en 60 %. Este plan pasa a «aprobado».
 - **Pruebas:** casos 41 a 46.
 - **Aceptación:** la suite pasa; para cada agente modificable con alias y cada nivel de 1 a 4, el
   `model:` y el `effort:` escritos son los de la celda de su rol; con los nueve alias no queda ningún
-  `agents/<rol>.md` ni ninguna forma de rol en los once textos instalados; `auditor`, `shield` y
-  `debugger` conservan modelo y `hooks:` con cualquier alias.
+  `agents/<rol>.md` ni ningún nombre de rol en los once textos instalados, salvo las subcadenas
+  «escribe», «escriben», «describe», «reescribe» y «sobrescribe»; `auditor`, `shield` y `debugger`
+  conservan modelo y `hooks:` con cualquier alias.
 - **Dependencias:** T5.
 - **Revisa:** `auditor` y `shield`.
 
@@ -710,18 +793,20 @@ global sigue en 60 %. Este plan pasa a «aprobado».
   - `README.md`: sección «Alias» (formato, reglas V1 a V7 en lenguaje llano, `-DryRun`, reinstalar;
     qué se renombra y qué no; el archivo anterior queda y hay que quitarlo a mano; el huérfano se
     informa una vez; reiniciar sesiones); «Instalación» (línea `Alias:`, estado `HUERFANO`, códigos de
-    salida, exit 3); «Límites del instalador» (reemplazo textual, no semántico; bytes con alias fuera
-    del hash del manifiesto; esquema 3 ilegible para el instalador anterior; colisiones de 3.9;
-    referencias por nombre del usuario; renombrar en caliente no documentado; claves repetidas y
-    `__type`; G1 pendiente si no se corrió); «Límites del reporte de uso» (un agente con alias sale
-    como `(otro agente)`); copia inversa («Dos copias»); «Estructura» y «Pruebas» (conteos de la
-    salida real); «Línea de tiempo y avance».
+    salida, exit 3); «Límites del instalador» (reemplazo textual, no semántico; qué cuenta como letra
+    en el límite de palabra y sus dos límites reconocidos de 3.5; bytes con alias fuera del hash del
+    manifiesto; esquema 3 ilegible para el instalador anterior; colisiones de 3.9; referencias por
+    nombre del usuario; renombrar en caliente no documentado; claves repetidas y `__type`; G1
+    pendiente si no se corrió); «Límites del reporte de uso» (un agente con alias sale como
+    `(otro agente)`); copia inversa («Dos copias»); «Estructura» y «Pruebas» (conteos de la salida
+    real); «Línea de tiempo y avance».
   - `CLAUDE.md`: arquitectura (alias, estado esquema 2 o 3), convenciones (`$AliasRoles`,
     `$ReservedAliases`, `$YamlWords`, el marcador `# Alias:` y `function ConvertTo-AliasBytes` son
     contrato con las pruebas; diccionarios ordinales), no obvios (rol frente a ruta de destino; alias
-    primero y nivel después; el texto de `docs/agentes.md` y `rules/agentes.md` se transforma al
-    instalar: una palabra igual a un rol en esos archivos se reemplaza; el inventario de
-    `tests/test_aliases.py` falla si aparece una forma nueva).
+    primero y nivel después; el límite de palabra trabaja sobre ISO-8859-1 y sólo cuenta como letra
+    `[A-Za-z0-9_]` y la pareja `C3` más byte de continuación; el texto de `docs/agentes.md` y
+    `rules/agentes.md` se transforma al instalar: una palabra igual a un rol en esos archivos se
+    reemplaza; el inventario de `tests/test_aliases.py` falla si aparece una forma nueva).
   - `HISTORY.md`, `[Sin publicar]`: «Añadido (alias, Fase 4)».
   - `docs/agentes.md`: apartado «Cambiar el nombre de un agente» y el límite del reporte de uso. **Sin
     usar nombres de rol como ejemplo de alias** en el texto nuevo (se transformarían al instalar):
@@ -738,14 +823,15 @@ global sigue en 60 %. Este plan pasa a «aprobado».
 
 #### Cierre (lo coordina la sesión principal; cuenta como una unidad)
 
-- **C1. `sentinel`:** suite completa con la salida a la vista; los 54 casos de 3.11 cubiertos.
+- **C1. `sentinel`:** suite completa con la salida a la vista; los 56 casos de 3.11 cubiertos.
 - **C2. `shield`:** T2 a T7. Aplica: entrada de usuario (`aliases`), escritura de rutas derivadas de
   esa entrada, estado como entrada no confiable. Focos: que ningún alias inyecte una línea, una clave
   o un indicador YAML en el frontmatter; que el bloque `hooks:` no cambie con ningún alias; que una
   ruta con alias no salga de `agents/` ni atraviese un enlace; que un `dest` manipulado no convierta
   un archivo ajeno en `ACTUALIZAR` ni lleve una escritura fuera de la lista permitida; que el archivo
   huérfano nunca se toque; fuga del valor de un alias o del contenido del archivo en mensajes;
-  comparaciones no ordinales o con `IgnoreCase`; tamaño y carrera sobre la configuración.
+  comparaciones no ordinales o con `IgnoreCase`; que el reemplazo no parta una secuencia UTF-8 ni deje
+  un archivo que no sea UTF-8 válido; tamaño y carrera sobre la configuración.
 - **C3. `auditor`** sobre el cambio completo.
 - **C4.** Memoria del proyecto actualizada por la sesión principal.
 - **V1. Renombrado en caliente (propietario; fuera del conteo):** parte de G1. Sólo si se confirma que
@@ -756,11 +842,12 @@ global sigue en 60 %. Este plan pasa a «aprobado».
 
 ### 4.5 Unidades y aritmética de la línea de tiempo
 
-La Fase 4 tiene **9 unidades**: T1 a T8 y el cierre. El paso previo, G1, V1 y V2 no cuentan.
+La Fase 4 tiene **9 unidades**: T1 a T8 y el cierre. El paso previo, G1, V1 y V2 no cuentan. La
+enmienda T1-E es parte de la unidad T1: no añade unidades y la tabla no cambia.
 
 | Frente | Unidades |
 |---|---|
-| Datos y configuración | 2 (T1, T2) |
+| Datos y configuración | 2 (T1 con T1-E, T2) |
 | Rol y ruta | 2 (T3, T4) |
 | Transformación | 3 (T5, T6, T7) |
 | Documentación y cierre | 2 (T8, cierre) |
@@ -792,7 +879,10 @@ recalcula con la misma fórmula.
 |---|---|
 | El nivel no reconoce a un agente con alias y lo deja sin `model:` ni `effort:`, sin error | El rol sigue siendo la clave de `$outBytes` y de la celda (3.3); casos 41 y 48; aceptación de T6 |
 | La transformación altera el bloque `hooks:` o el tipo de `name:` | Sólo se tocan `name:`, `description:` y el cuerpo; autocomprobación línea a línea; V1 y V2; referencia independiente; casos 6, 33, 36 y 39; foco de `shield` |
-| «scribe» dentro de «escribe», «describe» | Límite de palabra con bytes altos como letra; casos 3 y 34 |
+| «scribe» dentro de «escribe», «describe» | Límite de palabra (letra ASCII pegada); casos 3 y 34 |
+| Un rol pegado a `«`, `¿` u otra puntuación no ASCII queda sin reemplazar (defecto hallado en T1) | Enmienda E1: sólo `[A-Za-z0-9_]` y la pareja `C3` más continuación cuentan como letra; aserción de residuo en los casos 6 y 42; casos 55 y 56 |
+| La expresión del límite difiere entre PowerShell y Python (lookbehind de ancho variable, clases de caracteres) | La misma expresión en los dos, con lookbehind de ancho fijo (3.5); caso 56 compara bytes del instalador con la referencia |
+| Un rol pegado a una letra de fuera de U+00C0 a U+00FF se reemplaza; pegado a `×` o `÷` no | Límites reconocidos y documentados; el caso 5 vigila que no haya ninguno en el repositorio |
 | Reemplazos en cadena (un alias contiene otro nombre) | Una sola pasada; V5 y V7; diccionario ordinal |
 | Un `@{}` de PowerShell o un `-replace` sin `c` mezcla las tres formas | Diccionario ordinal y expresiones sin `IgnoreCase` exigidos en 3.5; caso 34 |
 | El reemplazo textual cambia una palabra que no era un agente | Inventario fijado (casos 3 a 5); documentado como límite; aviso en `CLAUDE.md` para quien edite la guía |
@@ -840,3 +930,26 @@ Cada una tiene un valor por defecto, que es lo que el plan implementa si no hay 
   líneas `Alias:`. Alternativa: añadir `(rol <rol>)` a cada fila con alias (cambia el formato que leen
   las pruebas).
 - **P9. Nombre de la clave.** Por defecto: `aliases`. Alternativa: `names`.
+
+## Enmiendas
+
+### E1. Límite de palabra — incorporada tras T1 (2026-11-22)
+
+- **Defecto.** La regla original de 3.5 contaba como letra todo byte de 0x80 a 0xFF del texto
+  decodificado en ISO-8859-1. Lo halló `forge` al implementar T1: en `docs/agentes.md`,
+  `«SENTINEL sólo escribe tests»` y `«AUDITOR, SHIELD y…` llevan el rol pegado a `«` (UTF-8 `C2 AB`),
+  así que `SENTINEL` y `AUDITOR` no se reemplazaban. La copia instalada habría conservado dos nombres
+  de rol, contra la aceptación de T6 («ningún nombre de rol en los once textos instalados») y el caso
+  42.
+- **Decisión.** Letra = `[A-Za-z0-9_]` o la pareja `\xC3[\x80-\xBF]` (U+00C0 a U+00FF en UTF-8). Todo
+  lo demás es límite, incluidos `«` `»` `¿` `¡`, las comillas tipográficas, las rayas y el espacio
+  duro.
+- **Qué cambió en este plan.** Supuestos 5 y 10; 3.5 (regla, expresión para PowerShell 5.1 y para
+  Python con lookbehind de ancho fijo, límites reconocidos, filas nuevas de casos límite, residuo de
+  la autocomprobación); 3.11 (fixture `ALIAS_SAMPLE`; casos 3, 5, 6, 34, 40 y 42; casos nuevos 55 y
+  56); tarea T1-E; pasos, pruebas y aceptación de T5; aceptación de T6; pasos de T8; foco nuevo de
+  `shield` en C2; C1 pasa de 54 a 56 casos; tres filas de riesgos.
+- **Qué no cambió.** Las decisiones del propietario, la validación de la tabla (3.2), la separación
+  de rol y ruta, el estado, la clasificación, los huérfanos, el número de unidades (9) y la tabla de
+  la línea de tiempo. «escribe», «escriben», «describe», «reescribe» y «sobrescribe» siguen sin
+  reemplazarse.

@@ -75,6 +75,14 @@ $StateMaxBytes = 1048576
 $ConfigName = 'synclayer-config.json'
 $ConfigMaxBytes = 65536
 
+# Datos de los alias de agentes (Fase 4). Listas cerradas, una por linea, aun sin uso: la instalacion no
+# cambia. Contrato con tests/test_aliases.py y tests/test_install.py: $AliasRoles son los nombres de
+# los archivos de la carpeta agents; $ReservedAliases, los agentes integrados de Claude Code (en minuscula: la sensibilidad a
+# mayusculas no esta documentada); $YamlWords, los escalares que YAML no lee como cadena en name:.
+$AliasRoles = @('atlas', 'auditor', 'debugger', 'forge', 'oracle', 'scout', 'scribe', 'sentinel', 'shield')
+$ReservedAliases = @('explore', 'plan', 'general-purpose', 'claude', 'statusline-setup', 'claude-code-guide', 'web-fetch')
+$YamlWords = @('true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n')
+
 # Tabla de niveles (Fase 3). La usa el renderizado de los niveles 1 a 4 (ConvertTo-LevelBytes). Una fila
 # por linea, nivel|agente|modelo|esfuerzo, con - para "sin effort:". El nivel 5 es el repositorio y
 # no tiene filas. auditor, shield y debugger no estan: quedan fijos en todos los niveles. Contrato

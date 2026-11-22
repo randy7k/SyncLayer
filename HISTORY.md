@@ -2,6 +2,26 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 4, T1: listas cerradas del alias y referencia independiente)
+
+- `install.ps1` lleva tres listas cerradas para los alias de agentes, todavía sin uso (el instalador se
+  comporta igual que antes): `$AliasRoles` (los nueve roles), `$ReservedAliases` (nombres de agentes
+  integrados de Claude Code que un alias no puede pisar) y `$YamlWords` (palabras que YAML no lee como
+  cadena).
+- `tests/aliases_ref.py` es la referencia independiente en Python de lo que el instalador hará con los alias:
+  validación de la tabla, las tres formas del nombre (minúscula, Capitalizada, MAYÚSCULAS) y reemplazo en
+  una sola pasada con límite de palabra. `tests/test_aliases.py` la prueba y fija el inventario de cada
+  rol en los once textos que se instalan.
+- Enmienda E1 del plan: al implementar T1 se vio que contar todo byte alto como letra dejaba sin reemplazar
+  `SENTINEL` y `AUDITOR` pegados a comillas angulares en `docs/agentes.md`. Ahora una letra es
+  `[A-Za-z0-9_]` o una letra latina acentuada real (secuencia UTF-8 `C3 80` a `C3 BF`) y el resto, comillas
+  angulares, signos de interrogación, rayas, espacio duro y marcas combinantes, es límite. Límites
+  reconocidos: `×` y `÷` cuentan como letra y las letras fuera de U+00C0 a U+00FF son límite.
+- Plan y exploración: `docs/plans/2026-11-22-fase4-nombres-configurables.md` y
+  `2026-11-22-fase4-nombres-exploracion.md`: la identidad de un subagente es su `name:`; las referencias por
+  nombre del usuario (`Agent(nombre)`, `permissions.deny`, matchers de hooks, `--agent`) se romperían al
+  renombrar.
+
 ### Añadido (Fase 3, cierre: T7)
 
 Estado final de la fase de esfuerzo configurable (plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`).

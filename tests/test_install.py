@@ -207,6 +207,21 @@ class StaticChecks(unittest.TestCase):
                     with self.subTest(agent=name, model=model, effort=effort):
                         lr.render_expected(data, model, effort)
 
+    def test_alias_lists_are_closed_data_in_the_script(self):
+        # Fase 4, T1 (caso 1 y 2): $AliasRoles son los nombres de agents/*.md; las otras dos listas son datos
+        # cerrados en minuscula. Aun sin uso: la instalacion no cambia. Con CRLF se normaliza dentro de read_ps_list.
+        names = sorted(f[:-3] for f in os.listdir(os.path.join(ROOT, "agents")) if f.endswith(".md"))
+        self.assertEqual(len(names), 9)
+        self.assertEqual(lr.read_ps_list("AliasRoles"), names)
+        reserved = lr.read_ps_list("ReservedAliases")
+        self.assertEqual(reserved, ["explore", "plan", "general-purpose", "claude", "statusline-setup",
+                                    "claude-code-guide", "web-fetch"])
+        words = lr.read_ps_list("YamlWords")
+        self.assertEqual(words, ["true", "false", "null", "yes", "no", "on", "off", "y", "n"])
+        for values in (names, reserved, words):
+            self.assertEqual(values, [v.lower() for v in values])
+            self.assertEqual(len(values), len(set(values)))
+
     def test_allowed_pattern_matches_generator(self):
         # Con core.autocrlf git deja install.ps1 en CRLF al hacer checkout o merge: el ancla `$`
         # de la regex no tolera el retorno de carro (CR), asi que se normaliza antes de buscar.

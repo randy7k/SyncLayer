@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1280 pruebas, 205 saltadas (202 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1331 pruebas, 205 saltadas (202 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -201,6 +201,14 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
+- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, sólo T1
+  hecha): `install.ps1` lleva `$AliasRoles`, `$ReservedAliases` y `$YamlWords` sin uso todavía; la
+  referencia independiente es `tests/aliases_ref.py` y la prueba `tests/test_aliases.py`. Límite de palabra
+  del reemplazo (enmienda E1): letra = `[A-Za-z0-9_]` o la pareja UTF-8 `C3 80` a `C3 BF` sobre texto
+  decodificado ISO-8859-1; el resto es límite (comillas angulares, `¿¡`, rayas, espacio duro, marcas
+  combinantes). `scribe` es subcadena de `escribe`, `describe`, `reescribe`, `sobrescribe`: sin límite de
+  palabra se rompen. Cuidado al editar con la herramienta Bash: colapsa `\\` a `\` y los escapes `\u00xx`
+  pasan a ser el carácter; construye la barra con `chr(92)` y verifica que el archivo no gane bytes no ASCII.
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: T1,
   T2, T3, T4, T5 y T6 hechas; el cierre pendiente; T7 abierta hasta el cierre de la fase. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
