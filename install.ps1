@@ -9,9 +9,10 @@ el hook primero (temporal en la misma carpeta + movimiento), verifica el destino
 estado <Target>/synclayer-manifest.json. Nunca borra. No hace rollback: si falla, informa.
 
 Configuracion: <Target>/synclayer-config.json es opcional y tiene dos campos, ambos opcionales: level (entero
-de 1 a 5; sin archivo, o con un objeto vacio, el nivel es 5) y aliases (Fase 4, en curso: objeto rol a alias;
-se lee, se valida entera y se muestra con una linea Alias: por alias, pero AUN NO SE APLICA: una tabla efectiva
-no vacia termina con exit 1 antes de escribir; sin aliases o con aliases vacio no cambia nada). Un archivo invalido, o una carpeta o un enlace con ese
+de 1 a 5; sin archivo, o con un objeto vacio, el nivel es 5) y aliases (Fase 4: objeto rol a alias; se lee, se
+valida entera, se muestra con una linea Alias: por alias y se aplica: el agente se instala en agents/<alias>.md con
+name: <alias> y los textos gestionados cambian el nombre del rol por el alias; sin aliases o con aliases vacio no
+cambia nada). Un archivo invalido, o una carpeta o un enlace con ese
 nombre, detiene la instalacion con exit 1 antes de escribir nada (tambien con -DryRun). Con el nivel 1 a 4, el
 instalador reescribe model: y effort: del frontmatter de los seis agentes modificables (atlas, forge, sentinel,
 scribe, scout, oracle) con los valores de la tabla de niveles; auditor, shield, debugger, el hook y el resto
@@ -19,7 +20,7 @@ quedan como el origen. El nivel 5 es el repositorio tal cual. El instalador nunc
 el archivo de configuracion.
 
 Estado: esquema 2 (esquema 3, con dest por archivo, si algun archivo se escribe en una ruta distinta de la de su
-rol; hoy no ocurre), por archivo el hash del origen (sha256), el hash de lo escrito (written) y el
+rol: un agente con alias), por archivo el hash del origen (sha256), el hash de lo escrito (written) y el
 nivel de la instalacion (level). La clasificacion compara el destino con el hash escrito por la
 instalacion previa (written) y el origen con el manifiesto. Lee tambien el esquema 1 (copia del
 manifiesto, de la Fase 1) y lo migra al reinstalar (el estado viejo va al respaldo). Un estado
@@ -1028,6 +1029,188 @@ function ConvertTo-LevelBytes([byte[]]$Canon, [string]$Model, [string]$Effort) {
     return , $result
 }
 
+# Transformacion de textos con alias (Fase 4, T5, 3.5 del plan): funciones PURAS, sin E/S. Entrada: los bytes canonicos de
+# un archivo (ya verificados contra el manifiesto en el Paso 2) y la tabla de formas $Forms: un diccionario ordinal
+# forma de rol a forma de alias (minuscula, Capitalizada y MAYUSCULAS de cada par rol y alias de la tabla efectiva). Un
+# hashtable de PowerShell no distingue mayusculas y mezclaria las tres formas. Los textos se decodifican en ISO-8859-1
+# (un byte, un caracter): los bytes altos pasan intactos de ida y vuelta.
+
+# Expresion de las formas con limite de palabra (enmienda E1). Una letra es [A-Za-z0-9_] o la pareja de caracteres C3
+# seguido de 80 a BF (en UTF-8, U+00C0 a U+00FF: las letras latinas acentuadas); todo lo demas es limite (comillas
+# angulares, signos de apertura, rayas, espacio duro, guion, barra, punto...). Dos lookbehind de ancho fijo y dos
+# lookahead, sin IgnoreCase. Sin asterisco en este archivo: las clases usan {0,} y {1,}.
+function New-AliasRegex($Forms) {
+    $keys = New-Object 'string[]' $Forms.Count
+    $Forms.Keys.CopyTo($keys, 0)
+    [System.Array]::Sort($keys, [System.StringComparer]::Ordinal)
+    $escaped = New-Object System.Collections.Generic.List[string]
+    foreach ($key in $keys) { $escaped.Add([regex]::Escape($key)) }
+    $alt = [string]::Join('|', $escaped.ToArray())
+    $pattern = '(?<![A-Za-z0-9_])(?<!\u00c3[\u0080-\u00bf])(?:' + $alt + ')(?![A-Za-z0-9_])(?!\u00c3[\u0080-\u00bf])'
+    return , (New-Object System.Text.RegularExpressions.Regex($pattern, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant))
+}
+
+# Reemplazo de formas con limite de palabra en UNA sola pasada, de izquierda a derecha: lo ya reemplazado no se vuelve
+# a examinar (nunca reemplazos sucesivos rol por rol). Funcion pura.
+function ConvertTo-AliasText([string]$Text, $Forms) {
+    if ($Forms.Count -eq 0) { return $Text }
+    $regex = New-AliasRegex $Forms
+    $found = $regex.Matches($Text)
+    if ($found.Count -eq 0) { return $Text }
+    $sb = New-Object System.Text.StringBuilder
+    $pos = 0
+    foreach ($hit in $found) {
+        [void]$sb.Append($Text, $pos, $hit.Index - $pos)
+        [void]$sb.Append([string]$Forms[$hit.Value])
+        $pos = $hit.Index + $hit.Length
+    }
+    [void]$sb.Append($Text, $pos, $Text.Length - $pos)
+    return $sb.ToString()
+}
+
+# La linea description: de un agente tiene la forma de una sola linea: solo ASCII imprimible, el valor no empieza por un
+# indicador YAML y la linea siguiente es el cierre o una linea clave: (sin continuacion). Sin asterisco literal: se
+# construye con [char]42.
+function Test-AliasDescriptionLine($Lines, [int]$Index) {
+    $line = [string]$Lines[$Index]
+    if ($line -cnotmatch '^description: [\x20-\x7e]{1,}\z') { return $false }
+    $indicators = '"''\[{|>&' + [string][char]42 + '!%@`'
+    if ($line.Substring(13) -cmatch ('^[' + $indicators + ']')) { return $false }
+    $next = [string]$Lines[$Index + 1]
+    return ([string]::Equals($next, '---', [System.StringComparison]::Ordinal) -or ($next -cmatch '^[A-Za-z][A-Za-z0-9_-]{0,}:( |\z)'))
+}
+
+# Transformacion de un archivo de texto gestionado (3.5 del plan). $Kind: agent (agents/<rol>.md; $Role es el rol) o
+# text (rules/agentes.md y docs/agentes.md). Funcion PURA: entrada los bytes canonicos, salida los bytes a escribir. Lanza
+# (falla cerrada) ante un frontmatter que no entiende y ante cualquier fallo de la autocomprobacion; el llamador lo
+# convierte en exit 1 antes de escribir. Solo se llama con una tabla efectiva no vacia.
+#  agent: primera linea ---, cierre = primera linea posterior de tres guiones exactos; exactamente una linea name: <rol>
+#   y una description: de una sola linea; ninguna otra linea del frontmatter (tools:, model:, hooks: y su bloque...) nombra
+#   un rol con alias; la linea name: pasa a name: <alias> si el propio rol tiene alias; description: y el cuerpo pasan por
+#   ConvertTo-AliasText; el resto del frontmatter no se toca.
+#  text: todo el contenido pasa por ConvertTo-AliasText (sin excepciones por bloques de codigo ni enlaces).
+#  Autocomprobacion del resultado releido: mismo numero de lineas, mismo cierre, lineas del frontmatter distintas de name:
+#   y description: identicas, name: y description: con su forma, claves de primer nivel sin repetir, recorrido en paralelo
+#   (fuera de las coincidencias, iguales; en ellas, el texto esperado) y sin residuo de ninguna forma de un rol con alias.
+function ConvertTo-AliasBytes([byte[]]$Canon, [string]$Kind, [string]$Role, $Forms) {
+    $ord = [System.StringComparison]::Ordinal
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $lf = [string][char]10
+    $regex = New-AliasRegex $Forms
+    $isAgent = Test-OrdinalEqual $Kind 'agent'
+    if (-not ($isAgent -or (Test-OrdinalEqual $Kind 'text'))) { throw 'tipo de archivo desconocido' }
+    $lines = $latin1.GetString($Canon).Split([char]10)
+    $close = -1
+    $nameIdx = -1
+    $descIdx = -1
+    $ownAlias = $null
+    if ($Forms.ContainsKey($Role)) { $ownAlias = $Forms[$Role] }
+    $outLines = New-Object System.Collections.Generic.List[string]
+    if ($isAgent) {
+        if ($lines.Count -lt 2 -or -not [string]::Equals($lines[0], '---', $ord)) { throw 'la primera linea no es ---' }
+        for ($i = 1; $i -lt $lines.Count; $i++) {
+            if ([string]::Equals($lines[$i], '---', $ord)) { $close = $i; break }
+        }
+        if ($close -lt 0) { throw 'frontmatter sin cierre' }
+        # Regla 1 de ConvertTo-LevelBytes para TODAS las lineas del frontmatter: solo ASCII imprimible (sin retorno de
+        # carro ni tabulador). Un CR oculto podria esconder una clave (color: x CR hooks: y) y solo importa con alias.
+        for ($i = 1; $i -lt $close; $i++) {
+            if ($lines[$i] -cmatch '[^\x20-\x7e]') {
+                throw 'el frontmatter tiene un caracter fuera de ASCII imprimible (retorno de carro, tabulador u otro)'
+            }
+        }
+        $names = New-Object System.Collections.Generic.List[int]
+        $descs = New-Object System.Collections.Generic.List[int]
+        for ($i = 1; $i -lt $close; $i++) {
+            if ($lines[$i].StartsWith('name:', $ord)) { $names.Add($i) }
+            if ($lines[$i].StartsWith('description:', $ord)) { $descs.Add($i) }
+        }
+        if ($names.Count -ne 1 -or -not [string]::Equals($lines[$names[0]], ('name: ' + $Role), $ord)) {
+            throw 'debe haber exactamente una linea name: con el nombre del rol'
+        }
+        if ($descs.Count -ne 1) { throw 'debe haber exactamente una linea description:' }
+        $nameIdx = $names[0]
+        $descIdx = $descs[0]
+        # La linea siguiente a name: es el cierre o una linea clave: (sin continuacion), como con description:.
+        $nameNext = [string]$lines[$nameIdx + 1]
+        if (-not ([string]::Equals($nameNext, '---', $ord) -or ($nameNext -cmatch '^[A-Za-z][A-Za-z0-9_-]{0,}:( |\z)'))) {
+            throw 'la linea name: tiene continuacion en la linea siguiente'
+        }
+        if (-not (Test-AliasDescriptionLine $lines $descIdx)) { throw 'la linea description: no es de una sola linea con la forma esperada' }
+        for ($i = 1; $i -lt $close; $i++) {
+            if ($i -ne $nameIdx -and $i -ne $descIdx -and $regex.IsMatch($lines[$i])) {
+                throw 'referencia a un rol en una linea del frontmatter que no se transforma'
+            }
+        }
+        $outLines.AddRange([string[]]$lines)
+        if ($null -ne $ownAlias) { $outLines[$nameIdx] = 'name: ' + $ownAlias }
+        $outLines[$descIdx] = ConvertTo-AliasText $lines[$descIdx] $Forms
+        $bodyIn = New-Object System.Collections.Generic.List[string]
+        for ($i = $close + 1; $i -lt $lines.Count; $i++) { $bodyIn.Add($lines[$i]) }
+        # Solo si hay lineas tras el cierre: un archivo que termina en --- sin LF final no tiene cuerpo (unir cero lineas da
+        # "" y al partir saldria una linea de mas).
+        if ($bodyIn.Count -gt 0) {
+            $bodyOut = (ConvertTo-AliasText ([string]::Join($lf, $bodyIn.ToArray())) $Forms).Split([char]10)
+            $outLines.RemoveRange($close + 1, $outLines.Count - $close - 1)
+            $outLines.AddRange([string[]]$bodyOut)
+        }
+    }
+    else {
+        $outLines.AddRange([string[]]((ConvertTo-AliasText ([string]::Join($lf, $lines)) $Forms).Split([char]10)))
+    }
+    $aliasResult = $latin1.GetBytes([string]::Join($lf, $outLines.ToArray()))
+
+    # Autocomprobacion: se relee el resultado y se compara con la entrada.
+    $chk = $latin1.GetString($aliasResult).Split([char]10)
+    if ($chk.Count -ne $lines.Count) { throw 'autocomprobacion: cambio el numero de lineas' }
+    if ($isAgent) {
+        $chkClose = -1
+        for ($i = 1; $i -lt $chk.Count; $i++) {
+            if ([string]::Equals($chk[$i], '---', $ord)) { $chkClose = $i; break }
+        }
+        if ($chk.Count -lt 2 -or -not [string]::Equals($chk[0], '---', $ord) -or $chkClose -ne $close) {
+            throw 'autocomprobacion: cambio el cierre del frontmatter'
+        }
+        for ($i = 1; $i -lt $close; $i++) {
+            if ($i -ne $nameIdx -and $i -ne $descIdx -and -not [string]::Equals($chk[$i], $lines[$i], $ord)) {
+                throw 'autocomprobacion: cambio una linea del frontmatter'
+            }
+        }
+        $expectName = 'name: ' + $Role
+        if ($null -ne $ownAlias) { $expectName = 'name: ' + $ownAlias }
+        if (-not [string]::Equals($chk[$nameIdx], $expectName, $ord)) { throw 'autocomprobacion: la linea name: no es la esperada' }
+        if (-not (Test-AliasDescriptionLine $chk $descIdx)) {
+            throw 'autocomprobacion: la linea description: ya no es de una sola linea'
+        }
+        $keysSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        for ($i = 1; $i -lt $close; $i++) {
+            $keyHit = [regex]::Match($chk[$i], '^([A-Za-z][A-Za-z0-9_-]{0,}):')
+            if ($keyHit.Success -and -not $keysSeen.Add($keyHit.Groups[1].Value)) {
+                throw 'autocomprobacion: clave de primer nivel repetida en la salida'
+            }
+        }
+    }
+    # Recorrido en paralelo: fuera de las coincidencias, caracter a caracter iguales; en cada coincidencia, el texto esperado.
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($i -eq $nameIdx) { continue }
+        $src = [string]$lines[$i]
+        $expect = New-Object System.Text.StringBuilder
+        $pos = 0
+        foreach ($hit in $regex.Matches($src)) {
+            [void]$expect.Append($src, $pos, $hit.Index - $pos)
+            [void]$expect.Append([string]$Forms[$hit.Value])
+            $pos = $hit.Index + $hit.Length
+        }
+        [void]$expect.Append($src, $pos, $src.Length - $pos)
+        if (-not [string]::Equals($expect.ToString(), [string]$chk[$i], $ord)) { throw 'autocomprobacion: una linea difiere de lo esperado' }
+    }
+    # Residuo: ninguna forma, con limite de palabra, de un rol con alias (V7 lo garantiza para un alias valido).
+    foreach ($chkLine in $chk) {
+        if ($regex.IsMatch($chkLine)) { throw 'autocomprobacion: queda una forma de un rol con alias' }
+    }
+    return , $aliasResult
+}
+
 try {
     $Source = $PSScriptRoot
     if ([string]::IsNullOrEmpty($Source)) {
@@ -1156,24 +1339,65 @@ try {
     }
 
     # Tabla efectiva de alias (pares rol a alias con alias distinto del rol), ya validada con la configuracion. Vacia
-    # (sin aliases, aliases vacio o cada alias igual a su rol): nada cambia, ni la salida ni los bytes. T2 solo la
-    # muestra (lineas Alias:) y la guarda temporal del Paso 5 detiene la instalacion si no esta vacia.
+    # (sin aliases, aliases vacio o cada alias igual a su rol): nada cambia, ni la salida ni los bytes, y no se llama a
+    # ninguna funcion de transformacion.
     $aliasEffective = Get-AliasEffective $script:ConfigAliasPairs
-    # Ruta de destino por rol (Fase 4, T4): $destRel[$rel] es la ruta (relativa a -Target) donde se LEE, ESCRIBE,
+    # Ruta de destino por rol (Fase 4, T4 y T5): $destRel[$rel] es la ruta (relativa a -Target) donde se LEE, ESCRIBE,
     # RESPALDA y VERIFICA el archivo del rol $rel; $rel (la ruta del manifiesto) sigue siendo el rol: origen,
-    # $outBytes, $outHash, tabla de niveles y estado (path). Hoy es SIEMPRE la identidad (la guarda temporal impide
-    # aplicar alias reales hasta T5). Diccionario ordinal: nunca sale de una ruta del estado ni del entorno.
+    # $outBytes, $outHash, tabla de niveles y estado (path). Es la identidad salvo para el agents/<rol>.md de un rol
+    # con alias en la tabla efectiva (agents/<alias>.md; si el archivo del rol no esta en el manifiesto no hay nada que
+    # renombrar). Diccionario ordinal: nunca sale de una ruta del estado ni del entorno.
     $destRel = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
     foreach ($rel in $manifest.Order) { $destRel[$rel] = $rel }
-    # Alias: fin del bloque. Aqui las pruebas inyectan un destRel que no es la identidad; lo de abajo lo revisa.
+    foreach ($aliasPick in $aliasEffective) {
+        $aliasRoleRel = 'agents/' + $aliasPick.Role + '.md'
+        if ($destRel.ContainsKey($aliasRoleRel)) { $destRel[$aliasRoleRel] = 'agents/' + $aliasPick.Alias + '.md' }
+    }
+    # Alias: fin del bloque de rutas. Aqui las pruebas inyectan un destRel distinto; lo de abajo lo revisa.
     # Defensa en profundidad: toda ruta de destino, venga de donde venga, se valida antes de usarla.
     $destProblem = Get-DestRelProblem $destRel $manifest.Order
     if ($null -ne $destProblem) {
         Stop-Install 1 ('error: la ruta de destino de ' + $destProblem + '. No se escribio nada.')
     }
+    # Bytes con alias (Fase 4, T5): con una tabla efectiva no vacia, los nueve agentes y los dos textos (rules/agentes.md
+    # y docs/agentes.md) pasan por ConvertTo-AliasBytes (3.5 del plan); los demas archivos, el hook incluido, quedan en
+    # los bytes del origen. Sin alias no se llama a la transformacion. Un error de transformacion es un defecto del
+    # origen que el manifiesto no detecta: exit 1 antes de escribir, tambien en -DryRun. Los bytes con alias no los cubre
+    # el hash del manifiesto: se verifican contra $outHash en los Pasos 7 y 8. El bloque Nivel parte de estos bytes.
+    $aliasForms = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+    foreach ($aliasPick in $aliasEffective) {
+        $aliasForms[$aliasPick.Role] = $aliasPick.Alias
+        $aliasForms[$aliasPick.Role.Substring(0, 1).ToUpperInvariant() + $aliasPick.Role.Substring(1)] = $aliasPick.Alias.Substring(0, 1).ToUpperInvariant() + $aliasPick.Alias.Substring(1)
+        $aliasForms[$aliasPick.Role.ToUpperInvariant()] = $aliasPick.Alias.ToUpperInvariant()
+    }
+    $aliasBytes = @{}
+    foreach ($rel in $manifest.Order) {
+        $bytesAlias = $canonSrc[$rel]
+        if ($aliasForms.Count -gt 0) {
+            $aliasKind = $null
+            $aliasOwnRole = ''
+            $aliasMatch = [regex]::Match($rel, '^agents/([a-z0-9_-]+)\.md\z')
+            if ($aliasMatch.Success -and (Test-OrdinalIn $AliasRoles $aliasMatch.Groups[1].Value)) {
+                $aliasKind = 'agent'
+                $aliasOwnRole = $aliasMatch.Groups[1].Value
+            }
+            elseif ((Test-OrdinalEqual $rel 'rules/agentes.md') -or (Test-OrdinalEqual $rel 'docs/agentes.md')) {
+                $aliasKind = 'text'
+            }
+            if ($null -ne $aliasKind) {
+                try {
+                    $bytesAlias = ConvertTo-AliasBytes $canonSrc[$rel] $aliasKind $aliasOwnRole $aliasForms
+                }
+                catch {
+                    Stop-Install 1 ('error: no se pueden aplicar los alias a ' + $rel + ': ' + (Get-ErrorText $_) + '. No se escribio nada.')
+                }
+            }
+        }
+        $aliasBytes[$rel] = $bytesAlias
+    }
 
-    # Nivel: bytes a escribir por archivo. Con el nivel 5 (el repositorio) son los bytes canonicos del origen
-    # y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
+    # Nivel: bytes a escribir por archivo. Con el nivel 5 (el repositorio) son los bytes de $aliasBytes (los canonicos
+    # del origen, con alias si hay tabla efectiva) y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
     # manifiesto pasan por ConvertTo-LevelBytes con su celda de $LevelRows; el resto (auditor, shield,
     # debugger, el hook, las reglas, la guia) queda en los bytes del origen. Un error de renderizado es un
     # defecto del origen que el manifiesto no detecta: exit 1 antes de escribir, tambien en -DryRun.
@@ -1186,13 +1410,13 @@ try {
     $outHash = @{}
     $adjustLines = New-Object System.Collections.Generic.List[string]
     foreach ($rel in $manifest.Order) {
-        $bytesOut = $canonSrc[$rel]
+        $bytesOut = $aliasBytes[$rel]
         if ($level -ne 5) {
             $agentMatch = [regex]::Match($rel, '^agents/([a-z0-9_-]+)\.md\z')
             if ($agentMatch.Success -and (Test-OrdinalIn $LevelAgents $agentMatch.Groups[1].Value)) {
                 try {
                     $cell = Get-LevelCell $level $agentMatch.Groups[1].Value
-                    $bytesOut = ConvertTo-LevelBytes $canonSrc[$rel] $cell.Model $cell.Effort
+                    $bytesOut = ConvertTo-LevelBytes $aliasBytes[$rel] $cell.Model $cell.Effort
                 }
                 catch {
                     Stop-Install 1 ('error: no se puede aplicar el nivel ' + $level + ' a ' + $rel + ': ' + (Get-ErrorText $_) + '. No se escribio nada.')
@@ -1240,7 +1464,7 @@ try {
     }
     # Lo escrito segun el estado, por ruta de destino (Fase 4): la clasificacion pregunta "el estado afirma que en
     # ESTA ruta escribimos estos bytes". Con los esquemas 1 y 2 el destino es la ruta del rol: es Written. El
-    # destino actual de cada rol es todavia su ruta (los alias aun no se aplican).
+    # destino actual de cada rol es $destRel[$rel]: su ruta, o agents/<alias>.md si el rol tiene alias.
     $prevByDest = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
     if ($null -ne $prev) {
         foreach ($rel in $prev.Order) { $prevByDest[$prev.Dest[$rel]] = $prev.Written[$rel] }
@@ -1346,12 +1570,6 @@ try {
     }
     foreach ($aliasItem in $aliasEffective) {
         Write-Out ('Alias: ' + $aliasItem.Role + ' -> ' + $aliasItem.Alias + ' (agents/' + $aliasItem.Alias + '.md)')
-    }
-    # Guarda temporal de la Fase 4 (T2): los alias se leen, validan y muestran, pero aun no se aplican. Una tabla
-    # efectiva no vacia detiene la instalacion antes de escribir nada (tambien con -DryRun), asi ningun commit
-    # acepta alias que no aplica. T5 la retira junto con su prueba.
-    if ($aliasEffective.Count -gt 0) {
-        Stop-Install 1 'error: los alias aun no se pueden aplicar en esta version. No se escribio nada.'
     }
     if ($backupItems.Count -gt 0) { Write-Out ('Respaldo: ' + (Format-Safe $BackupFull)) }
     if ($DryRun) { Write-Out 'Modo: -DryRun (no se escribe nada)' }

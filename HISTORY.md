@@ -2,6 +2,31 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 4, T5: transformación de textos y activación de los alias)
+
+- `install.ps1` aplica los alias de punta a punta. Funciones puras nuevas con autocomprobación: `New-AliasRegex`,
+  `ConvertTo-AliasText`, `Test-AliasDescriptionLine` y `ConvertTo-AliasBytes`. El bloque `# Alias:` calcula
+  `$destRel` desde la tabla efectiva y `$aliasBytes` (bytes con alias de los nueve agentes, de
+  `rules/agentes.md` y de `docs/agentes.md`); `# Nivel:` parte de `$aliasBytes` y busca la celda por rol. El
+  alias nunca entra en la regex (sólo las formas de los roles, escapadas) y rige el límite de palabra E1.
+  `hooks/agent_guard.py` no se transforma y los bloques `hooks:` quedan byte a byte.
+- Se retiró la guardia temporal de T2 y sus dos pruebas; las pruebas de T2 afines se ajustaron sin debilitarlas.
+- Un frontmatter defectuoso con alias da exit 1 en ambos modos (también `-DryRun`), sin escribir nada, y el
+  mensaje nombra el rol. Con alias se exige ASCII imprimible en todo el frontmatter y que la línea tras `name:`
+  sea `---` o `clave:`. La transformación recorre los nueve agentes aunque sólo uno tenga alias: un defecto en
+  uno sin alias también detiene. Un agente sin cuerpo y sin LF final se instala.
+- Sin alias efectivo no se llama a la transformación y la salida es idéntica a la base (13 + 11 + 17
+  escenarios, 0 diferencias).
+- Revisiones: `auditor` sin Critical ni Important (4 Minor corregidos); `shield` sin Critical, High ni Medium
+  (Low de frontmatter corregido; Low de `$verifyWhat` queda para T6).
+- No verificado: con alias reales activos el efecto en Claude Code real (renombrar un agente, `effort:`, caso
+  P10) lo comprueba el propietario en G1/V1.
+- Pendiente: `$verifyWhat` dice «el manifiesto» con alias en nivel 5 (T6); frase extra del exit 3 y aviso de
+  huérfano por cambio de nombre (T7); frontmatter y límites de alias documentados en T8. Límite aceptado: con
+  clave repetida en la tabla gana la última, sin aviso (heredado de T2).
+- Pruebas: casos 32 a 40 y 56 del plan (`test_f4t5_*`). La suite pasa a 1512 pruebas, 291 saltadas (288 de
+  `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de uso).
+
 ### Añadido (Fase 4, T4: rol separado de la ruta de destino y estado con esquema 3)
 
 - `install.ps1` separa el rol (`$rel`: clave de manifiesto, niveles, `$outBytes` y `$outHash`, mensajes de nivel)

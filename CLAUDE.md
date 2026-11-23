@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1479 pruebas, 275 saltadas (272 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1512 pruebas, 291 saltadas (288 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -201,10 +201,12 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
-- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, T1 a T4
+- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, T1 a T5
   hechas): `install.ps1` lee y valida la clave `aliases` de `synclayer-config.json` (lectura única;
-  `Get-AliasTableProblem`, V1 a V8, tabla entera antes de escribir; líneas `Alias:`) pero NO la aplica: una
-  tabla efectiva válida termina con exit 1 (guardia temporal, la retira T5). `$ReservedAliases` son nueve
+  `Get-AliasTableProblem`, V1 a V8, tabla entera antes de escribir; líneas `Alias:`) y, desde T5, la APLICA de
+  punta a punta (la guardia temporal de T2 se retiró). Con alias reales el efecto en Claude Code real NO está
+  verificado (G1/V1 del propietario: renombrar un agente, `effort:`, caso P10): no lo documentes como probado.
+  `$ReservedAliases` son nueve
   nombres cerrados (los siete integrados, `fork` y `output-style-setup`) y puede quedarse atrás frente a
   integrados nuevos. La referencia independiente es `tests/aliases_ref.py` y la prueba `tests/test_aliases.py`. Límite de palabra
   del reemplazo (enmienda E1): letra = `[A-Za-z0-9_]` o la pareja UTF-8 `C3 80` a `C3 BF` sobre texto
@@ -214,20 +216,34 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   pasan a ser el carácter; construye la barra con `chr(92)` y verifica que el archivo no gane bytes no ASCII.
   - Rol y ruta (T4): en los Pasos 4 a 9 el rol (`$rel`: clave de manifiesto, niveles, `$outBytes`/`$outHash`,
     mensajes de nivel) va separado de la ruta de destino (`$destRel[$rel]`: leer, escribir, respaldar, verificar
-    y clasificar contra `prevByDest`). El bloque `# Alias:` calcula `$destRel`, que en producción es SIEMPRE
-    identidad hasta T5 (la guardia temporal de T2 sigue). Ancla para T5: `# Alias:` es la línea «# Alias: fin
-    del bloque...», tras el cálculo y antes de `Get-DestRelProblem` (D1 a D7, defensa en profundidad: exit 1
+    y clasificar contra `prevByDest`). El bloque `# Alias:` calcula `$destRel` desde la tabla efectiva (sin
+    alias efectivo es identidad). El ancla `# Alias:` sigue siendo la línea «# Alias: fin
+    del bloque...», tras el cálculo de `$destRel` y antes de `Get-DestRelProblem` (D1 a D7, defensa en profundidad: exit 1
     antes de escribir, también en `-DryRun`; el mensaje nombra el rol, no la ruta). Las filas `HUERFANO`
     llevan `Path = $null`.
   - Estado con esquema 3 (T3, T4): `Read-State` lo lee (campo `dest` por entrada, la ruta real de destino).
     `ConvertTo-StateBytes` ESCRIBE el esquema 3 (`dest` en todas las entradas) sólo si algún destino difiere del
-    rol; con identidad escribe el esquema 2 (en producción aún no ocurre). Reglas de `dest` cuando difiere de `path`: `agents/<alias>.md`
+    rol; con identidad (sin alias efectivo) escribe el esquema 2. Reglas de `dest` cuando difiere de `path`: `agents/<alias>.md`
     de hasta 74 caracteres (`agents/` + 64 + `.md`, atado por una prueba a la regex del alias), sin colisión
     con el `path` de otra entrada ni con ninguna ruta del manifiesto (`$ManifestPaths`, obligatorio en
     `Read-State`); `dest` se lee con `Get-PropRaw` (estricto) y se valida con `HashSet` ordinales; los
     mensajes usan `Format-SafeShort`. Un esquema 3 inválido es estado AUSENTE: nunca `ACTUALIZAR` ni
     `HUERFANO`. `prevByDest` indexa lo escrito por ruta de destino y el huérfano es el destino previo que ya
     no es destino actual; ningún camino usa `dest` para escribir, respaldar ni borrar.
+  - Transformación (T5): funciones puras con autocomprobación `New-AliasRegex`, `ConvertTo-AliasText`,
+    `Test-AliasDescriptionLine` y `ConvertTo-AliasBytes`. El bloque `# Alias:` calcula `$destRel` y `$aliasBytes`
+    (bytes con alias de los nueve agentes, `rules/agentes.md` y `docs/agentes.md`); `# Nivel:` parte de
+    `$aliasBytes` y busca la celda de la tabla por ROL, no por alias. Sin alias efectivo no se llama a la
+    transformación y la salida es idéntica a la base. El alias nunca entra en la regex: sólo las formas de los
+    roles, escapadas. Límite de palabra E1. `hooks/agent_guard.py` no se transforma y los bloques `hooks:` quedan
+    byte a byte. Un frontmatter defectuoso con alias da exit 1 en ambos modos (también `-DryRun`), sin escribir
+    nada, y el mensaje nombra el rol; con alias se exige ASCII imprimible en todo el frontmatter y que la línea
+    tras `name:` sea `---` o `clave:`. La transformación recorre los nueve agentes aunque sólo uno tenga alias:
+    un defecto en uno sin alias también detiene. Un agente sin cuerpo y sin LF final se instala. Pruebas:
+    casos 32 a 40 y 56 del plan (`test_f4t5_*` en `tests/test_install.py`). Pendiente: `$verifyWhat` dice «el
+    manifiesto» con alias en nivel 5 (T6); frase extra del exit 3 y aviso de huérfano por cambio de nombre (T7);
+    frontmatter y límites de alias en la documentación (T8). Límite aceptado: con clave repetida en la tabla
+    gana la última, sin aviso (heredado de T2).
   - Límite conocido: `Get-Prop` desenrolla listas de un elemento, así que `path`, `sha256`, `written`,
     `level`, `schema`, `algorithm` y `eol` del estado y del manifiesto aceptan `[valor]` (laxitud heredada de
     las Fases 1 y 3, no es un hueco; P11 del plan decide cuándo corregirla).
@@ -281,7 +297,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (272 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (288 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

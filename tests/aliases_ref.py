@@ -185,9 +185,15 @@ def transform_agent(data, role, table):
     lines = _canon_lines(data)
     close = _split(lines)
     front = range(1, close)
+    for i in front:
+        if re.search(r"[^\x20-\x7e]", lines[i]):
+            raise ValueError("el frontmatter tiene un caracter fuera de ASCII imprimible")
     names = [i for i in front if lines[i].startswith("name:")]
     if len(names) != 1 or lines[names[0]] != "name: " + role:
         raise ValueError("debe haber exactamente una linea name: " + role)
+    nxt = lines[names[0] + 1]
+    if not (nxt == "---" or _KEY_LINE.match(nxt)):
+        raise ValueError("la linea name: tiene continuacion en la linea siguiente")
     descs = [i for i in front if lines[i].startswith("description:")]
     if len(descs) != 1 or not _description_ok(lines, descs[0], close):
         raise ValueError("debe haber exactamente una linea description: de una sola linea")
@@ -198,8 +204,9 @@ def transform_agent(data, role, table):
     if role in effective(table):
         out[names[0]] = "name: " + effective(table)[role]
     out[descs[0]] = transform_text(lines[descs[0]], table)
-    body = transform_text("\n".join(lines[close + 1:]), table).split("\n")
-    out = out[:close + 1] + body
+    if close + 1 < len(lines):
+        body = transform_text("\n".join(lines[close + 1:]), table).split("\n")
+        out = out[:close + 1] + body
     # Autocomprobacion.
     if len(out) != len(lines):
         raise ValueError("autocomprobacion: cambia el numero de lineas")
