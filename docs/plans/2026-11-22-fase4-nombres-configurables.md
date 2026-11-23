@@ -1290,3 +1290,7 @@ Salió de implementar T3 con `auditor` y `shield`. La sección 3.4 no tenía est
 ## Decisión sobre P10 (2026-11-23, propietario)
 
 P10 se resuelve con el valor por defecto: **documentarlo y comprobarlo en G1, sin código nuevo.** Un agente propio del usuario en `<Target>/agents/` que declare el mismo `name:` que un alias no se detecta ni se avisa; se documenta como límite en T8 (README, «Límites del instalador» y la guía) y se añade como caso a la compuerta G1 del propietario (dos archivos del mismo ámbito con el mismo `name:` y cuerpos distintos, uno con `hooks:`: ver cuál carga y si el rol renombrado conserva su bloque `hooks:`). T5 no añade comprobación. Las 9 unidades no cambian y T5 ya no depende de una decisión pendiente. Si G1 mostrara que el agente del usuario puede ganar, el diseño vuelve a `atlas` antes de aplicar alias a un `~/.claude` real.
+
+## Decisión sobre P11 (2026-11-23, propietario)
+
+P11 se resuelve con el valor por defecto: **tarea aparte después de la Fase 4.** El desenrollado de listas de un elemento de `Get-Prop` (`path`, `sha256`, `written`, `level`, `schema`, `algorithm` y `eol` del estado; `schema`, `path`, `sha256` y `algorithm` de `install-manifest.json`) se documenta como laxitud heredada de las Fases 1 y 3 (no es un hueco: el valor interno se valida igual y se lee siempre con la misma función) y se corregirá luego con `Get-PropRaw(...).Value` en `Get-ManifestEntries`, `Read-Manifest` y `Read-State`, con prueba roja primero. La Fase 4 sigue con 9 unidades. T8 lo documenta en el README («Límites del instalador»).
