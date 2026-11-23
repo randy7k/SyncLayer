@@ -25,6 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import aliases_ref as ar  # noqa: E402
 import build_manifest as bm  # noqa: E402
 import levels_ref as lr  # noqa: E402
 
@@ -215,12 +216,40 @@ class StaticChecks(unittest.TestCase):
         self.assertEqual(lr.read_ps_list("AliasRoles"), names)
         reserved = lr.read_ps_list("ReservedAliases")
         self.assertEqual(reserved, ["explore", "plan", "general-purpose", "claude", "statusline-setup",
-                                    "claude-code-guide", "web-fetch"])
+                                    "claude-code-guide", "web-fetch", "fork", "output-style-setup"])
         words = lr.read_ps_list("YamlWords")
         self.assertEqual(words, ["true", "false", "null", "yes", "no", "on", "off", "y", "n"])
         for values in (names, reserved, words):
             self.assertEqual(values, [v.lower() for v in values])
             self.assertEqual(len(values), len(set(values)))
+
+    def test_t2_alias_anchor_and_validator_are_defined_once(self):
+        # Fase 4, T2: `# Alias:` es ancla de patch_script (T4 inyecta tras ella) y no tiene la forma `# Paso N:`;
+        # la validacion de la tabla es una funcion unica y la guarda temporal (T5 la retira) es una sola.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        lines = [l.strip() for l in text.split("\n")]
+        self.assertEqual(len([l for l in lines if l.startswith("# Alias:")]), 1)
+        self.assertEqual(len(re.findall(r"^function Get-AliasTableProblem\b", text, re.M)), 1)
+        self.assertEqual(text.count("los alias aun no se pueden aplicar en esta version"), 1)
+        self.assertEqual(len([l for l in lines if re.match(r"# Paso \d+:", l)]), 10)
+
+    def test_t2_the_config_is_read_once_through_the_known_anchor(self):
+        # Lectura unica: el ancla de patch_script (`$level = [int](Read-LevelConfig $configPath)`) sigue siendo la
+        # unica llamada de lectura; los alias salen de esa misma lectura y el archivo no se abre otra vez.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        self.assertEqual(text.count("Read-LevelConfig $configPath"), 1)
+        self.assertEqual(text.count("$level = [int](Read-LevelConfig $configPath)"), 1)
+        body = text[text.index("function Read-LevelConfig"):text.index("function Find-AliasPair")]
+        self.assertEqual(len(re.findall(r"\[System\.IO\.File\]::(Open|Read|OpenRead)\w*\(", body)), 1)
+        # Todo uso de $configPath en el script: asignacion, comprobacion de carpeta, de existencia y la unica lectura.
+        uses = [l.strip() for l in text.split("\n") if "$configPath" in l]
+        self.assertEqual(uses, ["$configPath = Join-Path $TargetFull $ConfigName",
+                                "if ([System.IO.Directory]::Exists($configPath)) {",
+                                "if ([System.IO.File]::Exists($configPath)) {",
+                                "$level = [int](Read-LevelConfig $configPath)"])
+        # Get-AliasTableProblem y Get-AliasEffective no tocan el disco
+        pure = text[text.index("function Find-AliasPair"):text.index("# Bytes del estado con esquema 2")]
+        self.assertNotRegex(pure, r"\[System\.IO\.|Get-Content|Set-Content|Out-File")
 
     def test_allowed_pattern_matches_generator(self):
         # Con core.autocrlf git deja install.ps1 en CRLF al hacer checkout o merge: el ancla `$`
@@ -3954,6 +3983,403 @@ class InstallCases:
                 self.assertNotIn("ACTUALIZAR ", out)
                 self.assertIn("Se trata como ausente", err)
                 self.assertIn("__type", err)
+
+    # --- Fase 4, T2: clave aliases de synclayer-config.json (lectura, validacion V1 a V8, lineas Alias: y guarda
+    # temporal; casos 9 a 19 del plan). Los alias aun no se aplican: una tabla efectiva valida da exit 1. ---
+
+    GUARD = "error: los alias aun no se pueden aplicar en esta version. No se escribio nada."
+    CONFIG_ERR = "error: synclayer-config.json no es valido: "
+    ALIAS_NINE = {"atlas": "mapa", "auditor": "revisor", "debugger": "cazador", "forge": "dev", "oracle": "guia",
+                  "scout": "explorador", "scribe": "redactor", "sentinel": "amigo-qa", "shield": "guardia"}
+
+    def alias_config(self, aliases, level=None):
+        obj = {}
+        if level is not None:
+            obj["level"] = level
+        obj["aliases"] = aliases
+        return json.dumps(obj).encode("ascii")
+
+    def assert_quiet_failure(self, code, out, err, before, listing):
+        """Nada escrito ni respaldado: ni el destino ni la carpeta temporal cambian."""
+        self.assertEqual(code, 1, out + err)
+        self.assertNotIn("Copiado", out)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+        self.assertTrue(err.isascii(), repr(err))
+        self.assertFalse(any(ord(c) < 0x20 and c not in "\r\n" for c in err + out), repr(err + out))
+
+    def assert_alias_verdict(self, aliases, files=None, modes=(["-DryRun"],), raw=None):
+        """El veredicto del instalador es el de la referencia independiente (aliases_ref.validate_table): el
+        mismo motivo si es invalido; si es valido y la tabla efectiva no esta vacia, la guarda temporal; si
+        esta vacia, exit 0. Nunca se escribe nada en los casos de error."""
+        files = SAMPLE if files is None else files
+        self.make_source(files)
+        self.write_config(self.alias_config(aliases) if raw is None else raw)
+        expected = ar.validate_table(aliases, manifest_paths=sorted(files))
+        effective = isinstance(aliases, dict) and bool(ar.effective(aliases))
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in modes:
+            with self.subTest(aliases=repr(aliases)[:80], mode=mode):
+                code, out, err = self.run_install(*mode)
+                if expected is None and not effective:
+                    self.assertEqual(code, 0, out + err)
+                    self.assertNotIn("Alias:", out)
+                    continue
+                self.assert_quiet_failure(code, out, err, before, listing)
+                if expected is None:
+                    self.assertEqual(err.strip(), self.GUARD)
+                else:
+                    self.assertEqual(err.strip(), self.CONFIG_ERR + expected + ". No se escribio nada.")
+
+    def test_t2_case9_no_aliases_or_empty_or_own_role_is_identical_to_today(self):
+        # Casos 9 y 15: sin `aliases`, con `{}` y con cada alias igual a su propio rol (tabla efectiva vacia)
+        # dan stdout, stderr, destino y estado identicos byte a byte; ninguna linea Alias:.
+        own = json.dumps({"level": 5, "aliases": {r: r for r in ar.roles()}}).encode("ascii")
+        for mode in (["-DryRun"], []):
+            results = {}
+            for name, cfg in (("base", b'{"level": 5}'), ("vacio", b'{"level": 5, "aliases": {}}'),
+                              ("propio", b'{"level": 5, "aliases": {"forge": "forge"}}'), ("nueve propios", own)):
+                with self.subTest(case=name, mode=mode):
+                    self.make_source()
+                    self.write_config(cfg)
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 0, out + err)
+                    self.assertNotIn("Alias:", out)
+                    tree = self.tree(self.target)
+                    tree.pop(self.CONFIG)
+                    results[name] = (code, out, err, tree)
+                    shutil.rmtree(self.target)
+            for name, got in results.items():
+                with self.subTest(compare=name, mode=mode):
+                    self.assertEqual(got, results["base"])
+
+    def test_t2_case9_without_config_equals_empty_aliases_except_the_level_origin(self):
+        self.make_source()
+        code, out0, err0 = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out0 + err0)
+        self.write_config(b'{"aliases": {}}')
+        code, out1, err1 = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out1 + err1)
+        self.assertEqual(err0, err1)
+        self.assertEqual(out0.replace("(por defecto; no hay synclayer-config.json)", "(synclayer-config.json)"), out1)
+        self.assertNotIn("Alias:", out1)
+
+    def test_t2_case10_aliases_of_an_invalid_type_exit1_in_both_modes(self):
+        variants = [("null", b"null"), ("lista vacia", b"[]"), ("lista de un objeto", b'[{"forge": "dev"}]'),
+                    ("cadena", b'"dev"'), ("numero", b"3"), ("true", b"true"), ("false", b"false"),
+                    ("lista de listas", b"[[]]")]
+        for name, value in variants:
+            with self.subTest(case=name):
+                self.assert_config_rejected(b'{"aliases": ' + value + b"}", "aliases debe ser un objeto")
+                shutil.rmtree(self.target)
+
+    def test_t2_case11_unknown_alias_key_exit1_and_the_key_is_escaped(self):
+        for key in ("qa", "Forge", "FORGE", "forge ", "agents", "forg"):
+            with self.subTest(key=key):
+                self.assert_config_rejected(json.dumps({"aliases": {key: "dev"}}).encode("ascii"),
+                                            "rol desconocido en aliases: " + key)
+                shutil.rmtree(self.target)
+        # una clave vacia la rechaza ConvertFrom-Json de 5.1 antes que el instalador
+        self.assert_config_rejected(b'{"aliases": {"": "dev"}}', "JSON invalido")
+        shutil.rmtree(self.target)
+        self.assert_config_rejected(json.dumps({"aliases": {"a\u0000b\u001b[31mé": "dev"}}).encode("ascii"),
+                                    "rol desconocido en aliases: a\\u0000b\\u001b[31m\\u00e9")
+        shutil.rmtree(self.target)
+        self.assert_config_rejected(json.dumps({"aliases": {"k" * 60000: "dev"}}).encode("ascii"),
+                                    "rol desconocido en aliases: " + "k" * 40 + "...")
+
+    def test_t2_case12_invalid_values_name_the_role_and_match_the_reference(self):
+        bad = ["", "Dev", "DEV", "a b", "a:b", "a.b", "a/b", "a\\b", "-dev", "1dev", "123", "1e3", "0x1f", "_dev",
+               "a" * 65, "dév", "dev\n", "dev\nhooks: x", "dev#x", "'dev'", "dev\u0000", "\u00ad", "dev ",
+               "de\u0301v"]
+        for value in bad:
+            self.assertIsNotNone(ar.validate_table({"forge": value}), repr(value))
+            self.assert_alias_verdict({"forge": value})
+        for value in (None, 3, 3.5, True, False, ["dev"], {"a": "b"}, [], {}):
+            self.assertIn("debe ser texto", ar.validate_table({"forge": value}))
+            self.assert_alias_verdict({"forge": value})
+
+    def test_t2_case12_both_modes_for_a_representative_set(self):
+        for value in ("Dev", None, "a" * 65, ["dev"]):
+            self.assert_alias_verdict({"scribe": value}, modes=(["-DryRun"], []))
+
+    def test_t2_case13_reserved_names_yaml_words_and_windows_names(self):
+        words = (ar.reserved() + ["Explore", "PLAN", "General-Purpose"] + ar.yaml_words() +
+                 ["con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9"])
+        self.assertIn("fork", ar.reserved())
+        self.assertIn("output-style-setup", ar.reserved())
+        for value in words:
+            self.assertIsNotNone(ar.validate_table({"forge": value}), value)
+            self.assert_alias_verdict({"forge": value})
+        # El motivo exacto de cada familia (V1, V2, V3, V4).
+        for value, motivo in (("true", "es una palabra reservada de YAML"), ("null", "es una palabra reservada de YAML"),
+                              ("con", "es un nombre reservado de Windows"), ("nul", "es un nombre reservado de Windows"),
+                              ("com1", "es un nombre reservado de Windows"),
+                              ("fork", "es el nombre de un agente integrado de Claude Code"),
+                              ("output-style-setup", "es el nombre de un agente integrado de Claude Code"),
+                              ("explore", "es el nombre de un agente integrado de Claude Code"),
+                              ("Explore", "solo admite a-z, 0-9, _ y -"), ("PLAN", "solo admite a-z, 0-9, _ y -")):
+            with self.subTest(value=value):
+                self.assert_config_rejected(self.alias_config({"forge": value}),
+                                            "el alias de forge " + motivo, modes=(["-DryRun"],))
+                shutil.rmtree(self.target)
+
+    def test_t2_case14_table_rules_v5_v6_v7_v8_and_cycles(self):
+        two_cycle = {"forge": "scribe", "scribe": "forge"}
+        three_cycle = {"forge": "scribe", "scribe": "sentinel", "sentinel": "forge"}
+        tables = [
+            {"forge": "scribe"}, two_cycle, three_cycle, {"atlas": "shield"},
+            {"forge": "dev", "scribe": "dev"}, {"forge": "dev", "oracle": "x", "scribe": "dev"},
+            {"oracle": "dev-sentinel"}, {"oracle": "forge-2"}, {"oracle": "sentinel-dev"}, {"oracle": "a-forge-b"},
+            {"forge": "forge-2"}, {"forge": "x-scribe"},
+            {"forge": "forge", "scribe": "forge"},
+        ]
+        for table in tables:
+            self.assertIsNotNone(ar.validate_table(table), table)
+            self.assert_alias_verdict(table)
+        for table, motivo in ((two_cycle, "el alias de forge es el nombre de otro agente de SyncLayer"),
+                              (three_cycle, "el alias de forge es el nombre de otro agente de SyncLayer"),
+                              ({"forge": "dev", "scribe": "dev"}, "forge y scribe tienen el mismo alias"),
+                              ({"oracle": "forge-2"}, "el alias de oracle contiene el nombre de un agente de SyncLayer")):
+            with self.subTest(table=table):
+                self.assert_config_rejected(self.alias_config(table), motivo, modes=(["-DryRun"], []))
+                shutil.rmtree(self.target)
+        # V8: un manifiesto con un agente que ya ocupa la ruta del alias.
+        files = dict(SAMPLE)
+        files["agents/forge.md"] = b"agente forge\n"
+        files["agents/dev.md"] = b"agente dev\n"
+        self.assertIn("coincide con otro archivo del manifiesto", ar.validate_table({"forge": "dev"}, sorted(files)))
+        self.assert_alias_verdict({"forge": "dev"}, files=files)
+        self.assert_alias_verdict({"forge": "dev2"}, files=files)
+        self.assert_alias_verdict({"forge": "forge"}, files=files)
+
+    def test_t2_v8_covers_roles_whose_file_is_not_in_the_manifest(self):
+        # E2: SAMPLE trae agents/alfa.md y no trae agents/forge.md: el alias alfa nombra el archivo de otro agente.
+        self.assertIn("coincide con otro archivo del manifiesto", ar.validate_table({"forge": "alfa"}, sorted(SAMPLE)))
+        self.assert_alias_verdict({"forge": "alfa"}, modes=(["-DryRun"], []))
+        self.assert_alias_verdict({"forge": "alfa", "scribe": "redactor"})
+        self.assert_alias_verdict({"forge": "gamma"})  # no coincide con ninguna ruta: llega a la guarda
+        files = dict(SAMPLE)
+        files["agents/forge.md"] = b"agente forge\n"
+        self.assert_alias_verdict({"forge": "alfa"}, files=files)
+        self.assert_alias_verdict({"forge": "gamma"}, files=files)
+
+    def test_t2_reserved_output_style_setup_is_v4_in_both_modes(self):
+        self.assertIn("agente integrado", ar.validate_table({"forge": "output-style-setup"}))
+        self.assert_alias_verdict({"forge": "output-style-setup"}, modes=(["-DryRun"], []))
+
+    def test_t2_second_read_of_the_config_is_detected_by_behaviour(self):
+        # Lectura unica: tras la lectura se reescribe la configuracion; el resultado (exit y lineas Alias:) debe
+        # reflejar la PRIMERA lectura. Una segunda lectura en cualquier punto posterior lo cambiaria.
+        self.make_source()
+        path = self.write_config(self.alias_config({"forge": "dev"}))
+        for later, why in (('{"aliases": {"forge": "Dev"}}', "tabla invalida"), ('{"aliases": {}}', "tabla vacia"),
+                           ('{"aliases": {"scribe": "redactor"}}', "otra tabla")):
+            with self.subTest(later=why):
+                self.make_source()
+                shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+                self.patch_script("$level = [int](Read-LevelConfig $configPath)",
+                                  "[System.IO.File]::WriteAllText('%s', '%s')" % (path.replace("'", "''"), later))
+                self.write_config(self.alias_config({"forge": "dev"}))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, out + err)
+                self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")],
+                                 ["Alias: forge -> dev (agents/dev.md)"])
+                self.assertEqual(err.strip(), self.GUARD)
+
+    def test_t2_valid_tables_reach_the_temporary_guard_and_the_rest_pass_through(self):
+        # Pasan V1 a V8 (y de ahi a la guarda): las dos mitades del veredicto de cada regla.
+        valid = [{"forge": "dev"}, {"sentinel": "amigo-qa", "forge": "dev"}, dict(self.ALIAS_NINE),
+                 {"forge": "a" * 64}, {"forge": "forge_2"}, {"forge": "forgery"}, {"forge": "sentinels"},
+                 {"forge": "com10"}, {"forge": "com0"}, {"forge": "yes-no"}, {"forge": "x1"}, {"forge": "y2"},
+                 {"forge": "explorer"}, {"forge": "forge", "scribe": "dev"}, {"forge": "conx"}, {"forge": "nulo"}]
+        for table in valid:
+            self.assertIsNone(ar.validate_table(table, manifest_paths=sorted(SAMPLE)), table)
+            self.assert_alias_verdict(table)
+        # Tabla efectiva vacia: exit 0.
+        for table in ({}, {"forge": "forge"}, {r: r for r in ar.roles()}):
+            self.assert_alias_verdict(table)
+
+    def test_t2_guard_valid_table_exit1_in_both_modes_with_the_exact_message_and_writes_nothing(self):
+        self.make_source()
+        for populated in (False, True):
+            if populated:
+                self.install_ok()
+            self.write_config(self.alias_config({"forge": "dev"}))
+            before = snapshot(self.target)
+            listing = sorted(os.listdir(self.tmp))
+            for mode in (["-DryRun"], []):
+                with self.subTest(populated=populated, mode=mode):
+                    code, out, err = self.run_install(*mode)
+                    self.assert_quiet_failure(code, out, err, before, listing)
+                    self.assertEqual(err.strip(), self.GUARD)
+                    self.assertNotIn("Resumen:", out)
+            if not populated:
+                shutil.rmtree(self.target)
+
+    def test_t2_guard_stops_even_when_files_have_pending_changes_and_a_state(self):
+        self.make_source()
+        self.install_ok()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        self.write_config(self.alias_config({"scribe": "redactor"}))
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode)
+            self.assert_quiet_failure(code, out, err, before, listing)
+            self.assertEqual(err.strip(), self.GUARD)
+
+    def test_t2_case17_unknown_root_keys_still_exit1_with_aliases_present(self):
+        for data, motivo in ((b'{"aliases": {}, "agents": {}}', "clave desconocida: agents"),
+                             (b'{"Aliases": {}}', "clave desconocida: Aliases"),
+                             (b'{"level": 3, "aliases": {}, "names": {}}', "clave desconocida: names"),
+                             (b'{"alias": {}}', "clave desconocida: alias")):
+            with self.subTest(data=data):
+                self.assert_config_rejected(data, motivo)
+                shutil.rmtree(self.target)
+
+    def test_t2_level_and_empty_aliases_together_keep_working(self):
+        self.make_source()
+        self.write_config(b'{"level": 3, "aliases": {}}')
+        out, err = self.install_ok("-DryRun")
+        self.assertIn("Nivel: 3 (synclayer-config.json)", out.splitlines())
+        self.assertNotIn("Alias:", out)
+
+    def test_t2_case18_level_and_alias_lines_come_in_order_before_the_guard(self):
+        files = dict(SAMPLE)
+        files["agents/sentinel.md"] = agent_md("sentinel", "sonnet")
+        self.make_source(files)
+        self.write_config(self.alias_config({"sentinel": "amigo-qa", "forge": "dev"}, level=3))
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                lines = out.splitlines()
+                self.assertTrue(lines[0].startswith("Destino: "), lines)
+                self.assertEqual(lines[1:4], ["Nivel: 3 (synclayer-config.json)",
+                                              "Alias: forge -> dev (agents/dev.md)",
+                                              "Alias: sentinel -> amigo-qa (agents/amigo-qa.md)"])
+                self.assertEqual(len(lines), 4, lines)
+                self.assertEqual(err.strip(), self.GUARD)
+                self.assertEqual(os.listdir(self.target), [self.CONFIG])
+        # `Alias:` no se confunde con una fila del plan (la expresion LINE de las pruebas)
+        self.assertIsNone(LINE.match("Alias: forge -> dev (agents/dev.md)"))
+
+    def test_t2_alias_lines_follow_the_previous_level_line(self):
+        self.make_source()
+        self.install_ok()
+        self.write_config(self.alias_config({"scribe": "redactor"}, level=2))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 1, out + err)
+        lines = out.splitlines()
+        self.assertEqual(lines[1:4], ["Nivel: 2 (synclayer-config.json)", "Nivel anterior: 5",
+                                      "Alias: scribe -> redactor (agents/redactor.md)"])
+
+    def test_t2_case19_invalid_table_writes_and_backs_up_nothing_with_a_valid_state(self):
+        self.make_source()
+        self.install_ok()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        self.write_config(self.alias_config({"forge": "scribe"}))
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assert_quiet_failure(code, out, err, before, listing)
+                self.assertIn(self.CONFIG_ERR + "el alias de forge es el nombre de otro agente de SyncLayer", err)
+                self.assertNotIn("Respaldo", out)
+                self.assertFalse([n for n in os.listdir(self.tmp) if "backup" in n])
+
+    def test_t2_invalid_alias_values_never_leak_into_stdout_or_stderr(self):
+        secret = "SECRETO-ALIAS-123"
+        values = [secret, secret.lower() + "\u001b[31m", "dev\u0000" + secret, secret + "\n" + secret,
+                  secret + "!", "x" * 60000 + secret, "\u202e" + secret, "'" + secret + "'", secret + "-" * 70]
+        for value in values:
+            with self.subTest(value=value[:25]):
+                self.make_source()
+                self.write_config(self.alias_config({"sentinel": value}))
+                for mode in (["-DryRun"], []) if value == secret else (["-DryRun"],):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 1, out + err)
+                    self.assertIn(self.CONFIG_ERR + "el alias de sentinel ", err)
+                    for needle in (secret, secret.lower(), "SECRETO", "secreto", "x" * 40):
+                        self.assertNotIn(needle, out + err)
+                    self.assertTrue(err.isascii(), repr(err))
+                    self.assertFalse(any(ord(c) < 0x20 and c not in "\r\n" for c in err + out), repr(err))
+                    self.assertLess(len(err), 400)
+                shutil.rmtree(self.target)
+        # un valor inocente tampoco aparece en la salida de error de una tabla invalida por otra causa
+        self.make_source()
+        self.write_config(self.alias_config({"forge": "inocente", "scribe": "Mal"}))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 1, out + err)
+        self.assertNotIn("inocente", out + err)
+        self.assertNotIn("Mal", err.replace("el alias de scribe", ""))
+
+    def test_t2_case16_type_key_inside_aliases_is_rejected(self):
+        for data in (b'{"aliases": {"forge": "x__type"}}', b'{"aliases": {"__type": "x"}}',
+                     b'{"aliases": {"forge": "dev", "__type": "System.String"}}',
+                     b'{"aliases": {"forge": "x\\u005f\\u005ftype"}}', b'{"aliases": {"__t\\u0079pe": "x"}}'):
+            with self.subTest(data=data):
+                self.assert_config_rejected(data, "clave desconocida: __type")
+                shutil.rmtree(self.target)
+
+    def test_t2_case16_repeated_keys_in_windows_powershell_5_1_last_one_wins(self):
+        # Comportamiento medido de ConvertFrom-Json de 5.1 (como con level, caso 17 de la Fase 3): sin error;
+        # la ultima aparicion gana, tambien dentro de aliases y para la propia clave aliases.
+        self.make_source()
+        for data, expect in ((b'{"aliases": {"forge": "dev", "forge": "otro"}}', "Alias: forge -> otro (agents/otro.md)"),
+                             (b'{"aliases": {"forge": "otro", "forge": "dev"}}', "Alias: forge -> dev (agents/dev.md)"),
+                             (b'{"aliases": {"forge": "dev"}, "aliases": {"scribe": "redactor"}}',
+                              "Alias: scribe -> redactor (agents/redactor.md)")):
+            with self.subTest(data=data):
+                self.write_config(data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, out + err)
+                self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")], [expect])
+                self.assertEqual(err.strip(), self.GUARD)
+        self.write_config(b'{"aliases": {"forge": "dev"}, "aliases": {}}')
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("Alias:", out)
+        # una clave repetida invalida el ultimo valor, no el primero
+        self.write_config(b'{"aliases": {"forge": "Dev", "forge": "dev"}}')
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(err.strip(), self.GUARD)
+
+    def test_t2_config_size_limit_with_aliases(self):
+        head = b'{"aliases": {}}'
+        limit = 65536
+        self.make_source()
+        self.write_config(head + b" " * (limit - len(head)))
+        self.assertEqual(os.path.getsize(os.path.join(self.target, self.CONFIG)), limit)
+        out, err = self.install_ok("-DryRun")
+        self.assertIn("Nivel: 5 (synclayer-config.json)", out)
+        shutil.rmtree(self.target)
+        self.assert_config_rejected(head + b" " * (limit + 1 - len(head)), "supera 65536 bytes")
+        shutil.rmtree(self.target)
+        # una tabla valida de tope exacto llega a la guarda, no al limite de tamano
+        full = self.alias_config({"forge": "dev"})
+        self.write_config(full + b" " * (limit - len(full)))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(err.strip(), self.GUARD)
+
+    def test_t2_config_is_never_opened_for_writing_with_aliases(self):
+        # La configuracion no se escribe, respalda ni lista ni con una tabla valida (la guarda sale antes) ni invalida.
+        self.make_source()
+        for table in ({"forge": "dev"}, {"forge": "Dev"}, {}):
+            with self.subTest(table=table):
+                path = self.write_config(self.alias_config(table))
+                old = os.stat(path).st_mtime_ns - 5_000_000_000
+                os.utime(path, ns=(old, old))
+                before = snapshot(self.target)[self.CONFIG]
+                for mode in (["-DryRun"], []):
+                    self.run_install(*mode)
+                    self.assertEqual(snapshot(self.target)[self.CONFIG], before)
+                shutil.rmtree(self.target)
 
 
 def _make_class(label, exe, reason):

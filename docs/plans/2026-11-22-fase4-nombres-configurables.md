@@ -4,6 +4,10 @@ Fecha: 2026-11-22. Estado: **aprobado por el propietario el 2026-11-22** (el pla
 defecto de P1 a P9). **Enmienda E1 incorporada tras T1 (2026-11-22):** regla del límite de palabra
 (3.5, casos 3, 5, 6, 34, 40, 42, 55 y 56, tarea T1-E). Ver «Enmiendas» al final. Los valores por
 defecto y el resto del plan quedaron aprobados el 2026-11-22; la enmienda E1 fue aprobada por el propietario el 2026-11-22.
+**Enmienda E2, aprobada tras T2 (2026-11-23):** la lista de nombres reservados pasa de siete a nueve
+(decisión 4, V4) y V8 compara el destino de toda alias efectiva con todas las rutas del manifiesto
+(3.2, casos 2, 8, 13, 57 y 58, tarea T2). Queda abierta **P10** (agente propio del usuario con el
+mismo `name:` que un alias), pendiente de decisión del propietario antes de T5.
 
 Fuentes: [`2026-11-22-fase4-nombres-exploracion.md`](2026-11-22-fase4-nombres-exploracion.md)
 (hechos verificados por `scout`, mapa de `oracle`, riesgos y opciones),
@@ -35,6 +39,9 @@ escribe los mismos bytes y muestra la misma salida que hoy.
    (`Explore`, `Plan`, `general-purpose`, `claude`, `statusline-setup`, `claude-code-guide`,
    `web-fetch`), los alias duplicados, un alias igual al rol de otro agente y los ciclos. Se valida la
    tabla entera antes de escribir (exit 1, también con `-DryRun`).
+   **Enmendada por E2 (2026-11-23):** la lista de nombres rechazados suma `fork` y
+   `output-style-setup` (nueve en total). Es una ampliación conservadora, no un cambio de criterio;
+   motivo en «Enmiendas».
 5. Formas del alias derivadas de un único alias en minúsculas: minúscula, Capitalizada, MAYÚSCULAS y
    `@agent-<alias>`. Reemplazo con límite de palabra.
 6. El reporte de uso (Fase 2) no cambia: un agente con alias sale como `(otro agente)`. Se documenta.
@@ -101,6 +108,10 @@ Los marcados **[G1]** los confirma el propietario en la compuerta G1.
 10. Los once archivos de texto gestionados son UTF-8 válido (T1-E lo fija con una prueba): en UTF-8
     válido el byte `C3` siempre abre un carácter de dos bytes (U+00C0 a U+00FF). La regla de 3.5 se
     apoya en eso.
+11. El repositorio trae los nueve roles en el manifiesto. Un manifiesto sin el archivo de un rol o
+    con un agente que no es uno de los nueve sólo existe en las pruebas (E2 lo cubre igualmente).
+12. **No documentado (ver P10):** qué agente gana cuando dos archivos de `~/.claude/agents/` declaran
+    el mismo `name:`. La documentación sólo define la prioridad entre ámbitos distintos.
 
 ## 3. Diseño
 
@@ -136,21 +147,40 @@ completa, antes de leer el estado y de cualquier escritura; exit 1 también con 
 | V1 | El alias casa (ordinal, sin `IgnoreCase`) con `^[a-z][a-z0-9_-]{0,63}\z` | Decisión 4. La primera letra obligatoria es un endurecimiento (ver P1): un alias sólo de dígitos (`123`, `1e3`, `0x1f`) lo leería YAML como número en `name:`, y la forma Capitalizada necesita una letra |
 | V2 | El alias no es un escalar que YAML convierte: `true`, `false`, `null`, `yes`, `no`, `on`, `off`, `y`, `n` | `name: yes` no sería una cadena |
 | V3 | `agents/<alias>.md` casa con `$AllowedPattern` | Reutiliza la exclusión de nombres reservados de Windows (`con`, `nul`, `com1`...) |
-| V4 | El alias no está en `$ReservedAliases` (los siete integrados, en minúsculas: `explore`, `plan`, `general-purpose`, `claude`, `statusline-setup`, `claude-code-guide`, `web-fetch`) | Un agente de usuario con ese nombre sobrescribe al integrado; la sensibilidad a mayúsculas no está documentada, por eso se compara en minúsculas |
+| V4 | El alias no está en `$ReservedAliases`: **nueve** nombres en minúsculas (E2). Los siete integrados (`explore`, `plan`, `general-purpose`, `claude`, `statusline-setup`, `claude-code-guide`, `web-fetch`) más `fork` y `output-style-setup` | Un agente de usuario con el nombre de un integrado lo sobrescribe; la sensibilidad a mayúsculas no está documentada, por eso se compara en minúsculas. `fork` y `output-style-setup` se reservan por prudencia (ver abajo) |
 | V5 | El alias no es el nombre de otro rol de `$AliasRoles` | Dos agentes en la misma ruta. Hace imposibles los ciclos A a B y B a A; aun así la prueba los cubre de forma explícita |
 | V6 | Ningún alias se repite | Dos roles en la misma ruta |
 | V7 | Ningún alias contiene el nombre de un rol como palabra delimitada por `-` o por los extremos (`dev-sentinel`, `forge-2`) | Mantiene cerrada la transformación: la salida no contiene ninguna forma de un rol con alias, y eso es lo que comprueba la autocomprobación de 3.5 (ver P2) |
-| V8 | Tras calcular `destRel`: ninguna ruta de destino coincide con otra ruta del manifiesto ni con otro destino | Un manifiesto con un décimo agente (`AllowedPattern` lo admite) |
+| V8 | **(E2)** Para **toda** alias efectiva, esté o no `agents/<rol>.md` en el manifiesto: `agents/<alias>.md` no coincide con **ninguna** ruta del manifiesto ni con el destino de otro rol | El alias nombraría un archivo que es otro agente. Ejemplo: `{"forge":"alfa"}` con un manifiesto que trae `agents/alfa.md` y no `agents/forge.md`. También cubre un manifiesto con un décimo agente (`AllowedPattern` lo admite) |
 
-Un alias para un rol cuyo archivo no está en el manifiesto no es un error (igual que un agente
-modificable ausente en la Fase 3): la tabla se aplica a los textos y no hay archivo que renombrar.
+**V4, por qué nueve (E2).**
+
+- `fork`: no figura como agente integrado, pero es un valor especial de `subagent_type`
+  (`subagent_type: "fork"`; la documentación lo usa en `Agent(fork)` y aparece en el changelog
+  2.1.302). Un agente de usuario con ese nombre podría chocar con ese valor.
+- `output-style-setup`: `shield` recuerda un agente integrado histórico con ese nombre. `scout` no lo
+  encontró en la documentación ni en el changelog 2.1.300 a 2.1.330, y no puede afirmar que nunca
+  existiera. **No verificado.** Reservarlo cuesta un nombre y es conservador.
+- **La lista es cerrada y puede quedarse atrás.** Claude Code puede añadir integrados nuevos; el
+  instalador no los conoce hasta que se actualice `$ReservedAliases`. Se documenta en el README como
+  límite: antes de elegir un alias, comprobar con `/agents` que el nombre no existe ya.
+
+**V8, alcance (E2).** La versión original sólo comparaba el destino cuando el archivo del rol de
+origen estaba en el manifiesto. Ahora compara siempre. Con el repositorio real (los nueve roles en el
+manifiesto, supuesto 11) el resultado es el mismo que antes: V5 ya rechaza un alias igual a otro rol.
+La diferencia sólo se ve con manifiestos de prueba. V8 **sólo ve las rutas del manifiesto**: no ve
+los archivos que el usuario tenga ya en `<Target>/agents/` (ver 3.9 y P10).
+
+Un alias para un rol cuyo archivo no está en el manifiesto sigue sin ser un error por sí mismo (igual
+que un agente modificable ausente en la Fase 3): la tabla se aplica a los textos y no hay archivo que
+renombrar. Sí lo es si su destino coincide con una ruta del manifiesto (V8).
 
 Datos nuevos en `install.ps1` (contrato con `tests/test_aliases.py`; una lista por línea, como
 `$LevelAgents`):
 
 ```powershell
 $AliasRoles = @('atlas', 'auditor', 'debugger', 'forge', 'oracle', 'scout', 'scribe', 'sentinel', 'shield')
-$ReservedAliases = @('explore', 'plan', 'general-purpose', 'claude', 'statusline-setup', 'claude-code-guide', 'web-fetch')
+$ReservedAliases = @('explore', 'plan', 'general-purpose', 'claude', 'statusline-setup', 'claude-code-guide', 'web-fetch', 'fork', 'output-style-setup')
 $YamlWords = @('true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n')
 ```
 
@@ -199,8 +229,9 @@ rol y `$dest` pasa a calcularse con `$destRel[$rel]`. Anclas nuevas (contrato): 
 `# Alias:` (no tiene la forma `# Paso N:`) y `function ConvertTo-AliasBytes`.
 
 Orden de ejecución: validaciones de `-Target`; tabla de niveles; Paso 1; Paso 2; `# Configuracion:`
-(lee `level` y `aliases`, valida la tabla); avisos de entorno; `# Alias:` (calcula `$destRel` y los
-bytes con alias); `# Nivel:` (parte de los bytes con alias); Paso 3 en adelante.
+(lee `level` y `aliases`, valida la tabla, V8 incluida: el manifiesto ya está cargado); avisos de
+entorno; `# Alias:` (calcula `$destRel` y los bytes con alias); `# Nivel:` (parte de los bytes con
+alias); Paso 3 en adelante.
 
 ### 3.4 Estado: esquema 3 y migración
 
@@ -301,7 +332,7 @@ PowerShell 5.1 (fuente en ASCII, sin asterisco; `$alt` es la alternación de las
 `[regex]::Escape`; opciones `RegexOptions.CultureInvariant`, sin `IgnoreCase`):
 
 ```powershell
-$pattern = '(?<![A-Za-z0-9_])(?<!\u00C3[\u0080-\u00BF])(?:' + $alt + ')(?![A-Za-z0-9_])(?!\u00C3[\u0080-\u00BF])'
+$pattern = '(?<![A-Za-z0-9_])(?<!Ã[\u0080-¿])(?:' + $alt + ')(?![A-Za-z0-9_])(?!Ã[\u0080-¿])'
 ```
 
 Python (`tests/aliases_ref.py`, sobre `data.decode("iso-8859-1")`, sin `re.I`):
@@ -481,6 +512,8 @@ desconocida pasa por `Format-SafeShort`:
   alias de <rol> es el nombre de otro agente de SyncLayer`; `el alias de <rol> contiene el nombre de
   un agente de SyncLayer`; `<rol> y <rol> tienen el mismo alias`; `el alias de <rol> coincide con otro
   archivo del manifiesto`.
+- Los motivos no cambian con E2: `fork` y `output-style-setup` usan el de V4, y V8 usa el suyo
+  también cuando el rol de origen no está en el manifiesto.
 - Transformación: `error: no se pueden aplicar los alias a agents/<rol>.md: <motivo>. No se escribio
   nada.`
 
@@ -495,6 +528,16 @@ Se documentan (README y guía), no se comprueban:
   `settings.json`) siguen apuntando al nombre viejo.
 - En un sistema de archivos que no distingue mayúsculas, un `agents/Amigo-QA.md` ajeno ocupa la ruta
   del alias: sale `MODIFICADO` (S2).
+- Un integrado de Claude Code que no esté en `$ReservedAliases` (lista cerrada, E2): el instalador no
+  lo rechaza y el agente con alias lo sobrescribiría.
+- **Agente propio del usuario en `<Target>/agents/` (punto abierto, P10; revisión de `shield` de
+  T2).** V8 sólo ve las rutas del manifiesto. Dos casos:
+  1. El usuario ya tiene un `agents/<alias>.md` propio: resuelto, sale `MODIFICADO` (S2).
+  2. El usuario tiene **otro** archivo (`agents/mio.md`) que declara `name: <alias>`. El instalador
+     no lo ve. Qué agente gana entre dos archivos del mismo ámbito con el mismo `name:` no está
+     documentado (supuesto 12). Si ganara el del usuario, las llamadas al alias irían a un agente
+     **sin el bloque `hooks:`** del rol renombrado (`sentinel`, `auditor`, `shield`, `debugger`): la
+     guarda dejaría de aplicarse sin ningún aviso. **Sin decidir**: ver P10.
 - **Copia inversa:** con alias (o con nivel distinto de 5) los archivos de `~/.claude` no son los del
   repositorio. La copia `~/.claude` a repo de un agente, de las reglas o de la guía no vale: el cambio
   se hace en el repositorio y se reinstala. `git ls-files` no lista `agents/<alias>.md`.
@@ -523,6 +566,9 @@ Se documentan (README y guía), no se comprueban:
   siempre con respaldo).
 - Mensajes: nunca el valor de un alias inválido; rutas y claves por `Format-Safe`.
 - Tope de tamaño y lectura única heredados de la Fase 3.
+- Nombres reservados (V4): lista cerrada de nueve, que puede quedarse atrás (E2).
+- Límite abierto: un agente propio del usuario con el mismo `name:` que un alias podría dejar sin
+  guarda al rol renombrado (3.9, P10).
 
 ### 3.11 Estrategia de pruebas
 
@@ -549,18 +595,18 @@ Casos:
 | # | Caso | Se comprueba | Task |
 |---|---|---|---|
 | 1 | `$AliasRoles` frente a `agents/*.md` | Los mismos nueve nombres | T1 |
-| 2 | `$ReservedAliases` y `$YamlWords` | Listas esperadas, en minúsculas, sin repetidos | T1 |
+| 2 | `$ReservedAliases` y `$YamlWords` | Listas esperadas, en minúsculas, sin repetidos. `$ReservedAliases` tiene **nueve** nombres, con `fork` y `output-style-setup` (E2) | T1, T2 (E2) |
 | 3 | Inventario del repositorio | En los once archivos de texto, cada rol sólo aparece en las tres formas; conteo de coincidencias reemplazables por archivo fijado **con la regla de E1** (los `SENTINEL` y `AUDITOR` de `docs/agentes.md` pegados a `«` cuentan como reemplazables); «escribe», «escriben», «describe», «reescribe» y «sobrescribe» no cuentan; ninguna aparición de un nombre de rol queda sin clasificar: o es reemplazable o es una de esas subcadenas | T1, T1-E |
 | 4 | Frontmatter real de los nueve | Una `name: <rol>`, una `description:` de una línea; ninguna otra línea del frontmatter nombra un rol | T1 |
 | 5 | Zonas sensibles | Ningún rol dentro de un bloque cercado, del destino de un enlace ni de una URL en `rules/agentes.md` y `docs/agentes.md`; los once textos son UTF-8 válido; ningún rol queda pegado a una letra de fuera de ASCII y de U+00C0 a U+00FF | T1, T1-E |
 | 6 | Referencia: nueve alias a la vez sobre el repositorio real | Sólo cambian `name:`, `description:` y líneas del cuerpo con roles; `hooks:` de los cuatro agentes con guarda idéntico; **sin residuo: ninguna aparición de un rol salvo las subcadenas del caso 3** | T1, T1-E |
 | 7 | Referencia: orden con el nivel | `render_expected(transform_agent(x))` = `transform_agent(render_expected(x))` para los seis modificables y los niveles 1 a 4 | T1 |
-| 8 | Referencia: validación | Cada regla V1 a V7 con un caso que falla y uno que pasa; ciclo A a B y B a A | T1 |
+| 8 | Referencia: validación | Cada regla V1 a V7 con un caso que falla y uno que pasa; ciclo A a B y B a A. Con E2: `fork` y `output-style-setup` fallan por V4 en la referencia | T1, T2 (E2) |
 | 9 | Sin `aliases`, y `"aliases": {}` | Destino, estado y stdout idénticos byte a byte a la corrida sin configuración; sin línea `Alias:` | T2 |
 | 10 | `aliases` de tipo inválido: `null`, lista, lista de un objeto, cadena, número, `true` | Exit 1 en ambos modos; nada escrito | T2 |
 | 11 | Clave de `aliases` desconocida (`qa`, `Forge`, vacía) | Exit 1; mensaje con la clave escapada | T2 |
 | 12 | Valor inválido: `null`, número, `true`, lista, objeto, vacío, 65 caracteres, mayúsculas, espacio, `:`, `.`, `/`, `-` inicial, dígito inicial, sólo dígitos, unicode, salto de línea | Exit 1 en ambos modos; el mensaje nombra el rol y no el valor | T2 |
-| 13 | Reservados: los siete integrados (también `Explore` y `PLAN`, que caen por V1), `true`, `null`, `con`, `nul`, `com1` | Exit 1 con su motivo | T2 |
+| 13 | Reservados: los nueve de `$ReservedAliases` (también `Explore` y `PLAN`, que caen por V1), `true`, `null`, `con`, `nul`, `com1` | Exit 1 con su motivo | T2 |
 | 14 | Tabla: alias repetido, alias igual a otro rol, intercambio `forge`/`scribe`, alias que contiene un rol (`dev-sentinel`, `forge-2`) | Exit 1; nada escrito | T2 |
 | 15 | Alias igual al propio rol | Válido; idéntico al caso 9 | T2 |
 | 16 | Clave repetida dentro de `aliases`; `aliases` repetida; alias con `__type` | Se fija el comportamiento real de 5.1 y se documenta | T2 |
@@ -604,6 +650,8 @@ Casos:
 | 54 | `install.ps1` sigue en ASCII, sin asterisco, `&&`, `??` ni datos personales | Pruebas estáticas existentes | T1 a T7 |
 | 55 | Referencia: límite pegado a bytes altos (E1) | **Reemplaza** un rol pegado, antes y después, a `«`, `»`, `¿`, `¡`, `“`, `”`, `‘`, `’`, `—`, `–`, `…`, `→` y espacio duro. **No reemplaza** pegado a letra acentuada, antes o después: `Sentinelé`, `ñforge`, `éSCRIBE`, `SCRIBEÁ`. `\xC3` suelto y byte de continuación sin `\xC3` delante: límite (reemplaza). Las subcadenas del caso 3 siguen sin reemplazarse | T1-E |
 | 56 | Lo mismo en el instalador (E1) | Con `ALIAS_SAMPLE` en UTF-8: `«SENTINEL sólo escribe tests»` sale con el alias en mayúsculas y «escribe» intacto; `Sentinelé` y `ñforge` no cambian; bytes = `aliases_ref` | T5 |
+| 57 | Reservados añadidos por E2 | Alias `fork` y alias `output-style-setup`: exit 1 en `-DryRun` y real, nada escrito, motivo de V4, el mensaje nombra el rol y no el valor. Control: `forks` y `output-style` son válidos (la comparación es por nombre entero) | T2 (E2) |
+| 58 | V8 con el rol de origen fuera del manifiesto (E2) | Manifiesto con `agents/alfa.md` y sin `agents/forge.md`, configuración `{"aliases": {"forge": "alfa"}}`: exit 1 en ambos modos, nada escrito, motivo `coincide con otro archivo del manifiesto`. Controles: el mismo manifiesto con `{"forge": "beta"}` (destino libre) es válido; con el rol de origen presente, V8 sigue rechazando la coincidencia | T2 (E2) |
 
 ## 4. Tareas
 
@@ -636,6 +684,9 @@ global sigue en 60 %. Este plan pasa a «aprobado».
   nombre en lenguaje natural. Anotar la versión de Claude Code.
 - Copiar el archivo con otro nombre y otro `name:` y la misma `description:`: ver cómo se listan los
   dos y cuál elige la delegación automática (el solapamiento que avisa 3.7).
+- **Para P10:** dos archivos del mismo ámbito con el **mismo** `name:` y cuerpos distintos (uno con
+  bloque `hooks:` y otro sin él): anotar cuál carga, si `claude --debug` avisa del duplicado y cuál
+  responde a `@agent-<nombre>`.
 - Renombrar el archivo con la sesión abierta (no documentado): anotar si hace falta reiniciar.
 - Resultado: sección «Resultado de G1» de este plan.
 - **No bloquea T1 a T8** (ver P6). **Bloquea V2** (aplicar alias al `~/.claude` real). Si el supuesto
@@ -686,20 +737,30 @@ ella.
 
 - **Objetivo:** leer y validar `aliases` según 3.1 y 3.2 y mostrar las líneas `Alias:` (3.8), sin
   aplicarlas todavía.
-- **Archivos:** modificar `install.ps1`, `tests/test_install.py`.
+- **Archivos:** modificar `install.ps1`, `tests/test_install.py`. Con E2, también
+  `tests/aliases_ref.py` y `tests/test_aliases.py` (lista de nueve y V8 en la referencia).
 - **Pasos:** la lista cerrada de la raíz admite `aliases`; lectura única (el archivo no se abre otra
   vez: la lectura actual entrega también el objeto `aliases`; la línea ancla
-  `$level = [int](Read-LevelConfig $configPath)` se conserva); `Get-AliasTableProblem` (V1 a V7) y
+  `$level = [int](Read-LevelConfig $configPath)` se conserva); `Get-AliasTableProblem` (V1 a V8) y
   tabla efectiva; mensajes de 3.8; líneas `Alias:`; actualizar `.DESCRIPTION`. **Guarda temporal:**
   una tabla efectiva no vacía y válida termina con exit 1 y
   `error: los alias aun no se pueden aplicar en esta version. No se escribio nada.`; T5 la retira
   junto con su prueba.
-- **Pruebas:** casos 9 a 19; una prueba de la guarda temporal.
+- **Pasos de la enmienda E2 (misma unidad, mismo `forge`; T2 no se cierra sin ellos):** primero las
+  pruebas rojas (casos 2, 8, 13, 57 y 58). Después: `$ReservedAliases` con los nueve nombres de 3.2;
+  V8 evaluada para toda alias efectiva contra todas las rutas del manifiesto, esté o no el archivo
+  del rol de origen; la referencia Python igual. Los textos de los mensajes no cambian.
+- **Pruebas:** casos 9 a 19, 57 y 58; casos 2 y 8 actualizados; una prueba de la guarda temporal.
 - **Aceptación:** la suite pasa; ningún valor de `aliases` llega a un archivo del destino; ningún
   mensaje contiene el valor de un alias inválido; ningún camino de error escribe; la configuración no
-  se abre para escritura; las pruebas de la Fase 3 sobre la configuración pasan sin cambios.
+  se abre para escritura; las pruebas de la Fase 3 sobre la configuración pasan sin cambios. **Con
+  E2:** `fork` y `output-style-setup` se rechazan por V4 en `-DryRun` y en ejecución real;
+  `$ReservedAliases` tiene exactamente nueve nombres y coincide con la referencia; ninguna alias
+  efectiva cuyo destino `agents/<alias>.md` sea una ruta del manifiesto pasa la validación, esté o no
+  `agents/<rol>.md` en el manifiesto; con el repositorio real, ninguna configuración que antes era
+  válida deja de serlo salvo las que usan los dos nombres nuevos.
 - **Dependencias:** T1 y T1-E.
-- **Revisa:** `auditor` y `shield`.
+- **Revisa:** `auditor` y `shield` (los dos vuelven a revisar tras E2).
 
 ### Fase B: rol y ruta
 
@@ -721,9 +782,13 @@ ella.
 
 - **Objetivo:** la tabla de usos de 3.3 completa, con `destRel` como identidad en producción.
 - **Archivos:** modificar `install.ps1`, `tests/test_install.py`.
-- **Pasos:** bloque `# Alias:` que calcula `$destRel` (identidad, y V8); filas con `Dest`; pasos 4 a 9
-  según la tabla de 3.3; `ConvertTo-StateBytes` con `$destRel` (esquema 2 con la identidad, 3 si no);
-  las pruebas inyectan con `patch_script("# Alias:", ...)` un `destRel` no identidad.
+- **Pasos:** bloque `# Alias:` que calcula `$destRel` (identidad); V8 ya se evalúa en la validación
+  de la tabla desde T2 (E2) y el bloque no la repite; filas con `Dest`; pasos 4 a 9 según la tabla de
+  3.3; `ConvertTo-StateBytes` con `$destRel` (esquema 2 con la identidad, 3 si no); las pruebas
+  inyectan con `patch_script("# Alias:", ...)` un `destRel` no identidad.
+- **Punto abierto (P10, sin decidir):** T4 no añade ninguna comprobación sobre los archivos no
+  gestionados de `<Target>/agents/`. Si el propietario elige el aviso de P10, se implementa en T5.
+  `shield` lo tiene en cuenta al revisar T4.
 - **Pruebas:** casos 26 a 31; toda la suite existente.
 - **Aceptación:** la suite pasa sin modificar ninguna prueba existente (las anclas de 3.3 intactas);
   con la identidad, los bytes del destino, del estado y de la salida son los de antes; con un
@@ -742,12 +807,17 @@ ella.
   la tabla efectiva y los bytes con alias de los nueve agentes y los dos textos; el bloque `# Nivel:`
   parte de esos bytes (la celda se sigue buscando por rol); mensajes de error de transformación;
   retirar la guarda temporal de T2 y su prueba; fixture `ALIAS_SAMPLE` y ayudas.
+- **Punto abierto (P10, sin decidir; debe estar resuelto antes de empezar T5):** T5 activa los alias,
+  así que es donde el caso 2 de 3.9 (otro archivo con el mismo `name:` que un alias) empieza a ser
+  posible. Con el valor por defecto de P10, T5 no añade código: sólo se documenta en T8. Si el
+  propietario elige el aviso opcional, se añade aquí con su prueba roja y el plan vuelve a `atlas`
+  para fijar el diseño (lectura de archivos no gestionados: entrada no confiable).
 - **Pruebas:** casos 32 a 40 y 56.
 - **Aceptación:** la suite pasa; sin alias no se llama a la transformación (caso 38) y los bytes son
   los de antes; con alias, todo byte escrito coincide con `aliases_ref`; un rol pegado a `«`, `»`,
   `¿` o `¡` se reemplaza y uno pegado a una letra acentuada no; el bloque `hooks:` de los agentes con
   guarda queda idéntico; el hook no se transforma; ningún archivo fuera de los once textos cambia.
-- **Dependencias:** T4. G1 recomendada antes (no bloquea, P6).
+- **Dependencias:** T4 y la decisión de P10. G1 recomendada antes (no bloquea, P6).
 - **Revisa:** `auditor` y `shield`.
 
 #### T6. Alias con niveles, repositorio real y `-DryRun` — tamaño M — revisión de seguridad
@@ -790,23 +860,29 @@ ella.
   `install-manifest.json`, `docs/plans/2026-11-19-backlog-configuracion-y-reportes.md`.
   `rules/agentes.md` no cambia (el catálogo no cambia; ver P7).
 - **Pasos:**
-  - `README.md`: sección «Alias» (formato, reglas V1 a V7 en lenguaje llano, `-DryRun`, reinstalar;
-    qué se renombra y qué no; el archivo anterior queda y hay que quitarlo a mano; el huérfano se
-    informa una vez; reiniciar sesiones); «Instalación» (línea `Alias:`, estado `HUERFANO`, códigos de
-    salida, exit 3); «Límites del instalador» (reemplazo textual, no semántico; qué cuenta como letra
-    en el límite de palabra y sus dos límites reconocidos de 3.5; bytes con alias fuera del hash del
-    manifiesto; esquema 3 ilegible para el instalador anterior; colisiones de 3.9; referencias por
-    nombre del usuario; renombrar en caliente no documentado; claves repetidas y `__type`; G1
-    pendiente si no se corrió); «Límites del reporte de uso» (un agente con alias sale como
-    `(otro agente)`); copia inversa («Dos copias»); «Estructura» y «Pruebas» (conteos de la salida
-    real); «Línea de tiempo y avance».
+  - `README.md`: sección «Alias» (formato, reglas V1 a V8 en lenguaje llano, con los nueve nombres
+    reservados; `-DryRun`, reinstalar; qué se renombra y qué no; el archivo anterior queda y hay que
+    quitarlo a mano; el huérfano se informa una vez; reiniciar sesiones); «Instalación» (línea
+    `Alias:`, estado `HUERFANO`, códigos de salida, exit 3); «Límites del instalador» (reemplazo
+    textual, no semántico; qué cuenta como letra en el límite de palabra y sus límites reconocidos de
+    3.5; **la lista de nombres reservados es cerrada y puede quedarse atrás frente a integrados
+    nuevos de Claude Code: comprobar con `/agents` antes de elegir un alias; `output-style-setup` se
+    reserva por prudencia, sin verificar**; **un agente propio con el mismo `name:` que un alias: no
+    está documentado cuál gana y el rol renombrado podría quedar sin su guarda (P10)**; bytes con
+    alias fuera del hash del manifiesto; esquema 3 ilegible para el instalador anterior; colisiones
+    de 3.9; referencias por nombre del usuario; renombrar en caliente no documentado; claves
+    repetidas y `__type`; G1 pendiente si no se corrió); «Límites del reporte de uso» (un agente con
+    alias sale como `(otro agente)`); copia inversa («Dos copias»); «Estructura» y «Pruebas» (conteos
+    de la salida real); «Línea de tiempo y avance».
   - `CLAUDE.md`: arquitectura (alias, estado esquema 2 o 3), convenciones (`$AliasRoles`,
     `$ReservedAliases`, `$YamlWords`, el marcador `# Alias:` y `function ConvertTo-AliasBytes` son
     contrato con las pruebas; diccionarios ordinales), no obvios (rol frente a ruta de destino; alias
     primero y nivel después; el límite de palabra trabaja sobre ISO-8859-1 y sólo cuenta como letra
-    `[A-Za-z0-9_]` y la pareja `C3` más byte de continuación; el texto de `docs/agentes.md` y
-    `rules/agentes.md` se transforma al instalar: una palabra igual a un rol en esos archivos se
-    reemplaza; el inventario de `tests/test_aliases.py` falla si aparece una forma nueva).
+    `[A-Za-z0-9_]` y la pareja `C3` más byte de continuación; `$ReservedAliases` es una lista cerrada
+    de nueve que hay que revisar cuando Claude Code añada integrados; V8 sólo ve el manifiesto; el
+    texto de `docs/agentes.md` y `rules/agentes.md` se transforma al instalar: una palabra igual a un
+    rol en esos archivos se reemplaza; el inventario de `tests/test_aliases.py` falla si aparece una
+    forma nueva).
   - `HISTORY.md`, `[Sin publicar]`: «Añadido (alias, Fase 4)».
   - `docs/agentes.md`: apartado «Cambiar el nombre de un agente» y el límite del reporte de uso. **Sin
     usar nombres de rol como ejemplo de alias** en el texto nuevo (se transformarían al instalar):
@@ -823,7 +899,7 @@ ella.
 
 #### Cierre (lo coordina la sesión principal; cuenta como una unidad)
 
-- **C1. `sentinel`:** suite completa con la salida a la vista; los 56 casos de 3.11 cubiertos.
+- **C1. `sentinel`:** suite completa con la salida a la vista; los 58 casos de 3.11 cubiertos.
 - **C2. `shield`:** T2 a T7. Aplica: entrada de usuario (`aliases`), escritura de rutas derivadas de
   esa entrada, estado como entrada no confiable. Focos: que ningún alias inyecte una línea, una clave
   o un indicador YAML en el frontmatter; que el bloque `hooks:` no cambie con ningún alias; que una
@@ -831,7 +907,8 @@ ella.
   un archivo ajeno en `ACTUALIZAR` ni lleve una escritura fuera de la lista permitida; que el archivo
   huérfano nunca se toque; fuga del valor de un alias o del contenido del archivo en mensajes;
   comparaciones no ordinales o con `IgnoreCase`; que el reemplazo no parta una secuencia UTF-8 ni deje
-  un archivo que no sea UTF-8 válido; tamaño y carrera sobre la configuración.
+  un archivo que no sea UTF-8 válido; tamaño y carrera sobre la configuración; que lo decidido en P10
+  esté implementado o documentado tal como se decidió.
 - **C3. `auditor`** sobre el cambio completo.
 - **C4.** Memoria del proyecto actualizada por la sesión principal.
 - **V1. Renombrado en caliente (propietario; fuera del conteo):** parte de G1. Sólo si se confirma que
@@ -843,11 +920,12 @@ ella.
 ### 4.5 Unidades y aritmética de la línea de tiempo
 
 La Fase 4 tiene **9 unidades**: T1 a T8 y el cierre. El paso previo, G1, V1 y V2 no cuentan. La
-enmienda T1-E es parte de la unidad T1: no añade unidades y la tabla no cambia.
+enmienda T1-E es parte de la unidad T1 y los pasos de E2 son parte de la unidad T2: no añaden
+unidades y la tabla no cambia.
 
 | Frente | Unidades |
 |---|---|
-| Datos y configuración | 2 (T1 con T1-E, T2) |
+| Datos y configuración | 2 (T1 con T1-E, T2 con E2) |
 | Rol y ruta | 2 (T3, T4) |
 | Transformación | 3 (T5, T6, T7) |
 | Documentación y cierre | 2 (T8, cierre) |
@@ -870,8 +948,8 @@ hacia arriba, y el porcentaje mostrado también.
 | 9 | 100 % | 100 % | 10 | 80 % | 80 % | 8 |
 
 Por frente: 2 unidades (0, 50, 100 %: 0, 5, 10 cuadros); 3 unidades (0, 33, 67, 100 %: 0, 3, 7, 10
-cuadros). Si G1 obliga a rehacer el plan o se añade la task de V1, las unidades cambian y se
-recalcula con la misma fórmula.
+cuadros). Si G1 obliga a rehacer el plan, se añade la task de V1 o P10 se resuelve con una task
+propia, las unidades cambian y se recalcula con la misma fórmula.
 
 ## 5. Riesgos
 
@@ -893,6 +971,10 @@ recalcula con la misma fórmula.
 | Archivo viejo activo junto al nuevo | Fila `HUERFANO` y aviso explícito por stderr; README; nunca se borra (decisión 3) |
 | El huérfano sólo se informa una vez | Documentado; P5 |
 | Archivo ajeno en la ruta del alias | Sale `MODIFICADO` (S2); frase del exit 3 |
+| Un alias sobrescribe a un agente integrado de Claude Code o choca con un valor especial de `subagent_type` | V4 con nueve nombres (E2): los siete integrados conocidos, `fork` y `output-style-setup`; casos 13 y 57 |
+| La lista de reservados es cerrada: Claude Code añade un integrado y el instalador no lo conoce; `output-style-setup` está reservado sin verificar | Documentado como límite (README, `CLAUDE.md`); consejo de comprobar con `/agents`; añadir un nombre es una línea y una prueba |
+| Un alias nombra un archivo del manifiesto que es otro agente, con el rol de origen fuera del manifiesto | V8 compara toda alias efectiva con todas las rutas del manifiesto (E2); caso 58 |
+| Otro archivo del usuario en `<Target>/agents/` declara el mismo `name:` que un alias: no está documentado cuál gana; si gana el del usuario, el rol renombrado pierde su `hooks:` sin aviso | **Abierto (P10).** Por defecto: documentado; G1 lo comprueba en Claude Code real; V8 no lo cubre (sólo ve el manifiesto) |
 | Colisión con agente de proyecto, plugin o gestionado; referencias por nombre del usuario | No detectable desde el instalador; documentado (3.9) |
 | El reporte de uso deja de atribuir el agente con alias | Decisión 6; documentado en README y guía |
 | `name:` con `_`, `-` o dígitos, o el renombrado en caliente, se comportan distinto de lo supuesto | G1; V2 bloqueada hasta G1; recordatorio de reiniciar sesiones |
@@ -904,7 +986,8 @@ recalcula con la misma fórmula.
 
 ## 6. Preguntas abiertas
 
-Cada una tiene un valor por defecto, que es lo que el plan implementa si no hay respuesta.
+Cada una tiene un valor por defecto, que es lo que el plan implementa si no hay respuesta. P1 a P9
+quedaron aprobadas con su valor por defecto el 2026-11-22. **P10 está abierta.**
 
 - **P1. Primera letra obligatoria y palabras de YAML (V1, V2).** Endurece la decisión 4 («sin `-`
   inicial»): el alias debe empezar por letra y no puede ser `true`, `null`, `yes`... Por defecto: sí.
@@ -930,6 +1013,23 @@ Cada una tiene un valor por defecto, que es lo que el plan implementa si no hay 
   líneas `Alias:`. Alternativa: añadir `(rol <rol>)` a cada fila con alias (cambia el formato que leen
   las pruebas).
 - **P9. Nombre de la clave.** Por defecto: `aliases`. Alternativa: `names`.
+- **P10. Agente propio del usuario con el mismo `name:` que un alias (abierta; revisión de `shield`
+  de T2; afecta a T4 y T5; decidir antes de T5).** V8 sólo ve las rutas del manifiesto. Si el usuario
+  tiene en `<Target>/agents/` otro archivo, con otro nombre de archivo, que declara `name: <alias>`,
+  el instalador no lo ve. No está documentado cuál de los dos gana; si gana el del usuario, las
+  llamadas al alias no pasan por el bloque `hooks:` del rol renombrado. (El caso del archivo
+  `agents/<alias>.md` propio ya está resuelto: `MODIFICADO`, S2.)
+  - **Por defecto (a):** documentarlo en el README («Límites del instalador») y en la guía, y
+    comprobarlo en G1. Sin código nuevo.
+  - **Opcional (b), además de (a):** un aviso por stderr, sin cambiar el código de salida, si algún
+    `agents/*.md` no gestionado del destino declara un `name:` igual a un alias efectivo. Coste: el
+    instalador pasa a leer archivos que no gestiona (entrada no confiable: tope de tamaño, sólo la
+    línea `name:` del frontmatter, sin seguir enlaces, sólo el primer nivel de `agents/`, nunca
+    imprime contenido); es heurístico (un `name:` entre comillas o con otra forma no se detecta); sin
+    alias no debe leer nada, para que el comportamiento siga idéntico a hoy. Si se elige, el diseño
+    vuelve a `atlas` y se implementa en T5.
+  - **Alternativa (c):** lo mismo que (b) pero con exit 1 en vez de aviso (falla cerrado; un falso
+    positivo bloquea la instalación hasta cambiar el alias).
 
 ## Enmiendas
 
@@ -953,3 +1053,38 @@ Cada una tiene un valor por defecto, que es lo que el plan implementa si no hay 
   de rol y ruta, el estado, la clasificación, los huérfanos, el número de unidades (9) y la tabla de
   la línea de tiempo. «escribe», «escriben», «describe», «reescribe» y «sobrescribe» siguen sin
   reemplazarse.
+
+### E2. Nombres reservados y alcance de V8 — aprobada tras T2 (2026-11-23)
+
+Salió de la revisión de T2 por `auditor` y `shield`. Toca dos puntos que estaban marcados «no se
+reabren»; por eso queda registrada con su motivo.
+
+- **Cambio 1: `$ReservedAliases` pasa de siete a nueve nombres** (decisión 4, V4 y bloque de datos de
+  3.2). Se añaden:
+  - `fork`. Motivo: es un valor especial de `subagent_type` (`subagent_type: "fork"`); la
+    documentación lo usa en `Agent(fork)` y aparece en el changelog 2.1.302. No figura como agente
+    integrado, pero reservarlo es conservador.
+  - `output-style-setup`. Motivo: `shield` recuerda un integrado histórico con ese nombre. `scout` no
+    lo encontró en la documentación ni en el changelog 2.1.300 a 2.1.330 y no puede afirmar que nunca
+    existiera. **No verificado**; reservarlo es barato y conservador.
+  - Se deja escrito que la lista es **cerrada** y puede quedarse atrás frente a integrados nuevos de
+    Claude Code.
+- **Cambio 2: V8 compara siempre.** Antes comparaba el destino `agents/<alias>.md` sólo cuando el
+  archivo del rol de origen estaba en el manifiesto. Ahora compara el destino de **toda** alias
+  efectiva contra **todas** las rutas del manifiesto. Caso que lo motiva: `{"forge":"alfa"}` con un
+  manifiesto que trae `agents/alfa.md` y no `agents/forge.md` nombraría un archivo que es otro
+  agente. Sólo ocurre con manifiestos hipotéticos (el repositorio trae los nueve roles); con el
+  repositorio real la validación es igual de estricta que antes.
+- **Qué cambió en este plan.** Cabecera; nota en la decisión 4; supuestos 11 y 12; 3.2 (V4, V8, los
+  dos párrafos explicativos, el párrafo del rol ausente del manifiesto y el bloque de datos); orden
+  de ejecución de 3.3; nota en los mensajes de 3.8; 3.9 (integrado fuera de la lista; agente propio
+  del usuario); 3.10; casos 2, 8 y 13 y casos nuevos 57 y 58; T2 (archivos, pasos de la enmienda,
+  pruebas, aceptación, segunda revisión); pasos de T4 (V8 ya no se calcula ahí) y notas de P10 en T4
+  y T5; dependencia de T5; punto nuevo de G1; pasos de T8; foco nuevo en C2; C1 pasa de 56 a 58
+  casos; cuatro filas de riesgos; pregunta P10.
+- **Qué no cambió.** El número de unidades (9), los frentes y la tabla de la línea de tiempo: los
+  pasos de E2 son parte de la unidad T2. Los textos de los mensajes de error. Las reglas V1 a V3 y V5
+  a V7, la separación de rol y ruta, el estado, la transformación (E1 incluida), la clasificación y
+  los huérfanos.
+- **Punto anotado y no decidido.** P10: agente propio del usuario con el mismo `name:` que un alias.
+  V8 no lo cubre. Lo decide el propietario antes de T5.

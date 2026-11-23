@@ -8,8 +8,10 @@ archivo y muestra el plan. Sin -DryRun respalda lo que va a sobrescribir (verifi
 el hook primero (temporal en la misma carpeta + movimiento), verifica el destino y escribe el
 estado <Target>/synclayer-manifest.json. Nunca borra. No hace rollback: si falla, informa.
 
-Configuracion: <Target>/synclayer-config.json es opcional y tiene un solo campo, level (entero de 1 a 5;
-sin archivo, o con un objeto vacio, el nivel es 5). Un archivo invalido, o una carpeta o un enlace con ese
+Configuracion: <Target>/synclayer-config.json es opcional y tiene dos campos, ambos opcionales: level (entero
+de 1 a 5; sin archivo, o con un objeto vacio, el nivel es 5) y aliases (Fase 4, en curso: objeto rol a alias;
+se lee, se valida entera y se muestra con una linea Alias: por alias, pero AUN NO SE APLICA: una tabla efectiva
+no vacia termina con exit 1 antes de escribir; sin aliases o con aliases vacio no cambia nada). Un archivo invalido, o una carpeta o un enlace con ese
 nombre, detiene la instalacion con exit 1 antes de escribir nada (tambien con -DryRun). Con el nivel 1 a 4, el
 instalador reescribe model: y effort: del frontmatter de los seis agentes modificables (atlas, forge, sentinel,
 scribe, scout, oracle) con los valores de la tabla de niveles; auditor, shield, debugger, el hook y el resto
@@ -75,12 +77,12 @@ $StateMaxBytes = 1048576
 $ConfigName = 'synclayer-config.json'
 $ConfigMaxBytes = 65536
 
-# Datos de los alias de agentes (Fase 4). Listas cerradas, una por linea, aun sin uso: la instalacion no
-# cambia. Contrato con tests/test_aliases.py y tests/test_install.py: $AliasRoles son los nombres de
+# Datos de los alias de agentes (Fase 4). Listas cerradas, una por linea; las usa Get-AliasTableProblem
+# (validacion de la clave aliases). Contrato con tests/test_aliases.py y tests/test_install.py: $AliasRoles son los nombres de
 # los archivos de la carpeta agents; $ReservedAliases, los agentes integrados de Claude Code (en minuscula: la sensibilidad a
 # mayusculas no esta documentada); $YamlWords, los escalares que YAML no lee como cadena en name:.
 $AliasRoles = @('atlas', 'auditor', 'debugger', 'forge', 'oracle', 'scout', 'scribe', 'sentinel', 'shield')
-$ReservedAliases = @('explore', 'plan', 'general-purpose', 'claude', 'statusline-setup', 'claude-code-guide', 'web-fetch')
+$ReservedAliases = @('explore', 'plan', 'general-purpose', 'claude', 'statusline-setup', 'claude-code-guide', 'web-fetch', 'fork', 'output-style-setup')
 $YamlWords = @('true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n')
 
 # Tabla de niveles (Fase 3). La usa el renderizado de los niveles 1 a 4 (ConvertTo-LevelBytes). Una fila
@@ -551,10 +553,13 @@ function Format-SafeShort([string]$Text) {
 # Lee y valida <Target>/synclayer-config.json (entrada no confiable) y devuelve el nivel (entero de 1 a 5;
 # un objeto vacio es el nivel 5). Lectura unica: se abre una vez (solo lectura) y se leen como maximo
 # $ConfigMaxBytes mas uno, asi el tope vale sobre lo leido y no sobre una medida previa. UTF-8 estricto, con
-# o sin BOM. Raiz: un objeto. Claves: lista cerrada (solo level), comparadas de forma ordinal. level: entero
-# de 1 a 5 (ni texto, ni decimal, ni bool, ni null). Lanza un motivo fijo y escapado: nunca el contenido del
-# archivo ni el texto de .NET. El llamador comprueba antes que no sea carpeta ni punto de reanalisis.
+# o sin BOM. Raiz: un objeto. Claves: lista cerrada (level y aliases, las dos opcionales), comparadas de forma
+# ordinal. level: entero de 1 a 5 (ni texto, ni decimal, ni bool, ni null). aliases (Fase 4): un objeto; la
+# misma lectura deja sus pares clave/valor, sin validar, en $script:ConfigAliasPairs (el archivo no se abre otra
+# vez) y Get-AliasTableProblem los valida. Lanza un motivo fijo y escapado: nunca el contenido del archivo ni
+# el texto de .NET. El llamador comprueba antes que no sea carpeta ni punto de reanalisis.
 function Read-LevelConfig([string]$FilePath) {
+    $script:ConfigAliasPairs = New-Object System.Collections.Generic.List[object]
     try {
         $fs = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
     }
@@ -589,7 +594,7 @@ function Read-LevelConfig([string]$FilePath) {
     if ([string]::IsNullOrWhiteSpace($text)) { throw 'JSON invalido (archivo vacio)' }
     # El ConvertFrom-Json de 5.1 (JavaScriptSerializer) descarta en silencio la clave __type, tambien escrita
     # con escapes de la forma backslash-u y cuatro hex, antes de que se pueda comprobar la lista cerrada de
-    # claves. Un archivo valido solo tiene la clave level: cualquier aparicion de __type (comparacion ordinal,
+    # claves. Un archivo valido solo tiene las claves level y aliases: cualquier aparicion de __type (comparacion ordinal,
     # con esos escapes ya resueltos) se rechaza.
     if (Test-TextHasTypeKey $text) {
         throw 'clave desconocida: __type (el instalador puede ser anterior al archivo)'
@@ -605,17 +610,107 @@ function Read-LevelConfig([string]$FilePath) {
         throw 'debe ser un objeto'
     }
     foreach ($p in $m.PSObject.Properties) {
-        if (-not (Test-OrdinalEqual $p.Name 'level')) {
+        if (-not ((Test-OrdinalEqual $p.Name 'level') -or (Test-OrdinalEqual $p.Name 'aliases'))) {
             throw ('clave desconocida: ' + (Format-SafeShort $p.Name) + ' (el instalador puede ser anterior al archivo)')
         }
     }
+    $levelResult = 5
     $levelProp = Get-PropRaw $m 'level'
-    if ($null -eq $levelProp) { return 5 }
-    $lv = $levelProp.Value
-    if (-not (($lv -is [int] -or $lv -is [long]) -and $lv -ge 1 -and $lv -le 5)) {
-        throw 'level debe ser un entero de 1 a 5'
+    if ($null -ne $levelProp) {
+        $lv = $levelProp.Value
+        if (-not (($lv -is [int] -or $lv -is [long]) -and $lv -ge 1 -and $lv -le 5)) {
+            throw 'level debe ser un entero de 1 a 5'
+        }
+        $levelResult = [int]$lv
     }
-    return [int]$lv
+    $aliasesProp = Get-PropRaw $m 'aliases'
+    if ($null -ne $aliasesProp) {
+        $av = $aliasesProp.Value
+        if (-not ($av -is [System.Management.Automation.PSCustomObject])) { throw 'aliases debe ser un objeto' }
+        foreach ($ap in $av.PSObject.Properties) {
+            $script:ConfigAliasPairs.Add(@{ Key = [string]$ap.Name; Value = $ap.Value })
+        }
+    }
+    return $levelResult
+}
+
+# Alias de agentes (Fase 4, T2). Los pares vienen de la lectura unica de la configuracion (entrada no confiable).
+# Find-AliasPair busca la clave de forma ordinal.
+function Find-AliasPair($Pairs, [string]$Role) {
+    foreach ($pair in $Pairs) {
+        if (Test-OrdinalEqual $pair.Key $Role) { return $pair }
+    }
+    return $null
+}
+
+# Pares rol a alias de la tabla efectiva (alias distinto del rol), en el orden de $AliasRoles. Solo con una tabla
+# ya validada.
+function Get-AliasEffective($Pairs) {
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($role in $AliasRoles) {
+        $pair = Find-AliasPair $Pairs $role
+        if ($null -ne $pair -and -not (Test-OrdinalEqual $pair.Value $role)) {
+            $list.Add(@{ Role = $role; Alias = $pair.Value })
+        }
+    }
+    return , $list
+}
+
+# Devuelve el motivo del primer problema de la tabla (texto fijo: nombra el rol, que es una clave de la lista
+# cerrada, y nunca el valor del alias; una clave desconocida va por Format-SafeShort) o $null si es valida.
+# Orden: claves; por cada rol, tipo y V1 a V4; sobre la tabla efectiva V5 y V7; V6; V8 (si se pasan las rutas del
+# manifiesto). Comparaciones ordinales y expresiones sin IgnoreCase.
+function Get-AliasTableProblem($Pairs, $ManifestPaths) {
+    foreach ($pair in $Pairs) {
+        if (-not (Test-OrdinalIn $AliasRoles $pair.Key)) {
+            return ('rol desconocido en aliases: ' + (Format-SafeShort ([string]$pair.Key)))
+        }
+    }
+    $opts = [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+    foreach ($role in $AliasRoles) {
+        $pair = Find-AliasPair $Pairs $role
+        if ($null -eq $pair) { continue }
+        $value = $pair.Value
+        if (-not ($value -is [string])) { return ('el alias de ' + $role + ' debe ser texto') }
+        if (-not [regex]::IsMatch($value, '^[a-z][a-z0-9_-]{0,63}\z', $opts)) {
+            return ('el alias de ' + $role + ' solo admite a-z, 0-9, _ y -, empieza por letra y tiene hasta 64 caracteres')
+        }
+        if (Test-OrdinalIn $YamlWords $value) { return ('el alias de ' + $role + ' es una palabra reservada de YAML') }
+        if (-not [regex]::IsMatch('agents/' + $value + '.md', $AllowedPattern, $opts)) {
+            return ('el alias de ' + $role + ' es un nombre reservado de Windows')
+        }
+        if (Test-OrdinalIn $ReservedAliases $value) {
+            return ('el alias de ' + $role + ' es el nombre de un agente integrado de Claude Code')
+        }
+    }
+    $effective = Get-AliasEffective $Pairs
+    foreach ($item in $effective) {
+        if (Test-OrdinalIn $AliasRoles $item.Alias) {
+            return ('el alias de ' + $item.Role + ' es el nombre de otro agente de SyncLayer')
+        }
+        foreach ($token in $item.Alias.Split('-')) {
+            if (Test-OrdinalIn $AliasRoles $token) {
+                return ('el alias de ' + $item.Role + ' contiene el nombre de un agente de SyncLayer')
+            }
+        }
+    }
+    $seen = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+    foreach ($item in $effective) {
+        if ($seen.ContainsKey($item.Alias)) { return ($seen[$item.Alias] + ' y ' + $item.Role + ' tienen el mismo alias') }
+        $seen[$item.Alias] = $item.Role
+    }
+    if ($null -ne $ManifestPaths) {
+        $taken = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($path in $ManifestPaths) { [void]$taken.Add([string]$path) }
+        # V8 completa (enmienda E2): el destino de TODA alias efectiva se compara con TODAS las rutas del manifiesto,
+        # este o no el archivo del rol de origen en el manifiesto.
+        foreach ($item in $effective) {
+            if ($taken.Contains('agents/' + $item.Alias + '.md')) {
+                return ('el alias de ' + $item.Role + ' coincide con otro archivo del manifiesto')
+            }
+        }
+    }
+    return $null
 }
 
 # Bytes del estado con esquema 2: ASCII, LF, sangria de dos espacios y salto final. Coinciden byte a
@@ -919,6 +1014,7 @@ try {
     $configPath = Join-Path $TargetFull $ConfigName
     $level = 5
     $levelFromFile = $false
+    $script:ConfigAliasPairs = New-Object System.Collections.Generic.List[object]
     $badLink = Find-Reparse $TargetFull $ConfigName
     if ($null -ne $badLink) { Stop-Install 1 ((Get-ReparseMessage $badLink) + ' No se escribio nada.') }
     if ([System.IO.Directory]::Exists($configPath)) {
@@ -934,6 +1030,12 @@ try {
         $badLink = Find-Reparse $TargetFull $ConfigName
         if ($null -ne $badLink) { Stop-Install 1 ((Get-ReparseMessage $badLink) + ' No se escribio nada.') }
         $levelFromFile = $true
+        # La tabla de alias (clave aliases, Fase 4) se valida entera aqui, antes de leer el estado y de escribir:
+        # exit 1 tambien con -DryRun. El mensaje nombra el rol y un motivo fijo, nunca el valor del alias.
+        $aliasProblem = Get-AliasTableProblem $script:ConfigAliasPairs $manifest.Order
+        if ($null -ne $aliasProblem) {
+            Stop-Install 1 ('error: ' + $ConfigName + ' no es valido: ' + $aliasProblem + '. No se escribio nada.')
+        }
     }
     # Avisos de entorno (T6): con el nivel 1 a 4, dos variables anulan el model: y el effort: de los agentes
     # y el nivel no lo puede lograr. Solo lectura (GetEnvironmentVariable): el instalador no define, cambia ni
@@ -948,6 +1050,11 @@ try {
             Write-Err 'aviso: CLAUDE_CODE_EFFORT_LEVEL esta definida: tiene prioridad sobre el effort: de los agentes.'
         }
     }
+
+    # Alias: tabla efectiva (pares rol a alias con alias distinto del rol), ya validada con la configuracion. Vacia
+    # (sin aliases, aliases vacio o cada alias igual a su rol): nada cambia, ni la salida ni los bytes. T2 solo la
+    # muestra (lineas Alias:) y la guarda temporal del Paso 5 detiene la instalacion si no esta vacia.
+    $aliasEffective = Get-AliasEffective $script:ConfigAliasPairs
 
     # Nivel: bytes a escribir por archivo. Con el nivel 5 (el repositorio) son los bytes canonicos del origen
     # y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
@@ -1105,6 +1212,15 @@ try {
     }
     if ($null -ne $prevLevel -and $prevLevel -ne $level) {
         Write-Out ('Nivel anterior: ' + $prevLevel)
+    }
+    foreach ($aliasItem in $aliasEffective) {
+        Write-Out ('Alias: ' + $aliasItem.Role + ' -> ' + $aliasItem.Alias + ' (agents/' + $aliasItem.Alias + '.md)')
+    }
+    # Guarda temporal de la Fase 4 (T2): los alias se leen, validan y muestran, pero aun no se aplican. Una tabla
+    # efectiva no vacia detiene la instalacion antes de escribir nada (tambien con -DryRun), asi ningun commit
+    # acepta alias que no aplica. T5 la retira junto con su prueba.
+    if ($aliasEffective.Count -gt 0) {
+        Stop-Install 1 'error: los alias aun no se pueden aplicar en esta version. No se escribio nada.'
     }
     if ($backupItems.Count -gt 0) { Write-Out ('Respaldo: ' + (Format-Safe $BackupFull)) }
     if ($DryRun) { Write-Out 'Modo: -DryRun (no se escribe nada)' }

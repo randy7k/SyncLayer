@@ -19,7 +19,8 @@ import levels_ref as lr  # noqa: E402
 
 ROLES = ["atlas", "auditor", "debugger", "forge", "oracle", "scout", "scribe", "sentinel", "shield"]
 LEVEL_ROLES = ["atlas", "forge", "sentinel", "scribe", "scout", "oracle"]
-RESERVED = ["explore", "plan", "general-purpose", "claude", "statusline-setup", "claude-code-guide", "web-fetch"]
+RESERVED = ["explore", "plan", "general-purpose", "claude", "statusline-setup", "claude-code-guide", "web-fetch",
+            "fork", "output-style-setup"]
 YAML_WORDS = ["true", "false", "null", "yes", "no", "on", "off", "y", "n"]
 
 # Nueve alias validos a la vez (ninguno contiene un rol como palabra).
@@ -145,10 +146,10 @@ class RepositoryInventory(unittest.TestCase):
     def test_case5_combining_marks_next_to_a_role_are_detected(self):
         import unicodedata
         nfd = unicodedata.normalize("NFD", "forgé SCRIBÉ")  # "forge" y "SCRIBE" con U+0301 tras la e
-        self.assertEqual(nfd, "forgé SCRIBÉ")
-        self.assertEqual(ar.foreign_letter_hits(nfd), [("forge", "́"), ("scribe", "́")])
+        self.assertEqual(nfd, "forge\u0301 SCRIBE\u0301")
+        self.assertEqual(ar.foreign_letter_hits(nfd), [("forge", "\u0301"), ("scribe", "\u0301")])
         # El instalador lo reemplazaria y el acento quedaria sobre la primera letra del alias.
-        self.assertEqual(ar.transform_text(u(nfd), {"forge": "dev"}), u("dev́ SCRIBÉ"))
+        self.assertEqual(ar.transform_text(u(nfd), {"forge": "dev"}), u("dev\u0301 SCRIBE\u0301"))
         # La forma precompuesta (NFC) no es marca combinante: es una letra de U+00C0 a U+00FF, que el limite respeta.
         self.assertEqual(ar.foreign_letter_hits("forgeé"), [])
 
@@ -512,6 +513,16 @@ class TableValidation(unittest.TestCase):
         self.assertIsNone(ar.validate_table({"forge": "dev"}))
         self.assertIsNone(ar.validate_table({"forge": "dev2"}, manifest_paths=paths))
         self.assertIsNone(ar.validate_table({"forge": "dev", "scribe": "otro"}, manifest_paths=["agents/forge.md"]))
+
+    def test_v8_covers_roles_whose_file_is_not_in_the_manifest(self):
+        # E2: el destino de cualquier alias efectiva se compara con todas las rutas, este o no el rol en el manifiesto.
+        paths = ["agents/alfa.md", "rules/agentes.md"]
+        self.assertProblem({"forge": "alfa"}, "coincide con otro archivo del manifiesto", manifest_paths=paths)
+        self.assertProblem({"forge": "alfa"}, "coincide con otro archivo del manifiesto",
+                           manifest_paths=paths + ["agents/forge.md"])
+        for ok in ({"forge": "beta"}, {"forge": "forge"}, {}):
+            self.assertIsNone(ar.validate_table(ok, manifest_paths=paths), ok)
+            self.assertIsNone(ar.validate_table(ok, manifest_paths=paths + ["agents/forge.md"]), ok)
 
 
 if __name__ == "__main__":

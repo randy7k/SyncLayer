@@ -2,6 +2,26 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 4, T2: clave `aliases` del archivo de configuración)
+
+- `install.ps1` acepta la clave opcional `aliases` (objeto rol a alias) en `<Target>/synclayer-config.json`,
+  junto a `level`; cualquier otra clave sigue dando exit 1. La lectura sigue siendo única y la validación
+  de la tabla entera ocurre antes de escribir nada, también en `-DryRun`: el alias va en minúsculas,
+  empieza por letra, usa sólo `[a-z0-9_-]` y hasta 64 caracteres; no puede ser una palabra que YAML no lee
+  como cadena, un nombre de dispositivo de Windows, un agente integrado de Claude Code (los siete de la
+  documentación más `fork` y `output-style-setup`, la lista es cerrada), el rol de otro agente, un alias
+  repetido, contener un rol como palabra, formar un ciclo ni coincidir con una ruta del manifiesto. Un alias
+  igual al propio rol se descarta sin error. Los mensajes nunca contienen el valor de un alias inválido.
+- La salida muestra una línea `Alias: <rol> -> <alias> (agents/<alias>.md)` por alias efectivo. **Guardia
+  temporal:** una tabla efectiva válida y no vacía termina con exit 1 («los alias aun no se pueden aplicar
+  en esta version») antes de escribir; la retira T5. Sin `aliases`, o con una tabla efectiva vacía, la salida
+  y los bytes son idénticos a los de antes.
+- Enmienda E2 del plan (aprobada tras T2): `$ReservedAliases` pasa de siete a nueve nombres y V8 compara el
+  destino de toda alias efectiva con todas las rutas del manifiesto, esté o no el rol de origen. Punto
+  abierto P10: un agente propio del usuario con el mismo `name:` que un alias.
+- Pruebas: casos 9 a 19 y 57 y 58 del plan, comparados con la referencia independiente
+  `tests/aliases_ref.py`; una prueba de comportamiento fija que la configuración se lee una sola vez.
+
 ### Añadido (Fase 4, T1: listas cerradas del alias y referencia independiente)
 
 - `install.ps1` lleva tres listas cerradas para los alias de agentes, todavía sin uso (el instalador se

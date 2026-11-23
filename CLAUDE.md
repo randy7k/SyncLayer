@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1331 pruebas, 205 saltadas (202 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1382 pruebas, 229 saltadas (226 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -201,9 +201,12 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
-- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, sólo T1
-  hecha): `install.ps1` lleva `$AliasRoles`, `$ReservedAliases` y `$YamlWords` sin uso todavía; la
-  referencia independiente es `tests/aliases_ref.py` y la prueba `tests/test_aliases.py`. Límite de palabra
+- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, T1 y T2
+  hechas): `install.ps1` lee y valida la clave `aliases` de `synclayer-config.json` (lectura única;
+  `Get-AliasTableProblem`, V1 a V8, tabla entera antes de escribir; líneas `Alias:`) pero NO la aplica: una
+  tabla efectiva válida termina con exit 1 (guardia temporal, la retira T5). `$ReservedAliases` son nueve
+  nombres cerrados (los siete integrados, `fork` y `output-style-setup`) y puede quedarse atrás frente a
+  integrados nuevos. La referencia independiente es `tests/aliases_ref.py` y la prueba `tests/test_aliases.py`. Límite de palabra
   del reemplazo (enmienda E1): letra = `[A-Za-z0-9_]` o la pareja UTF-8 `C3 80` a `C3 BF` sobre texto
   decodificado ISO-8859-1; el resto es límite (comillas angulares, `¿¡`, rayas, espacio duro, marcas
   combinantes). `scribe` es subcadena de `escribe`, `describe`, `reescribe`, `sobrescribe`: sin límite de
@@ -259,7 +262,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (202 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (226 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

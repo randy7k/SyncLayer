@@ -134,15 +134,12 @@ def validate_table(aliases, manifest_paths=None):
             return "%s y %s tienen el mismo alias" % (seen[eff[role]], role)
         seen[eff[role]] = role
     if manifest_paths is not None:
+        # V8 completa (enmienda E2): el destino de TODA alias efectiva se compara con TODAS las rutas del
+        # manifiesto, este o no el archivo del rol de origen en el manifiesto.
         taken = set(manifest_paths)
-        dests = set()
-        for role, rel in ((r, "agents/%s.md" % r) for r in known):
-            if rel not in taken:
-                continue
-            dest = dest_for(rel, aliases)
-            if (dest != rel and dest in taken) or dest in dests:
+        for role in known:
+            if role in eff and "agents/%s.md" % eff[role] in taken:
                 return "el alias de %s coincide con otro archivo del manifiesto" % role
-            dests.add(dest)
     return None
 
 
