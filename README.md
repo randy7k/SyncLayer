@@ -782,7 +782,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1426 pruebas, 250 saltadas: 247 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1479 pruebas, 275 saltadas: 272 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 
@@ -814,19 +814,19 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-23** (T3 de la Fase 4 cerrada: lectura del estado con esquema 3 y huérfanos).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-23** (T4 de la Fase 4 cerrada: rol separado de la ruta de destino y estado con esquema 3).
 
 ### Avance global
 
-**El proyecto completo va en 67%.** Cuenta las cinco fases con el mismo peso; la fase 5 es backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 4 está desglosada pero sin ninguna unidad cerrada, así que el número sube cuando se desglose la fase 5 en sub-fases.
+**El proyecto completo va en 69%.** Cuenta las cinco fases con el mismo peso (3 fases al 100 % + la fase 4 al 44 % = 344 ÷ 5 = 68,9 %); la fase 5 es backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 4 está en curso (4 de 9 unidades), así que el número cambia cuando se desglose la fase 5 en sub-fases.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | **67%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | **69%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
 | **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Plan aprobado, cerrada en la rama `feat/esfuerzo-configurable` (T1 a T7 y cierre); la compuerta G1 del propietario sigue pendiente (verificación en Claude Code real; no bloquea) ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
-| **4. Nombres de agentes configurables** | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **33%** | 3 de 9 | Plan aprobado, en curso (T1 a T3 cerradas); la compuerta G1 del propietario no bloquea las tasks pero sí aplicar alias a su `~/.claude` real ([plan](docs/plans/2026-11-22-fase4-nombres-configurables.md), [exploración](docs/plans/2026-11-22-fase4-nombres-exploracion.md)) |
+| **4. Nombres de agentes configurables** | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | **44%** | 4 de 9 | Plan aprobado, en curso (T1 a T4 cerradas); la compuerta G1 del propietario no bloquea las tasks pero sí aplicar alias a su `~/.claude` real ([plan](docs/plans/2026-11-22-fase4-nombres-configurables.md), [exploración](docs/plans/2026-11-22-fase4-nombres-exploracion.md)) |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 
 Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unidades planeadas. «Cerrada» = commiteada en la rama de la fase con su suite verde y la revisión de `auditor` sin hallazgos Critical ni Important; la integración a `main` se hace al cerrar la fase. Lo que falta probar en un entorno real (la instalación sobre el `~/.claude` verdadero) se lista aparte y no resta.
@@ -879,7 +879,7 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | Frente | Avance | % | Unidades |
 |:--|:--|--:|:--|
 | Datos y configuración | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T1, T2) |
-| Rol y ruta | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **50%** | 1 de 2 (T3, T4) |
+| Rol y ruta | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T3, T4) |
 | Transformación | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 3 (T5, T6, T7) |
 | Documentación y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 2 (T8, cierre) |
 
@@ -889,7 +889,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
   - ⬜ Falta: nada.
 - **Rol y ruta**
   - ✅ Hecho: T3 el instalador lee el estado con esquema 3 (campo `dest` validado: ruta `agents/<alias>.md` de hasta 74 caracteres, sin colisión con otra entrada ni con una ruta del manifiesto), clasifica con `prevByDest` e informa como huérfano el destino previo que ya no es destino actual. Todavía escribe el esquema 2 y no aplica alias.
-  - ⬜ Falta: T4 (separar el rol de la ruta de destino en los pasos 4 a 9 y escribir el esquema 3).
+  - ✅ Hecho también: T4 el instalador separa el rol (clave de manifiesto, nivel, bytes y hash de salida) de la ruta de destino (leer, escribir, respaldar, verificar y clasificar) en los pasos 4 a 9; valida las rutas de destino antes de escribir (`Get-DestRelProblem`, también en `-DryRun`) y escribe el estado con esquema 3 (`dest` en todas las entradas) sólo si algún destino difiere del rol. Hoy el destino es siempre el rol, así que bytes, estado y salida son idénticos a los de antes y el esquema escrito sigue siendo el 2.
+  - ⬜ Falta: nada.
 - **Transformación**
   - ✅ Hecho: nada.
   - ⬜ Falta: T5, T6 y T7 (reemplazo del nombre en agentes, `rules/agentes.md` y `docs/agentes.md`, alias junto al nivel).
@@ -933,8 +934,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-22 | T1 de la Fase 4: listas cerradas del alias en `install.ps1` y referencia independiente en Python con la regla de límite de palabra enmendada (E1: el nombre pegado a comillas angulares se reemplaza); revisada por `auditor` | ✅ |
 | 2026-11-23 | T2 de la Fase 4: clave `aliases` de `synclayer-config.json` (lectura única, validación de la tabla entera, líneas `Alias:`, guardia temporal); revisada por `auditor` y `shield`; enmienda E2 (reservados y V8 completa) | ✅ |
 | 2026-11-23 | T3 de la Fase 4: lectura del estado con esquema 3, `prevByDest` y huérfanos generalizados (el instalador aún escribe el esquema 2); revisada por `auditor` y `shield`; enmienda E3 | ✅ |
-| **Ahora** | **T4 de la Fase 4** (separar rol y ruta de destino y escribir el esquema 3) y, del propietario, la compuerta G1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`), comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
-| Luego | T5 a T8 y cierre de la Fase 4, y desglosar la fase 5 (backlog) | ⬜ |
+| 2026-11-23 | T4 de la Fase 4: rol separado de la ruta de destino en los pasos 4 a 9, `Get-DestRelProblem` y estado con esquema 3 cuando algún destino difiere (hoy siempre es identidad); revisada por `auditor` y `shield` | ✅ |
+| **Ahora** | **T5 de la Fase 4** (transformación de textos y activación de alias; retira la guardia temporal) y, del propietario, la compuerta G1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`), comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
+| Luego | T6 a T8 y cierre de la Fase 4, y desglosar la fase 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
 

@@ -281,6 +281,23 @@ class StaticChecks(unittest.TestCase):
         ref = re.search(r"\{0,(\d+)\}", ar._ALIAS_RE.pattern)
         self.assertEqual(1 + int(ref.group(1)), longest)
 
+    def test_f4t3_dest_max_length_literal_in_both_checks_matches_the_alias_rule(self):
+        # Read-State y Get-DestRelProblem llevan cada uno su literal del tope: los dos deben existir, ser iguales entre
+        # si y al tope derivado de la regla del alias (la prueba anterior sólo ve el de Read-State, por el `-and`).
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        m = re.search(r"IsMatch\(\$value, '\^\[a-z\]\[a-z0-9_-\]\{0,(\d+)\}" + re.escape(chr(92)) + "z'", text)
+        self.assertIsNotNone(m, "no se encontro la regla del alias en install.ps1")
+        expected = len("agents/") + 1 + int(m.group(1)) + len(".md")
+        read_state = re.search(r"^function Read-State\(.*?^\}$", text, re.M | re.S)
+        dest_rel = re.search(r"^function Get-DestRelProblem\(.*?^\}$", text, re.M | re.S)
+        self.assertIsNotNone(read_state)
+        self.assertIsNotNone(dest_rel)
+        in_state = re.findall(r"\$d\.Length -gt (\d+)\b", read_state.group(0))
+        in_dest = re.findall(r"\$d\.Length -gt (\d+)\b", dest_rel.group(0))
+        self.assertEqual(in_state, [str(expected)])
+        self.assertEqual(in_dest, [str(expected)])
+        self.assertEqual(in_state, in_dest)
+
     def test_f4t3_read_state_requires_the_manifest_paths_and_dicts_are_ordinal(self):
         # Sin valor por defecto: un llamador que olvide $ManifestPaths no desactiva la regla en silencio.
         text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
@@ -291,6 +308,38 @@ class StaticChecks(unittest.TestCase):
         self.assertIn("$dests = " + ordinal, text)
         self.assertIn("$prevByDest = " + ordinal, text)
         self.assertNotRegex(text, r"\$(dests|prevByDest) = @\{\}")
+
+    def test_f4t4_dest_rel_is_identity_in_production_and_anchors_hold(self):
+        # T4: $destRel se calcula una vez, en el bloque `# Alias:`, y en produccion es la identidad (nunca sale del
+        # estado ni del entorno). Las anclas de patch_script de 3.3 siguen una sola vez y en su sitio.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        self.assertEqual(text.count("foreach ($rel in $manifest.Order) { $destRel[$rel] = $rel }"), 1)
+        self.assertEqual(len(re.findall(r"\$destRel\[[^\]]*\]\s*=", text)), 1)
+        self.assertEqual(len(re.findall(r"^\s*\$destRel = ", text, re.M)), 1)
+        self.assertEqual(text.count("Write-Atomic $dest $outBytes[$rel] $existing"), 1)
+        self.assertEqual(text.count("Write-Atomic $statePath $stateBytes $stateExists"), 1)
+        self.assertEqual(len(re.findall(r"^function Get-DestRelProblem\b", text, re.M)), 1)
+        self.assertEqual(text.count("ConvertTo-StateBytes $manifest $outHash $level $destRel"), 1)
+        self.assertEqual(text.count("$destProblem = Get-DestRelProblem $destRel $manifest.Order"), 1)
+        lines = [l.strip() for l in text.split("\n")]
+        anchor = next(i for i, l in enumerate(lines) if l.startswith("# Alias:"))
+        check = lines.index("$destProblem = Get-DestRelProblem $destRel $manifest.Order")
+        build = lines.index("foreach ($rel in $manifest.Order) { $destRel[$rel] = $rel }")
+        self.assertLess(build, anchor)
+        self.assertLess(anchor, check)
+
+    def test_f4t4_steps_4_to_9_never_use_the_role_path_on_disk(self):
+        # En los pasos 4 a 9 el rol ($rel) no se usa como ruta del disco: se lee, escribe, respalda y verifica la ruta
+        # de destino. (El rol sirve para outBytes y outHash.)
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        body = text[text.index("# Paso 4: clasificar."):text.index("# Paso 10: mensaje final.")]
+        self.assertEqual(re.findall(r"ConvertTo-LocalPath \$(?:TargetFull|BackupFull) \$rel\b", body), [])
+        self.assertEqual(re.findall(r"Find-Reparse \$(?:TargetFull|BackupFull) \$rel\b", body), [])
+        self.assertEqual(re.findall(r"\$written\.Add\(\$rel\)", body), [])
+        self.assertEqual(re.findall(r"Path = \$prevDest", body), [])
+        self.assertIn("$prevByDest.ContainsKey($destPath)", body)
+        self.assertIn("$outHash[$roleByDest[$destPath]]", body)
+        self.assertIn("Write-Atomic $dest $outBytes[$rel] $existing", body)
 
 
 class InstallCases:
@@ -5049,6 +5098,520 @@ class InstallCases:
         self.assertEqual(after, before)
         self.assertNotIn("agents/ajeno.md", self.f4_tree(backup))
         self.assertEqual(self.leftover_temps(), [])
+
+    # --- Fase 4, T4: destRel (ruta de destino) separada del rol en los pasos 4 a 9 ---
+    # En produccion destRel es la identidad (la guarda temporal de T2 impide aplicar alias reales hasta T5). Estas
+    # pruebas inyectan, tras el ancla `# Alias:`, un destRel que no es la identidad. El mapa viaja en la variable de
+    # entorno F4_DESTS ("rol=destino;rol=destino"): el mismo script (parcheado una vez) sirve para varias corridas con
+    # destinos distintos, y las ayudas existentes (assert_reparse_rejected, ...) lo heredan sin cambios.
+
+    F4T4_INJECT = ("foreach ($f4pair in ([string]$env:F4_DESTS).Split([char]59)) { if ($f4pair.Length -gt 0) "
+                   "{ $f4kv = $f4pair.Split([char]61); $destRel[$f4kv[0]] = $f4kv[1] } }")
+    F4T4_ALFA = "agents/alfa.md"
+    F4T4_BETA = "agents/beta.md"
+    F4T4_TESTER = "agents/tester.md"
+    F4T4_DEV = "agents/dev.md"
+
+    def f4t4_prepare(self, files=None):
+        self.make_source(files)
+        self.patch_script("# Alias:", self.F4T4_INJECT)
+
+    def f4t4_set(self, mapping):
+        """Fija el destRel inyectado para las corridas siguientes ({} = identidad)."""
+        self.addCleanup(os.environ.pop, "F4_DESTS", None)
+        os.environ["F4_DESTS"] = ";".join("%s=%s" % kv for kv in mapping.items())
+
+    def f4t4_manifest(self):
+        return read(self.src, "install-manifest.json")
+
+    def f4t4_copied(self, out):
+        return [l.split(": ", 1)[1].strip() for l in out.splitlines() if l.startswith("Copiado: ")]
+
+    def f4t4_role_path_absent(self):
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "alfa.md")))
+
+    def test_f4t4_case26_clean_install_writes_only_in_the_dest_path(self):
+        # Caso 26: el archivo del rol alfa se escribe SOLO en agents/tester.md; Copiado: y la fila llevan esa ruta; el
+        # estado es el de la referencia (esquema 3 con dest en todas las entradas).
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.f4t4_role_path_absent()
+        copied = self.f4t4_copied(out)
+        self.assertIn(self.F4T4_TESTER, copied)
+        self.assertNotIn(self.F4T4_ALFA, copied)
+        self.assertEqual(len(copied), 5)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_TESTER], "NUEVO")
+        self.assertNotIn(self.F4T4_ALFA, st)
+        self.assertEqual(len(st), 5)
+        self.assertEqual(set(st.values()), {"NUEVO"})
+        self.assertIn("Verificado: 5 archivo(s)", out)
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), None, 5, {self.F4T4_ALFA: self.F4T4_TESTER}))
+        self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+        self.assertFalse(os.path.exists(backup))
+        self.assertEqual(self.leftover_temps(), [])
+        self.assertNotIn("no se pudo leer o no es valido", err)
+        self.assert_nothing_written_outside_target_and_backup()
+
+    def test_f4t4_case26_dryrun_shows_the_dest_path_and_writes_nothing(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_TESTER], "NUEVO")
+        self.assertNotIn(self.F4T4_ALFA, st)
+        self.assertIn("NUEVO=5", out)
+        self.assertFalse(os.path.exists(self.target))
+        self.assert_nothing_written_outside_target_and_backup()
+
+    def test_f4t4_case27_actualizar_backs_up_the_dest_path(self):
+        # Caso 27 (a): destino con alias intacto segun el estado: ACTUALIZAR, respaldo en <respaldo>/<ruta de destino>.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        prev_state = read(self.target, self.STATE)
+        new = dict(SAMPLE)
+        new[self.F4T4_ALFA] = b"alfa 2\n"
+        self.make_source(new)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-DryRun", "-BackupDir", backup)
+        self.assertEqual(code, 0, out + err)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_TESTER], "ACTUALIZAR")
+        self.assertEqual(sorted(k for k, v in st.items() if v == "ACTUALIZAR"), [self.F4T4_TESTER])
+        self.assertIn("Respaldo: ", out)
+        self.assertFalse(os.path.exists(backup))
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(read(backup, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.assertFalse(os.path.exists(os.path.join(backup, "agents", "alfa.md")))
+        self.assertIn("Respaldado: " + self.F4T4_TESTER, out)
+        self.assertEqual(read(self.target, self.F4T4_TESTER), b"alfa 2\n")
+        self.f4t4_role_path_absent()
+        # el estado cambio (alfa tiene otro written): el anterior va al respaldo
+        self.assertEqual(read(backup, self.STATE), prev_state)
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), None, 5, {self.F4T4_ALFA: self.F4T4_TESTER}))
+        self.assertEqual(self.f4_tree(backup).keys(), {self.F4T4_TESTER, self.STATE})
+
+    def test_f4t4_case27_hand_edited_dest_is_modificado_and_force_backs_it_up(self):
+        # Caso 27 (b): edicion a mano del archivo con alias: MODIFICADO (exit 3, nada escrito); con -Force, respaldo
+        # de la ruta de destino y sobrescritura.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        write(self.target, self.F4T4_TESTER, b"editado a mano\n")
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-BackupDir", backup)
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out)[self.F4T4_TESTER], "MODIFICADO")
+        self.assertIn(self.F4T4_TESTER, err)
+        self.assertNotIn(self.F4T4_ALFA, err)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertFalse(os.path.exists(backup))
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(read(backup, self.F4T4_TESTER), b"editado a mano\n")
+        self.assertFalse(os.path.exists(os.path.join(backup, "agents", "alfa.md")))
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.f4t4_role_path_absent()
+        # el segundo estado no cambia (written igual): solo el archivo editado va al respaldo
+        self.assertEqual(self.f4_tree(backup), {self.F4T4_TESTER: b"editado a mano\n"})
+
+    def test_f4t4_case27_file_in_the_role_path_is_an_orphan_and_is_never_touched(self):
+        # El archivo previo en la ruta del rol queda HUERFANO informado: sin tocar (bytes y mtime), sin respaldar,
+        # tambien con -Force. Una vez reescrito el estado deja de informarse.
+        self.f4t4_prepare()
+        self.f4t4_set({})
+        self.install_ok()
+        role_file = os.path.join(self.target, "agents", "alfa.md")
+        old = os.stat(role_file).st_mtime_ns - 5_000_000_000
+        os.utime(role_file, ns=(old, old))
+        prev_state = read(self.target, self.STATE)
+        before = snapshot(self.target)["agents\\alfa.md" if os.name == "nt" else "agents/alfa.md"]
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_TESTER], "NUEVO")
+        self.assertEqual(st[self.F4T4_ALFA], "HUERFANO")
+        self.assertEqual(sorted(k for k, v in st.items() if v == "HUERFANO"), [self.F4T4_ALFA])
+        self.assertIn("HUERFANO=1", out)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(self.states(out)[self.F4T4_ALFA], "HUERFANO")
+        after = snapshot(self.target)["agents\\alfa.md" if os.name == "nt" else "agents/alfa.md"]
+        self.assertEqual(after, before)
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.assertEqual(self.f4_tree(backup), {self.STATE: prev_state})
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), None, 5, {self.F4T4_ALFA: self.F4T4_TESTER}))
+        out, err = self.install_ok()
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertNotIn(self.F4T4_ALFA, self.states(out))
+
+    def test_f4t4_role_path_is_never_inspected_when_it_has_another_destination(self):
+        # Ni el reanalisis, ni la carpeta, ni el bloqueo de la ruta del rol importan: no se mira. Una junction en
+        # agents/alfa.md no impide instalar alfa en agents/tester.md.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        os.makedirs(os.path.join(self.target, "agents"))
+        link = os.path.join(self.target, "agents", "alfa.md")
+        self.make_link_dir(link, self.outside)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        out, err = self.install_ok()
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.assertEqual(os.listdir(self.outside), [])
+
+    def test_f4t4_case28_verification_names_the_dest_path_exit4(self):
+        # Caso 28: archivo alterado en el Paso 8: exit 4 y el mensaje nombra la ruta de destino (no la del rol).
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        victim = os.path.join(self.target, "agents", "tester.md").replace("'", "''")
+        self.patch_script("# Paso 8:", "[System.IO.File]::WriteAllBytes('%s', [byte[]]@(65))" % victim)
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("la verificacion posterior fallo", err)
+        failed = err.split("la verificacion posterior fallo", 1)[1]
+        self.assertIn(self.F4T4_TESTER, failed.splitlines()[1])
+        self.assertNotIn(self.F4T4_ALFA, err)
+        self.assertFalse(os.path.exists(os.path.join(self.target, self.STATE)))
+        self.f4t4_role_path_absent()
+
+    @unittest.skipUnless(os.name == "nt", "el atributo de solo lectura bloquea el reemplazo solo en Windows")
+    def test_f4t4_copy_failure_names_the_dest_path_exit4(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        new = dict(SAMPLE)
+        new[self.F4T4_ALFA] = b"alfa 2\n"
+        self.make_source(new)
+        self.inject_readonly_at_step7(self.F4T4_TESTER)
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("fallo la copia de " + self.F4T4_TESTER, err)
+        self.assertNotIn(self.F4T4_ALFA, err)
+
+    def test_f4t4_case29_reparse_point_in_the_dest_path_exit1_in_both_modes(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        os.makedirs(os.path.join(self.target, "agents"))
+        link = os.path.join(self.target, "agents", "tester.md")
+        self.make_link_dir(link, self.outside)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        self.assert_reparse_rejected(expect_in_err="tester.md", outside_before=snapshot(self.outside))
+        self.assert_reparse_rejected("-Force", expect_in_err="tester.md", outside_before=snapshot(self.outside))
+        self.assertEqual(os.listdir(self.outside), [])
+
+    def test_f4t4_case29_folder_in_the_dest_path_exit1_in_both_modes(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        os.makedirs(os.path.join(self.target, "agents", "tester.md"))
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], [], ["-Force"]):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("es una carpeta, no un archivo", err)
+                self.assertIn("tester.md", err)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(snapshot(self.target), before)
+
+    def test_f4t4_case29_file_where_a_folder_is_needed_exit1_in_both_modes(self):
+        # Una de las carpetas intermedias de la ruta de destino es un archivo (agents/ en este caso).
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        write(self.target, "agents", b"soy un archivo")
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("es un archivo y deberia ser una carpeta", err)
+                self.assertNotIn("Copiado", out)
+
+    def test_f4t4_case29_read_only_dest_exit1_in_both_modes(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        new = dict(SAMPLE)
+        new[self.F4T4_ALFA] = b"alfa 2\n"
+        self.make_source(new)
+        self.make_readonly(self.F4T4_TESTER)
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("solo lectura", err)
+                self.assertIn("tester.md", err)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(snapshot(self.target), before)
+
+    @unittest.skipUnless(os.name == "nt", "el bloqueo de uso compartido es de Windows")
+    def test_f4t4_case29_locked_dest_exit1_in_both_modes(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        new = dict(SAMPLE)
+        new[self.F4T4_ALFA] = b"alfa 2\n"
+        self.make_source(new)
+        self.lock_file(os.path.join(self.target, "agents", "tester.md"), self.GENERIC_READ, 1)
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("bloqueado", err)
+                self.assertIn("tester.md", err)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(snapshot(self.target), before)
+
+    def test_f4t4_case30_hook_goes_first_with_a_non_identity_dest(self):
+        # Caso 30: el hook (rol fijo, Path) va primero aunque el agente con otro destino sea el primero del manifiesto.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        out, err = self.install_ok()
+        copied = self.f4t4_copied(out)
+        self.assertEqual(copied[0], "hooks/agent_guard.py")
+        self.assertIn(self.F4T4_TESTER, copied)
+        # tambien cuando el hook ya existe y se actualiza
+        new = dict(SAMPLE)
+        new["hooks/agent_guard.py"] = b"print('guard 2')\n"
+        new[self.F4T4_ALFA] = b"alfa 2\n"
+        self.make_source(new)
+        out, err = self.install_ok()
+        copied = self.f4t4_copied(out)
+        self.assertEqual(copied[0], "hooks/agent_guard.py")
+        self.assertEqual(sorted(copied), sorted(["hooks/agent_guard.py", self.F4T4_TESTER]))
+
+    def test_f4t4_case31_second_run_is_all_igual_and_does_not_rewrite_the_state(self):
+        # Caso 31: el estado esquema 3 que escribio T4 se relee como valido: segunda corrida todo IGUAL, ni estado, ni
+        # respaldo, ni aviso.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER, self.F4T4_BETA: self.F4T4_DEV})
+        self.install_ok()
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-DryRun", "-BackupDir", backup)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertNotIn("Respaldo:", out)
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertEqual(len(self.states(out)), 5)
+        self.assertIn("escritos=0 IGUAL=5", out)
+        self.assertNotIn("Estado:", out)
+        self.assertNotIn("Copiado", out)
+        self.assertNotIn("Respaldado", out)
+        self.assertNotIn("no se pudo leer o no es valido", err)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertFalse(os.path.exists(backup))
+
+    def test_f4t4_changing_the_alias_leaves_one_orphan_per_old_dest(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        prev_state = read(self.target, self.STATE)
+        tester_before = snapshot(self.target)["agents\\tester.md" if os.name == "nt" else "agents/tester.md"]
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_DEV})
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_DEV], "NUEVO")
+        self.assertEqual(st[self.F4T4_TESTER], "HUERFANO")
+        self.assertEqual(sorted(k for k, v in st.items() if v == "HUERFANO"), [self.F4T4_TESTER])
+        self.assertEqual(read(self.target, self.F4T4_DEV), SAMPLE[self.F4T4_ALFA])
+        self.f4t4_role_path_absent()
+        after = snapshot(self.target)["agents\\tester.md" if os.name == "nt" else "agents/tester.md"]
+        self.assertEqual(after, tester_before)
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), None, 5, {self.F4T4_ALFA: self.F4T4_DEV}))
+        self.assertEqual(self.f4_tree(backup), {self.STATE: prev_state})
+
+    def test_f4t4_swapping_two_dests_classifies_each_path_against_its_own_state_entry(self):
+        # alfa: tester a dev; beta: dev a tester. Cada ruta de destino lleva los bytes del OTRO rol: intactas segun
+        # prevByDest (ruta a written), asi que son ACTUALIZAR (no MODIFICADO) y los dos viejos van al respaldo.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER, self.F4T4_BETA: self.F4T4_DEV})
+        self.install_ok()
+        self.assertNotEqual(SAMPLE[self.F4T4_ALFA], SAMPLE[self.F4T4_BETA])
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_DEV, self.F4T4_BETA: self.F4T4_TESTER})
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_DEV], "ACTUALIZAR")
+        self.assertEqual(st[self.F4T4_TESTER], "ACTUALIZAR")
+        self.assertEqual(sorted(k for k, v in st.items() if v == "HUERFANO"), [])
+        self.assertEqual(read(self.target, self.F4T4_DEV), SAMPLE[self.F4T4_ALFA])
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_BETA])
+        self.assertEqual(read(backup, self.F4T4_DEV), SAMPLE[self.F4T4_BETA])
+        self.assertEqual(read(backup, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+
+    def test_f4t4_removing_the_alias_orphans_the_alias_file_and_goes_back_to_schema2(self):
+        # Primero sin alias, luego con alias (el archivo del rol queda), luego sin alias otra vez: el del rol sale IGUAL
+        # (sus bytes son los que se escribirian), el del alias HUERFANO, y el estado vuelve a esquema 2.
+        self.f4t4_prepare()
+        self.f4t4_set({})
+        self.install_ok()
+        self.assert_state(5)
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+        self.f4t4_set({})
+        out, err = self.install_ok()
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_ALFA], "IGUAL")
+        self.assertEqual(st[self.F4T4_TESTER], "HUERFANO")
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.assert_state(5)
+        self.assertNotIn(b'"dest"', read(self.target, self.STATE))
+        # sin el archivo viejo del rol en disco: NUEVO
+        os.remove(os.path.join(self.target, "agents", "alfa.md"))
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_DEV})
+        self.install_ok()
+        os.remove(os.path.join(self.target, "agents", "tester.md"))
+        self.f4t4_set({})
+        out, err = self.install_ok()
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_ALFA], "NUEVO")
+        self.assertEqual(st[self.F4T4_DEV], "HUERFANO")
+        self.assert_state(5)
+
+    def test_f4t4_identity_keeps_schema2_without_dest(self):
+        # Con la identidad (tambien dicha de forma explicita) el estado es el esquema 2 de siempre.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_ALFA, "hooks/agent_guard.py": "hooks/agent_guard.py"})
+        self.install_ok()
+        self.assert_state(5)
+        self.assertNotIn(b'"dest"', read(self.target, self.STATE))
+        self.assertIn(b'"schema": 2', read(self.target, self.STATE))
+
+    def test_f4t4_level_cell_is_looked_up_by_role_not_by_dest_path(self):
+        # Con un destRel no identidad, la celda de la tabla de niveles sigue buscandose por ROL: el archivo trae el
+        # model: y el effort: del rol y la linea Ajuste: lleva la ruta de destino.
+        mapping = {"agents/atlas.md": "agents/dev.md", "agents/scribe.md": "agents/qa.md"}
+        self.f4t4_prepare(LEVEL_SAMPLE)
+        self.f4t4_set(mapping)
+        write(self.target, self.CONFIG, b'{"level": 3}')
+        out, err = self.install_ok()
+        expected = level_expected(LEVEL_SAMPLE, 3)
+        self.assertNotEqual(expected["agents/atlas.md"], LEVEL_SAMPLE["agents/atlas.md"])
+        self.assertEqual(read(self.target, "agents/dev.md"), expected["agents/atlas.md"])
+        self.assertEqual(read(self.target, "agents/qa.md"), expected["agents/scribe.md"])
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "atlas.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "scribe.md")))
+        table = lr.read_script_table()
+        for role, dest in (("atlas", "dev"), ("scribe", "qa")):
+            model, effort = table[(3, role)]
+            self.assertIn("Ajuste: agents/%s.md  model: %s  effort: %s" % (dest, model, effort), out.splitlines())
+            self.assertNotIn("Ajuste: agents/%s.md" % role, out)
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), level_hashes(LEVEL_SAMPLE, 3), 3, mapping))
+        # reinstalar igual: todo IGUAL
+        out, err = self.install_ok()
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+
+    def test_f4t4_level_change_with_an_alias_updates_the_dest_file(self):
+        mapping = {"agents/atlas.md": "agents/dev.md"}
+        self.f4t4_prepare(LEVEL_SAMPLE)
+        self.f4t4_set(mapping)
+        write(self.target, self.CONFIG, b'{"level": 3}')
+        self.install_ok()
+        e3 = level_expected(LEVEL_SAMPLE, 3)["agents/atlas.md"]
+        e4 = level_expected(LEVEL_SAMPLE, 4)["agents/atlas.md"]
+        self.assertNotEqual(e3, e4)
+        write(self.target, self.CONFIG, b'{"level": 4}')
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(self.states(out)["agents/dev.md"], "ACTUALIZAR")
+        self.assertIn("Nivel anterior: 3", out)
+        self.assertEqual(read(self.target, "agents/dev.md"), e4)
+        self.assertEqual(read(backup, "agents/dev.md"), e3)
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), level_hashes(LEVEL_SAMPLE, 4), 4, mapping))
+
+    def test_f4t4_dest_of_75_chars_is_rejected_before_writing_in_both_modes(self):
+        # Tope en el limite: agents/ + 64 + .md = 74 vale; 75 es demasiado larga.
+        long75 = "agents/" + "a" * 65 + ".md"
+        self.assertEqual(len(long75), 75)
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: long75})
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode)
+            self.assertEqual(code, 1, out + err)
+            self.assertIn("error: la ruta de destino de ", err)
+            self.assertIn("es demasiado larga", err)
+            self.assertIn("No se escribio nada", err)
+            self.assertNotIn(long75, out + err)
+            self.assertFalse(os.path.exists(self.target))
+            self.assertNotIn("Copiado", out)
+        self.assert_nothing_written_outside_target_and_backup()
+
+    def test_f4t4_dest_of_exactly_74_chars_is_accepted(self):
+        ok74 = "agents/" + "a" * 64 + ".md"
+        self.assertEqual(len(ok74), 74)
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: ok74})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertFalse(os.path.exists(self.target))
+        out, err = self.install_ok()
+        self.assertEqual(read(self.target, ok74), SAMPLE[self.F4T4_ALFA])
+        self.f4t4_role_path_absent()
+
+    def test_f4t4_dest_equal_to_a_manifest_path_without_repeats_is_rejected_by_manifest_check(self):
+        # Sin repetidos (alfa -> beta.md, beta -> dev.md): sólo la comprobacion contra el manifiesto puede rechazarlo.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_BETA, self.F4T4_BETA: self.F4T4_DEV})
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode)
+            self.assertEqual(code, 1, out + err)
+            self.assertIn("error: la ruta de destino de ", err)
+            self.assertIn("coincide con un archivo del manifiesto", err)
+            self.assertNotIn("repite", err)
+            self.assertIn("No se escribio nada", err)
+            self.assertFalse(os.path.exists(self.target))
+            self.assertNotIn("Copiado", out)
+        self.assert_nothing_written_outside_target_and_backup()
+
+    def test_f4t4_invalid_dest_table_is_exit1_before_writing_in_both_modes(self):
+        # Defensa en profundidad: ninguna ruta de destino que no cumpla las reglas del estado (D1 a D7) llega a un
+        # destino de escritura, venga de donde venga. El mensaje nombra el rol y nunca la ruta.
+        alfa, beta = self.F4T4_ALFA, self.F4T4_BETA
+        cases = {
+            "con ..": {alfa: "agents/../x.md"},
+            "mayusculas": {alfa: "agents/Tester.md"},
+            "reservado de Windows": {alfa: "agents/con.md"},
+            "barra inicial": {alfa: "/agents/x.md"},
+            "dos puntos": {alfa: "agents/x:y.md"},
+            "sale de agents/": {alfa: "rules/agentes.md"},
+            "ruta de otro archivo del manifiesto": {alfa: "agents/beta.md"},
+            "archivo fijo cambiado": {"hooks/agent_guard.py": "agents/x.md"},
+            "demasiado larga": {alfa: "agents/" + "a" * 72 + ".md"},
+            "repetida": {alfa: "agents/x.md", beta: "agents/x.md"},
+        }
+        for name, mapping in cases.items():
+            with self.subTest(case=name):
+                shutil.rmtree(self.src, ignore_errors=True)
+                os.makedirs(self.src)
+                shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+                self.f4t4_prepare()
+                self.f4t4_set(mapping)
+                shutil.rmtree(self.target, ignore_errors=True)
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 1, out + err)
+                    self.assertIn("error: la ruta de destino de ", err)
+                    self.assertIn("No se escribio nada", err)
+                    for bad in mapping.values():
+                        self.assertNotIn(bad, out + err)
+                    self.assertFalse(os.path.exists(self.target))
+                    self.assertNotIn("Copiado", out)
+                self.assert_nothing_written_outside_target_and_backup()
 
 
 def _make_class(label, exe, reason):

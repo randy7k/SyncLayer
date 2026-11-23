@@ -18,7 +18,8 @@ scribe, scout, oracle) con los valores de la tabla de niveles; auditor, shield, 
 quedan como el origen. El nivel 5 es el repositorio tal cual. El instalador nunca escribe, respalda ni borra
 el archivo de configuracion.
 
-Estado: esquema 2, por archivo el hash del origen (sha256), el hash de lo escrito (written) y el
+Estado: esquema 2 (esquema 3, con dest por archivo, si algun archivo se escribe en una ruta distinta de la de su
+rol; hoy no ocurre), por archivo el hash del origen (sha256), el hash de lo escrito (written) y el
 nivel de la instalacion (level). La clasificacion compara el destino con el hash escrito por la
 instalacion previa (written) y el origen con el manifiesto. Lee tambien el esquema 1 (copia del
 manifiesto, de la Fase 1) y lo migra al reinstalar (el estado viejo va al respaldo). Un estado
@@ -773,15 +774,51 @@ function Get-AliasTableProblem($Pairs, $ManifestPaths) {
     return $null
 }
 
-# Bytes del estado con esquema 2: ASCII, LF, sangria de dos espacios y salto final. Coinciden byte a
+# Motivo del primer problema de la tabla de rutas de destino ($DestRel: rol a ruta) o $null si es valida. Nombra el
+# rol (ruta del manifiesto) y un motivo fijo, nunca la ruta de destino. Las mismas reglas que Read-State aplica a dest
+# (D1 a D7), para que el estado que se escribe se relea como valido: cadena sin .. \ : ni / inicial, dentro de
+# $AllowedPattern, hasta 74 caracteres si difiere del rol, bajo agents/ si el rol es un agente (si no, igual al rol),
+# sin repetidos y, si difiere del rol, que no sea la ruta de ningun archivo del manifiesto.
+function Get-DestRelProblem($DestRel, $ManifestPaths) {
+    $manifestSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($rel in $ManifestPaths) { [void]$manifestSet.Add([string]$rel) }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($rel in $ManifestPaths) {
+        $who = Format-SafeShort ([string]$rel)
+        if (-not $DestRel.ContainsKey($rel)) { return ($who + ' falta en la tabla') }
+        $d = $DestRel[$rel]
+        if (-not ($d -is [string])) { return ($who + ' no es texto') }
+        if ($d.Contains('..') -or $d.Contains('\') -or $d.Contains(':') -or $d.StartsWith('/')) { return ($who + ' no es una ruta relativa permitida') }
+        if ($d -cnotmatch $AllowedPattern) { return ($who + ' esta fuera de la lista permitida') }
+        $same = Test-OrdinalEqual $d $rel
+        if (-not $same -and $d.Length -gt 74) { return ($who + ' es demasiado larga') }
+        if ($rel.StartsWith('agents/', [System.StringComparison]::Ordinal)) {
+            if (-not $d.StartsWith('agents/', [System.StringComparison]::Ordinal)) { return ($who + ' sale de agents/') }
+        }
+        elseif (-not $same) { return ($who + ' cambia en un archivo fijo') }
+        if (-not $seen.Add($d)) { return ($who + ' repite la de otro rol') }
+        if (-not $same -and $manifestSet.Contains($d)) { return ($who + ' coincide con un archivo del manifiesto') }
+    }
+    return $null
+}
+
+# Bytes del estado con esquema 2 (o 3, ver abajo): ASCII, LF, sangria de dos espacios y salto final. Coinciden byte a
 # byte con json.dumps(obj, indent=2, ensure_ascii=True) + LF de Python con este orden de claves
 # (ConvertTo-Json de 5.1 da otro formato). Las rutas son [a-z0-9_/.-] por AllowedPattern: no se escapa nada.
-# Funcion pura de manifiesto, hashes escritos y nivel: reinstalar sin cambios no reescribe el estado.
-function ConvertTo-StateBytes($Manifest, [hashtable]$OutHashes, [int]$Level) {
+# Funcion pura de manifiesto, hashes escritos, nivel y rutas de destino: reinstalar sin cambios no reescribe el
+# estado. Con la identidad ($DestRel igual al rol en todas las entradas) escribe el esquema 2 de siempre; si algun
+# destino difiere del rol, el esquema 3: la misma entrada mas dest en TODAS (igual a path en las que no tienen alias).
+function ConvertTo-StateBytes($Manifest, [hashtable]$OutHashes, [int]$Level, $DestRel) {
     $lf = "`n"
+    $schema3 = $false
+    foreach ($rel in $Manifest.Order) {
+        if (-not (Test-OrdinalEqual $DestRel[$rel] $rel)) { $schema3 = $true }
+    }
+    $schemaNumber = '2'
+    if ($schema3) { $schemaNumber = '3' }
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append('{' + $lf)
-    [void]$sb.Append('  "schema": 2,' + $lf)
+    [void]$sb.Append('  "schema": ' + $schemaNumber + ',' + $lf)
     [void]$sb.Append('  "algorithm": "sha256",' + $lf)
     [void]$sb.Append('  "eol": "lf",' + $lf)
     [void]$sb.Append('  "files": [' + $lf)
@@ -792,7 +829,14 @@ function ConvertTo-StateBytes($Manifest, [hashtable]$OutHashes, [int]$Level) {
         [void]$sb.Append('      "path": "' + $rel + '",' + $lf)
         [void]$sb.Append('      "sha256": "' + $Manifest.Hashes[$rel] + '",' + $lf)
         [void]$sb.Append('      "written": "' + $OutHashes[$rel] + '",' + $lf)
-        [void]$sb.Append('      "level": ' + $Level.ToString([System.Globalization.CultureInfo]::InvariantCulture) + $lf)
+        $levelText = $Level.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+        if ($schema3) {
+            [void]$sb.Append('      "level": ' + $levelText + ',' + $lf)
+            [void]$sb.Append('      "dest": "' + $DestRel[$rel] + '"' + $lf)
+        }
+        else {
+            [void]$sb.Append('      "level": ' + $levelText + $lf)
+        }
         if ($i -lt $last) { [void]$sb.Append('    },' + $lf) } else { [void]$sb.Append('    }' + $lf) }
     }
     [void]$sb.Append('  ]' + $lf)
@@ -1111,10 +1155,22 @@ try {
         }
     }
 
-    # Alias: tabla efectiva (pares rol a alias con alias distinto del rol), ya validada con la configuracion. Vacia
+    # Tabla efectiva de alias (pares rol a alias con alias distinto del rol), ya validada con la configuracion. Vacia
     # (sin aliases, aliases vacio o cada alias igual a su rol): nada cambia, ni la salida ni los bytes. T2 solo la
     # muestra (lineas Alias:) y la guarda temporal del Paso 5 detiene la instalacion si no esta vacia.
     $aliasEffective = Get-AliasEffective $script:ConfigAliasPairs
+    # Ruta de destino por rol (Fase 4, T4): $destRel[$rel] es la ruta (relativa a -Target) donde se LEE, ESCRIBE,
+    # RESPALDA y VERIFICA el archivo del rol $rel; $rel (la ruta del manifiesto) sigue siendo el rol: origen,
+    # $outBytes, $outHash, tabla de niveles y estado (path). Hoy es SIEMPRE la identidad (la guarda temporal impide
+    # aplicar alias reales hasta T5). Diccionario ordinal: nunca sale de una ruta del estado ni del entorno.
+    $destRel = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+    foreach ($rel in $manifest.Order) { $destRel[$rel] = $rel }
+    # Alias: fin del bloque. Aqui las pruebas inyectan un destRel que no es la identidad; lo de abajo lo revisa.
+    # Defensa en profundidad: toda ruta de destino, venga de donde venga, se valida antes de usarla.
+    $destProblem = Get-DestRelProblem $destRel $manifest.Order
+    if ($null -ne $destProblem) {
+        Stop-Install 1 ('error: la ruta de destino de ' + $destProblem + '. No se escribio nada.')
+    }
 
     # Nivel: bytes a escribir por archivo. Con el nivel 5 (el repositorio) son los bytes canonicos del origen
     # y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
@@ -1141,7 +1197,7 @@ try {
                 catch {
                     Stop-Install 1 ('error: no se puede aplicar el nivel ' + $level + ' a ' + $rel + ': ' + (Get-ErrorText $_) + '. No se escribio nada.')
                 }
-                $adjustLines.Add('Ajuste: ' + $rel + '  model: ' + $cell.Model + '  effort: ' + $cell.Effort)
+                $adjustLines.Add('Ajuste: ' + $destRel[$rel] + '  model: ' + $cell.Model + '  effort: ' + $cell.Effort)
             }
         }
         $outBytes[$rel] = $bytesOut
@@ -1194,10 +1250,12 @@ try {
     $rows = New-Object System.Collections.Generic.List[object]
     $counts = @{ NUEVO = 0; IGUAL = 0; ACTUALIZAR = 0; MODIFICADO = 0; HUERFANO = 0 }
     foreach ($rel in $manifest.Order) {
-        $dest = ConvertTo-LocalPath $TargetFull $rel
-        $badLink = Find-Reparse $TargetFull $rel
+        # $rel es el rol; la ruta de destino ($destPath) es lo unico que se mira en el disco.
+        $destPath = $destRel[$rel]
+        $dest = ConvertTo-LocalPath $TargetFull $destPath
+        $badLink = Find-Reparse $TargetFull $destPath
         if ($null -ne $badLink) { Stop-Install 1 (Get-ReparseMessage $badLink) }
-        $parts = $rel.Split('/')
+        $parts = $destPath.Split('/')
         $cur = $TargetFull
         for ($i = 0; $i -lt $parts.Length - 1; $i++) {
             $cur = Join-Path $cur $parts[$i]
@@ -1222,7 +1280,7 @@ try {
             if ($destHash -ceq $outHash[$rel]) {
                 $state = 'IGUAL'
             }
-            elseif ($null -ne $prev -and $prevByDest.ContainsKey($rel) -and ($prevByDest[$rel] -ceq $destHash)) {
+            elseif ($null -ne $prev -and $prevByDest.ContainsKey($destPath) -and ($prevByDest[$destPath] -ceq $destHash)) {
                 $state = 'ACTUALIZAR'
             }
             else {
@@ -1230,16 +1288,19 @@ try {
             }
         }
         $counts[$state]++
-        $rows.Add(@{ State = $state; Path = $rel; Dest = $rel; DestHash = $destHash })
+        $rows.Add(@{ State = $state; Path = $rel; Dest = $destPath; DestHash = $destHash })
     }
     # Huerfano: destino del estado previo que ya no es destino actual de ningun rol del manifiesto (con los esquemas
-    # 1 y 2, ruta del estado que no esta en el manifiesto). Solo se informa: Path = Dest = la ruta del archivo.
+    # 1 y 2 y sin alias, ruta del estado que no esta en el manifiesto). Solo se informa (nunca se abre, respalda ni
+    # borra): no tiene rol (Path = $null) y Dest es la ruta del archivo.
     if ($null -ne $prev) {
+        $currentDests = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($rel in $manifest.Order) { [void]$currentDests.Add($destRel[$rel]) }
         foreach ($rel in $prev.Order) {
             $prevDest = $prev.Dest[$rel]
-            if (-not $manifest.Hashes.ContainsKey($prevDest)) {
+            if (-not $currentDests.Contains($prevDest)) {
                 $counts['HUERFANO']++
-                $rows.Add(@{ State = 'HUERFANO'; Path = $prevDest; Dest = $prevDest })
+                $rows.Add(@{ State = 'HUERFANO'; Path = $null; Dest = $prevDest })
             }
         }
     }
@@ -1258,7 +1319,7 @@ try {
             $writeRows.Add($row)
         }
     }
-    $stateBytes = ConvertTo-StateBytes $manifest $outHash $level
+    $stateBytes = ConvertTo-StateBytes $manifest $outHash $level $destRel
     $stateHash = Get-Sha256Hex $stateBytes
     # Un estado ilegible o invalido deja $stateDestHash en $null: se reescribe y no se respalda.
     $stateNeedsWrite = (-not $stateExists) -or ($stateDestHash -cne $stateHash)
@@ -1266,7 +1327,7 @@ try {
     $backupItems = New-Object System.Collections.Generic.List[object]
     foreach ($row in $writeRows) {
         if ($row.State -ceq 'ACTUALIZAR' -or $row.State -ceq 'MODIFICADO') {
-            $backupItems.Add(@{ Rel = $row.Path; From = (ConvertTo-LocalPath $TargetFull $row.Path); Hash = $row.DestHash })
+            $backupItems.Add(@{ Rel = $row.Dest; From = (ConvertTo-LocalPath $TargetFull $row.Dest); Hash = $row.DestHash })
         }
     }
     if ($stateExists -and $null -ne $stateDestHash -and $stateNeedsWrite) {
@@ -1295,7 +1356,7 @@ try {
     if ($backupItems.Count -gt 0) { Write-Out ('Respaldo: ' + (Format-Safe $BackupFull)) }
     if ($DryRun) { Write-Out 'Modo: -DryRun (no se escribe nada)' }
     foreach ($row in $rows) {
-        Write-Out ($row.State.PadRight(10) + '  ' + $row.Path)
+        Write-Out ($row.State.PadRight(10) + '  ' + $row.Dest)
     }
     Write-Out ('Resumen: NUEVO=' + $counts['NUEVO'] + ' IGUAL=' + $counts['IGUAL'] +
         ' ACTUALIZAR=' + $counts['ACTUALIZAR'] + ' MODIFICADO=' + $counts['MODIFICADO'] +
@@ -1306,7 +1367,7 @@ try {
     }
 
     if ($counts['MODIFICADO'] -gt 0 -and -not $Force) {
-        $mod = @($rows | Where-Object { $_.State -eq 'MODIFICADO' } | ForEach-Object { $_.Path })
+        $mod = @($rows | Where-Object { $_.State -eq 'MODIFICADO' } | ForEach-Object { $_.Dest })
         Stop-Install 3 ("error: hay cambios locales en el destino (MODIFICADO):`n  " + ($mod -join "`n  ") +
             "`nNo se escribio nada. Opciones: lleva el cambio al repositorio (regla de copia inversa del README)" +
             " o repite con -Force (se respalda lo que se sobrescribe)." +
@@ -1316,7 +1377,7 @@ try {
     # Destino no escribible: archivo de solo lectura que hay que reemplazar (o el estado). Exit 1 en ambos modos.
     foreach ($row in $writeRows) {
         if ($row.State -cne 'NUEVO') {
-            $d = ConvertTo-LocalPath $TargetFull $row.Path
+            $d = ConvertTo-LocalPath $TargetFull $row.Dest
             if (Test-IsReadOnly $d) {
                 Stop-Install 1 ('error: el destino ' + (Format-Safe $d) + ' es de solo lectura (no escribible). No se escribio nada.')
             }
@@ -1330,7 +1391,7 @@ try {
     # detecta ahora, antes de escribir. Exit 1 en ambos modos; el exit 4 queda para fallos al escribir.
     foreach ($row in $writeRows) {
         if ($row.State -cne 'NUEVO') {
-            $d = ConvertTo-LocalPath $TargetFull $row.Path
+            $d = ConvertTo-LocalPath $TargetFull $row.Dest
             $problem = Get-OpenProblem $d
             if ($null -ne $problem) {
                 Stop-Install 1 ('error: el destino ' + (Format-Safe $d) + ' esta bloqueado o no se puede escribir (' + $problem + '). No se escribio nada.')
@@ -1438,46 +1499,51 @@ try {
     # Paso 7: copiar los bytes de salida (las pruebas inyectan codigo justo despues de esta linea).
     # Son los canonicos ya verificados en memoria, o su renderizado por nivel; cada uno se verifica al instante.
     foreach ($row in $writeRows) {
+        # $rel es el rol (bytes y hash esperados); $destPath, la ruta de destino donde se escribe.
         $rel = $row.Path
-        $dest = ConvertTo-LocalPath $TargetFull $rel
+        $destPath = $row.Dest
+        $dest = ConvertTo-LocalPath $TargetFull $destPath
         $existing = ($row.State -cne 'NUEVO')
         try {
             # TOCTOU basico: el punto de reanalisis se vuelve a comprobar justo antes de escribir cada archivo.
-            $badLink = Find-Reparse $TargetFull $rel
+            $badLink = Find-Reparse $TargetFull $destPath
             if ($null -ne $badLink) { throw (Get-ReparseText $badLink) }
             if ($existing -and ((Get-CanonicalHash $dest) -cne $row.DestHash)) {
                 throw 'el archivo cambio en el destino despues de clasificarlo'
             }
             # Ultimo punto de escritura (las pruebas inyectan una carrera justo antes de esta linea).
             Write-Atomic $dest $outBytes[$rel] $existing
-            $written.Add($rel)
+            $written.Add($destPath)
             # La carrera no se cierra: si un enlace aparecio tras la comprobacion, el archivo ya pudo ir
             # fuera. Se detecta y se informa (exit 4); no se deshace.
-            $badLink = Find-Reparse $TargetFull $rel
+            $badLink = Find-Reparse $TargetFull $destPath
             if ($null -ne $badLink) { throw ((Get-ReparseText $badLink) + ' Aparecio mientras se escribia: el archivo pudo escribirse fuera del destino; revisalo.') }
-            Write-Out ('Copiado: ' + $rel)
+            Write-Out ('Copiado: ' + $destPath)
             if ((Get-CanonicalHash $dest) -cne $outHash[$rel]) {
                 throw ('el hash del archivo escrito no coincide con ' + $verifyWhat)
             }
         }
         catch {
-            Stop-CopyFailed ('fallo la copia de ' + $rel + ': ' + (Get-ErrorText $_))
+            Stop-CopyFailed ('fallo la copia de ' + $destPath + ': ' + (Get-ErrorText $_))
         }
     }
 
     # Paso 8: verificar el destino (las pruebas inyectan fallos justo despues de esta linea).
+    # $written lleva rutas de destino; el hash esperado es el del rol que se escribio en cada una.
+    $roleByDest = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+    foreach ($rel in $manifest.Order) { $roleByDest[$destRel[$rel]] = $rel }
     $badDest = New-Object System.Collections.Generic.List[string]
-    foreach ($rel in $written) {
-        $dest = ConvertTo-LocalPath $TargetFull $rel
+    foreach ($destPath in $written) {
+        $dest = ConvertTo-LocalPath $TargetFull $destPath
         try {
-            $badLink = Find-Reparse $TargetFull $rel
+            $badLink = Find-Reparse $TargetFull $destPath
             if ($null -ne $badLink) {
-                $badDest.Add($rel + ' (' + (Get-ReparseText $badLink) + ')')
+                $badDest.Add($destPath + ' (' + (Get-ReparseText $badLink) + ')')
             }
-            elseif ((Get-CanonicalHash $dest) -cne $outHash[$rel]) { $badDest.Add($rel) }
+            elseif ((Get-CanonicalHash $dest) -cne $outHash[$roleByDest[$destPath]]) { $badDest.Add($destPath) }
         }
         catch {
-            $badDest.Add($rel + ' (no se pudo leer)')
+            $badDest.Add($destPath + ' (no se pudo leer)')
         }
     }
     if ($badDest.Count -gt 0) {

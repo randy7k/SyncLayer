@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1426 pruebas, 250 saltadas (247 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1479 pruebas, 275 saltadas (272 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -201,7 +201,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
-- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, T1 a T3
+- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, T1 a T4
   hechas): `install.ps1` lee y valida la clave `aliases` de `synclayer-config.json` (lectura única;
   `Get-AliasTableProblem`, V1 a V8, tabla entera antes de escribir; líneas `Alias:`) pero NO la aplica: una
   tabla efectiva válida termina con exit 1 (guardia temporal, la retira T5). `$ReservedAliases` son nueve
@@ -212,8 +212,16 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   combinantes). `scribe` es subcadena de `escribe`, `describe`, `reescribe`, `sobrescribe`: sin límite de
   palabra se rompen. Cuidado al editar con la herramienta Bash: colapsa `\\` a `\` y los escapes `\u00xx`
   pasan a ser el carácter; construye la barra con `chr(92)` y verifica que el archivo no gane bytes no ASCII.
-  - Estado con esquema 3 (T3): `Read-State` lo lee (campo `dest` por entrada, la ruta real de destino) pero el
-    instalador sigue ESCRIBIENDO el esquema 2. Reglas de `dest` cuando difiere de `path`: `agents/<alias>.md`
+  - Rol y ruta (T4): en los Pasos 4 a 9 el rol (`$rel`: clave de manifiesto, niveles, `$outBytes`/`$outHash`,
+    mensajes de nivel) va separado de la ruta de destino (`$destRel[$rel]`: leer, escribir, respaldar, verificar
+    y clasificar contra `prevByDest`). El bloque `# Alias:` calcula `$destRel`, que en producción es SIEMPRE
+    identidad hasta T5 (la guardia temporal de T2 sigue). Ancla para T5: `# Alias:` es la línea «# Alias: fin
+    del bloque...», tras el cálculo y antes de `Get-DestRelProblem` (D1 a D7, defensa en profundidad: exit 1
+    antes de escribir, también en `-DryRun`; el mensaje nombra el rol, no la ruta). Las filas `HUERFANO`
+    llevan `Path = $null`.
+  - Estado con esquema 3 (T3, T4): `Read-State` lo lee (campo `dest` por entrada, la ruta real de destino).
+    `ConvertTo-StateBytes` ESCRIBE el esquema 3 (`dest` en todas las entradas) sólo si algún destino difiere del
+    rol; con identidad escribe el esquema 2 (en producción aún no ocurre). Reglas de `dest` cuando difiere de `path`: `agents/<alias>.md`
     de hasta 74 caracteres (`agents/` + 64 + `.md`, atado por una prueba a la regex del alias), sin colisión
     con el `path` de otra entrada ni con ninguna ruta del manifiesto (`$ManifestPaths`, obligatorio en
     `Read-State`); `dest` se lee con `Get-PropRaw` (estricto) y se valida con `HashSet` ordinales; los
@@ -273,7 +281,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (246 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (272 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

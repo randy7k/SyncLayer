@@ -2,6 +2,23 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 4, T4: rol separado de la ruta de destino y estado con esquema 3)
+
+- `install.ps1` separa el rol (`$rel`: clave de manifiesto, niveles, `$outBytes` y `$outHash`, mensajes de nivel)
+  de la ruta de destino (`$destRel[$rel]`: leer, escribir, respaldar, verificar y clasificar contra
+  `prevByDest`) en los Pasos 4 a 9. El bloque `# Alias:` calcula `$destRel`; en producción es siempre
+  identidad, porque la guardia temporal de T2 sigue y la retira T5. El ancla `# Alias:` es ahora la línea
+  «# Alias: fin del bloque...», tras el cálculo y antes de `Get-DestRelProblem`.
+- Función nueva `Get-DestRelProblem` (D1 a D7, defensa en profundidad): exit 1 antes de escribir, también en
+  `-DryRun`, y el mensaje nombra el rol, no la ruta. Las filas `HUERFANO` llevan `Path = $null`.
+- `ConvertTo-StateBytes` escribe el esquema 2 con identidad y el esquema 3 (`dest` en todas las entradas) si
+  algún destino difiere del rol. Con identidad, los bytes de destino, el estado y la salida son idénticos a los
+  de la base (comparados en 16 escenarios de `forge` y 17 de `auditor`, 0 diferencias).
+- Revisiones: `auditor` sin Critical ni Important (2 Minor corregidos con pruebas); `shield` sin Critical, High
+  ni Medium (2 Low aceptados: `$row.Dest` sin `Format-Safe`, hoy no explotable, y un TOCTOU preexistente).
+- Pruebas: casos 26 a 31 del plan (`test_f4t4_*`) y 4 pruebas de límite 74/75 y de manifiesto. La suite pasa a
+  1479 pruebas, 275 saltadas (272 de `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de uso).
+
 ### Añadido (Fase 4, T3: lectura del estado con esquema 3 y huérfanos)
 
 - `install.ps1` lee el estado con esquema 3: cada entrada puede llevar `dest`, la ruta real de destino de ese
