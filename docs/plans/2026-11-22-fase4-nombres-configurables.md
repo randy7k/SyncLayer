@@ -6,8 +6,13 @@ defecto de P1 a P9). **Enmienda E1 incorporada tras T1 (2026-11-22):** regla del
 defecto y el resto del plan quedaron aprobados el 2026-11-22; la enmienda E1 fue aprobada por el propietario el 2026-11-22.
 **Enmienda E2, aprobada tras T2 (2026-11-23):** la lista de nombres reservados pasa de siete a nueve
 (decisión 4, V4) y V8 compara el destino de toda alias efectiva con todas las rutas del manifiesto
-(3.2, casos 2, 8, 13, 57 y 58, tarea T2). Queda abierta **P10** (agente propio del usuario con el
-mismo `name:` que un alias), pendiente de decisión del propietario antes de T5.
+(3.2, casos 2, 8, 13, 57 y 58, tarea T2). **P10** (agente propio del usuario con el mismo `name:` que
+un alias) quedó resuelta el 2026-11-23 con su valor por defecto: ver «Decisión sobre P10» al final.
+**Enmienda E3, aprobada tras T3 (2026-11-23):** dos reglas nuevas del estado con esquema 3 (un `dest`
+con alias no puede ser una ruta del manifiesto; tope de 74 caracteres), validación con conjuntos
+ordinales, `$ManifestPaths` obligatorio en `Read-State` y ajuste del caso 20 (3.4, 3.7, casos 20, 21,
+25 y 59 a 61, tareas T3 y T7). Queda abierta **P11** (`Get-Prop` desenrolla listas de un elemento:
+defecto previo de las Fases 1 y 3).
 
 Fuentes: [`2026-11-22-fase4-nombres-exploracion.md`](2026-11-22-fase4-nombres-exploracion.md)
 (hechos verificados por `scout`, mapa de `oracle`, riesgos y opciones),
@@ -76,6 +81,8 @@ escribe los mismos bytes y muestra la misma salida que hoy.
 - Transformar texto fuera de los once archivos de texto gestionados (nueve agentes, reglas y guía).
   El hook no se transforma.
 - Un parámetro `-Alias` o alias por proyecto.
+- Corregir la laxitud de `Get-Prop` con listas de un elemento (P11): por defecto, tarea aparte tras
+  la fase.
 
 ## 2. Supuestos
 
@@ -112,6 +119,9 @@ Los marcados **[G1]** los confirma el propietario en la compuerta G1.
     con un agente que no es uno de los nueve sólo existe en las pruebas (E2 lo cubre igualmente).
 12. **No documentado (ver P10):** qué agente gana cuando dos archivos de `~/.claude/agents/` declaran
     el mismo `name:`. La documentación sólo define la prioridad entre ámbitos distintos.
+13. **Defecto previo, hallado en T3 (ver P11):** `Get-Prop` desenrolla una lista de un elemento, así
+    que varios campos del estado y de `install-manifest.json` aceptan `[valor]` en lugar de `valor`.
+    No es un hueco de seguridad conocido; contradice «tipos estrictos». `dest` no lo sufre.
 
 ## 3. Diseño
 
@@ -204,6 +214,7 @@ Las filas de clasificación pasan de `@{ State; Path; DestHash }` a
 | Paso 2 (origen) | `$rel` | Rol. Sin cambio |
 | Bloque `# Nivel:` (celda y `ConvertTo-LevelBytes`) | Extrae el agente de `$rel` | Rol. Sin cambio de clave: es lo que evita el fallo silencioso del nivel |
 | `$outBytes`, `$outHash` | `$rel` | Rol |
+| Paso 3: lectura del estado | `Read-State $statePath` | `Read-State` recibe además `$ManifestPaths` (las rutas del manifiesto), obligatorio (E3) |
 | Paso 4: reanálisis, carpeta intermedia, existencia, hash del destino | `$rel` | Ruta de destino |
 | Paso 4: comparación con el estado previo | `$prev.Written[$rel]` | `prevByDest[ruta de destino]` (3.6) |
 | Paso 4: huérfanos | Ruta del estado que no está en el manifiesto | Ruta de destino del estado que no es destino actual de ningún rol (3.7) |
@@ -266,13 +277,61 @@ exactamente los bytes de hoy; si no, esquema 3:
 - En el esquema 3, `dest` va en **todas** las entradas (igual a `path` en las que no tienen alias).
   Orden de claves fijo; mismos bytes que `json.dumps(obj, indent=2, ensure_ascii=True) + "\n"`.
 - `Read-State` devuelve además `Dest` (rol a ruta).
+- **(E3)** `Read-State` recibe `$ManifestPaths` (las rutas del manifiesto ya cargado) como parámetro
+  **obligatorio**: sin él no puede aplicar la regla D5. No hay valor por defecto ni llamada sin él.
 
 | Estado previo | Tratamiento |
 |---|---|
 | `schema` 1 | Como hoy; `dest` = `path` |
 | `schema` 2 | Como hoy (mismas validaciones); `dest` = `path`. Si la entrada trae la clave `dest`: clave desconocida, ausente |
-| `schema` 3 | Validaciones del 2, más: claves por entrada de lista cerrada (`path`, `sha256`, `written`, `level`, `dest`); `dest` es cadena, sin `..`, `\`, `:` ni `/` inicial, y casa con `$AllowedPattern`; si `path` no es `agents/...`, `dest` = `path`; si lo es, `dest` empieza por `agents/`; ningún `dest` repetido; un `dest` distinto de su `path` no coincide con el `path` de otra entrada. Falta `dest` en alguna entrada: inválido |
+| `schema` 3 | Validaciones del 2, más las reglas D1 a D7 de abajo. Falta `dest` en alguna entrada: inválido |
 | Otro `schema`, ilegible o inválido | Ausente, con el aviso actual. No se respalda. Nunca produce `ACTUALIZAR` ni `HUERFANO` |
+
+Reglas de `dest` en el esquema 3 (cualquiera que falle: estado **ausente**, con aviso):
+
+| # | Regla | Origen |
+|---|---|---|
+| D1 | Claves por entrada de lista cerrada: `path`, `sha256`, `written`, `level`, `dest` | Plan |
+| D2 | `dest` es una cadena (leída con `Get-PropRaw(...).Value`: tipo estricto, una lista de un elemento no vale), sin `..`, `\`, `:` ni `/` inicial, y casa con `$AllowedPattern` | Plan |
+| D3 | Si `path` no es `agents/...`, `dest` = `path`. Si lo es, `dest` empieza por `agents/` | Plan |
+| D4 | Ningún `dest` repetido | Plan |
+| D5 | **(E3)** Un `dest` distinto de su `path` no es el `path` de otra entrada del estado **ni la ruta de ningún archivo del manifiesto actual** (`$ManifestPaths`) | La primera mitad, plan; la segunda, T3 |
+| D6 | **(E3)** Un `dest` distinto de su `path` mide como mucho **74 caracteres**: `agents/` (7) + alias (64) + `.md` (3). El 64 sale de la regex del alias de V1: una letra inicial más `{0,63}` | T3 |
+| D7 | **(E3)** La validación usa conjuntos ordinales (`HashSet[string]` con `StringComparer.Ordinal`), no búsquedas en listas | T3 |
+
+**D5, motivo y consecuencia aceptada (E3).** Es la regla conservadora: un estado que afirma «el rol
+A está escrito en la ruta que hoy es el archivo de origen de B» no se puede clasificar sin ambigüedad
+(esa ruta tendría a la vez un `written` del estado y un origen propio). Consecuencia aceptada:
+
+- El usuario tenía `sentinel -> tester` y una versión nueva del repositorio añade un agente `tester`.
+  El estado previo trae `dest: agents/tester.md`, que ahora es una ruta del manifiesto: D5 falla y el
+  estado se trata como **ausente**. Todo archivo cuyo contenido cambió sale `MODIFICADO` (no hay
+  `ACTUALIZAR` sin estado) y hace falta `-Force`; no se informa ningún huérfano.
+- En ese mismo escenario la configuración también deja de ser válida: V8 rechaza el alias `tester`
+  con exit 1 antes de llegar al estado. El usuario cambia primero el alias y después reinstala con
+  `-Force`.
+- El aviso debe ser claro. Motivo exigido (ASCII, sin acentos; rutas por `Format-SafeShort`):
+
+  `aviso: <estado> no se pudo leer o no es valido (el destino <dest> de <path> es ahora un archivo del manifiesto; si el repositorio anadio un agente con el nombre de tu alias, elige otro alias y repite con -Force). Se trata como ausente: no se respalda.`
+
+- Se documenta como límite en el README («Límites del instalador») y en 3.9.
+
+**D6, motivo (E3).** Sin tope, un `dest` de 200 KB que casa con `$AllowedPattern` (el patrón no
+limita la longitud) pasaba la validación y salía **entero por stdout** como fila `HUERFANO`. El tope
+vale sólo para un `dest` distinto de su `path`: uno igual a su `path` ya está acotado por las rutas
+reales. Una prueba ata el 74 a la regex del alias de `install.ps1`: lee el cuantificador y comprueba
+que 7 + (1 + máximo) + 3 = 74; si alguien cambia la longitud del alias y no el tope, falla.
+
+**D7, motivo (E3).** La primera versión comparaba cada `dest` contra listas: cuadrática. Con 2000
+entradas tardaba 304 s. Con conjuntos ordinales es lineal.
+
+Otras reglas de implementación fijadas en T3 (E3):
+
+- `$dests` (rol a ruta, resultado de `Read-State`) y `$prevByDest` (ruta a `written`) son
+  diccionarios **ordinales** (`Dictionary[string,string]` con `StringComparer.Ordinal`), no `@{}`.
+- **Todos** los mensajes de `Read-State` y de `Get-ManifestEntries` que incluyen texto del archivo
+  (rutas, claves) pasan por `Format-SafeShort` (40 caracteres y escapado). Antes, algunos usaban
+  `Format-Safe`, sin recorte.
 
 Migración: no hay migración forzada. El estado se reescribe sólo si sus bytes cambian (regla actual):
 al activar el primer alias pasa de 2 a 3, y al quitar el último vuelve a 2; el estado anterior va al
@@ -281,6 +340,9 @@ respaldo (regla actual). Un instalador de la Fase 3 no lee el esquema 3: lo trat
 
 `Nivel anterior:` no cambia: se calcula igual a partir de `level` de las entradas, en los tres
 esquemas.
+
+Laxitud heredada y no corregida aquí (P11): `path`, `sha256`, `written`, `level`, `schema`,
+`algorithm` y `eol` se leen con `Get-Prop`, que desenrolla una lista de un elemento.
 
 ### 3.5 Transformación de textos
 
@@ -431,8 +493,8 @@ manifiesto: se verifican contra `outHash` en los Pasos 7 y 8.
 
 ### 3.6 Clasificación
 
-Con un estado válido se construye `prevByDest`: ruta de destino del estado a `written`. La regla actual
-se conserva, mirando la **ruta de destino**:
+Con un estado válido se construye `prevByDest`: ruta de destino del estado a `written` (diccionario
+ordinal, E3). La regla actual se conserva, mirando la **ruta de destino**:
 
 | ¿Existe el destino? | hash = `outHash[rol]` | `prevByDest[destino]` = hash del destino | Estado | Acción |
 |---|---|---|---|---|
@@ -446,7 +508,7 @@ Sin alias y con estado de esquema 1 o 2, `prevByDest` es `Written` y la regla es
 dice «el estado afirma que en esta ruta escribimos estos bytes»: un archivo ajeno que ya ocupa la ruta
 del alias nunca sale `ACTUALIZAR`.
 
-Situaciones (cada fila tiene prueba en T7, salvo la marcada):
+Situaciones (cada fila tiene prueba en T7, salvo las marcadas):
 
 | # | Situación | Resultado |
 |---|---|---|
@@ -463,6 +525,7 @@ Situaciones (cada fila tiene prueba en T7, salvo la marcada):
 | S11 | Estado de esquema 1 o 2 y alias nuevo | Como S1 |
 | S12 | Reinstalar igual, con alias | Todo `IGUAL`; ni estado, ni respaldo, ni aviso |
 | S13 | Estado de esquema 3 leído por el instalador de la Fase 3 | Ausente: `IGUAL` o `MODIFICADO`. Sólo se documenta (no hay prueba: es otro binario) |
+| S14 | **(E3)** El repositorio añade un agente con el nombre de un alias ya instalado (`sentinel -> tester` y aparece `agents/tester.md` en el manifiesto) | Con el alias aún en la configuración: exit 1 por V8. Tras cambiar el alias: el estado falla D5 y se trata como ausente, con el aviso de 3.4; lo que cambió sale `MODIFICADO` y hace falta `-Force`; ningún huérfano. Prueba en T3 (caso 59) |
 
 ### 3.7 Huérfanos
 
@@ -475,11 +538,21 @@ Situaciones (cada fila tiene prueba en T7, salvo la marcada):
 
   `aviso: agents/sentinel.md es el nombre anterior de agents/amigo-qa.md y sigue en el destino: no se borra. Mientras exista hay dos agentes activos con descripciones casi iguales y la delegacion puede elegir cualquiera. Quitalo a mano si ya no lo usas.`
 
-- La nota actual por stdout (`nota: los HUERFANO los instalo una version anterior...`) se imprime sólo
-  si hay algún huérfano que no es por cambio de nombre: sin alias, salida idéntica a hoy (la prueba
-  `test_orphan_note_is_stdout_and_not_a_warning` no cambia).
+- La nota actual por stdout (`nota: los HUERFANO los instalo una version anterior y ya no estan en el
+  manifiesto. No se borran.`) es **falsa** para un huérfano por cambio de nombre: su rol sí está en el
+  manifiesto. Queda así:
+  - **Entre T3 y T7 (estado intermedio, E3):** el instalador imprime la nota actual para cualquier
+    huérfano, también el de cambio de nombre, y no hay aviso por stderr. Por eso el caso 20 no afirma
+    ni la nota ni que stderr esté vacío: afirma la fila `HUERFANO`, que el archivo no se toca y el
+    estado resultante.
+  - **T7:** implementa el aviso de arriba y **cambia la nota**: se imprime sólo si hay algún huérfano
+    que no es por cambio de nombre (su texto no cambia). Sin alias, la salida es idéntica a hoy y la
+    prueba `test_orphan_note_is_stdout_and_not_a_warning` no se toca. T7 fija en sus casos 50 y 51 lo
+    que el caso 20 dejó sin afirmar.
 - El huérfano se informa en la corrida que lo deja huérfano y en sus `-DryRun` previos. Una vez
   reescrito el estado deja de informarse (igual que hoy; ver P5).
+- La ruta de un huérfano viene del estado (entrada no confiable): está acotada por D2 y D6 (como mucho
+  74 caracteres cuando es un alias) antes de imprimirse.
 
 ### 3.8 Salida de `-DryRun`, mensajes y códigos de salida
 
@@ -516,6 +589,8 @@ desconocida pasa por `Format-SafeShort`:
   también cuando el rol de origen no está en el manifiesto.
 - Transformación: `error: no se pueden aplicar los alias a agents/<rol>.md: <motivo>. No se escribio
   nada.`
+- Estado y manifiesto (E3): todo texto del archivo que aparezca en un mensaje de `Read-State` o de
+  `Get-ManifestEntries` pasa por `Format-SafeShort`. El aviso de D5 es el de 3.4.
 
 ### 3.9 Colisiones que el instalador no ve, copia inversa y reporte
 
@@ -530,14 +605,20 @@ Se documentan (README y guía), no se comprueban:
   del alias: sale `MODIFICADO` (S2).
 - Un integrado de Claude Code que no esté en `$ReservedAliases` (lista cerrada, E2): el instalador no
   lo rechaza y el agente con alias lo sobrescribiría.
-- **Agente propio del usuario en `<Target>/agents/` (punto abierto, P10; revisión de `shield` de
-  T2).** V8 sólo ve las rutas del manifiesto. Dos casos:
+- **Un agente nuevo del repositorio con el nombre de un alias ya instalado (E3, S14).** El instalador
+  lo detecta, pero la salida es costosa: V8 rechaza la configuración (exit 1) y, tras cambiar el
+  alias, el estado previo se trata como ausente (D5), así que los archivos con cambios salen
+  `MODIFICADO` y hace falta `-Force`. No se pierde nada (siempre hay respaldo), pero no hay camino
+  automático. Límite aceptado.
+- **Agente propio del usuario en `<Target>/agents/` (P10, resuelta: se documenta; revisión de
+  `shield` de T2).** V8 sólo ve las rutas del manifiesto. Dos casos:
   1. El usuario ya tiene un `agents/<alias>.md` propio: resuelto, sale `MODIFICADO` (S2).
   2. El usuario tiene **otro** archivo (`agents/mio.md`) que declara `name: <alias>`. El instalador
      no lo ve. Qué agente gana entre dos archivos del mismo ámbito con el mismo `name:` no está
      documentado (supuesto 12). Si ganara el del usuario, las llamadas al alias irían a un agente
      **sin el bloque `hooks:`** del rol renombrado (`sentinel`, `auditor`, `shield`, `debugger`): la
-     guarda dejaría de aplicarse sin ningún aviso. **Sin decidir**: ver P10.
+     guarda dejaría de aplicarse sin ningún aviso. Se documenta y se comprueba en G1 (ver «Decisión
+     sobre P10»).
 - **Copia inversa:** con alias (o con nivel distinto de 5) los archivos de `~/.claude` no son los del
   repositorio. La copia `~/.claude` a repo de un agente, de las reglas o de la guía no vale: el cambio
   se hace en el repositorio y se reinstala. `git ls-files` no lista `agents/<alias>.md`.
@@ -557,18 +638,27 @@ Se documentan (README y guía), no se comprueban:
 - La ruta `agents/<alias>.md` pasa por `$AllowedPattern` (V3) y por las comprobaciones de punto de
   reanálisis existentes, ahora sobre la ruta de destino, antes y después de escribir.
 - Comparaciones ordinales (`Test-OrdinalEqual`, `Test-OrdinalIn`); expresiones regulares sin
-  `IgnoreCase`; diccionarios ordinales.
+  `IgnoreCase`; diccionarios y conjuntos ordinales (formas, `$dests`, `$prevByDest`, validación de
+  `dest`).
 - El bloque `hooks:` no se toca y la autocomprobación lo exige línea a línea; una referencia a un rol
   en una línea del frontmatter que no se transforma detiene la instalación.
-- `dest` del estado es entrada no confiable: lista cerrada de claves, `$AllowedPattern`, sin
-  repetidos. Un `dest` manipulado sólo puede producir una fila `HUERFANO` (informativa) o un
+- `dest` del estado es entrada no confiable: reglas D1 a D7 de 3.4. Un `dest` manipulado sólo puede
+  producir una fila `HUERFANO` (informativa, de 74 caracteres como mucho si es un alias) o un
   `ACTUALIZAR` sobre una ruta permitida cuyo hash coincide (mismo modelo de amenaza que `written` hoy,
-  siempre con respaldo).
-- Mensajes: nunca el valor de un alias inválido; rutas y claves por `Format-Safe`.
+  siempre con respaldo). No puede apuntar a la ruta de un archivo del manifiesto (D5).
+- Agotamiento de recursos (E3): la validación del estado es lineal (D7); un estado de 2000 entradas
+  ya no bloquea el instalador durante minutos. El tope de 1 MiB del estado sigue vigente.
+- Salida acotada (E3): ningún texto del estado o del manifiesto sale sin recorte por stdout ni por
+  stderr (`Format-SafeShort` en los mensajes; D6 en las filas de huérfanos).
+- Mensajes: nunca el valor de un alias inválido; rutas y claves por `Format-Safe` o
+  `Format-SafeShort`.
 - Tope de tamaño y lectura única heredados de la Fase 3.
 - Nombres reservados (V4): lista cerrada de nueve, que puede quedarse atrás (E2).
-- Límite abierto: un agente propio del usuario con el mismo `name:` que un alias podría dejar sin
+- Límite documentado: un agente propio del usuario con el mismo `name:` que un alias podría dejar sin
   guarda al rol renombrado (3.9, P10).
+- Laxitud heredada (P11, abierta): `Get-Prop` acepta `[valor]` por `valor` en varios campos del
+  estado y del manifiesto. El valor interno se valida igual y siempre se lee con la misma función, así
+  que no hay una doble interpretación conocida; contradice «tipos estrictos». `dest` es estricto.
 
 ### 3.11 Estrategia de pruebas
 
@@ -613,12 +703,12 @@ Casos:
 | 17 | Clave `agents` en la raíz | Sigue siendo clave desconocida (prueba existente intacta) | T2 |
 | 18 | `aliases` válido con `level` válido | Líneas `Nivel:` y `Alias:` en orden; (mientras dure la guarda temporal: exit 1 con su mensaje) | T2 |
 | 19 | Validación antes de cualquier escritura | Con estado válido y cambios pendientes, una tabla inválida no escribe ni respalda | T2 |
-| 20 | Estado esquema 3 válido, sin alias en la configuración | Rol `NUEVO` o `IGUAL`; la ruta `dest` vieja `HUERFANO`; estado reescrito en esquema 2 | T3 |
-| 21 | Estado esquema 3 inválido: sin `dest`, `dest` fuera de `AllowedPattern`, con `..`, repetido, igual al `path` de otra entrada, `dest` distinto en un archivo fijo, clave extra, `dest` no texto | Ausente con aviso; nunca `ACTUALIZAR` ni `HUERFANO`; no se respalda | T3 |
+| 20 | Estado esquema 3 válido, sin alias en la configuración | Rol `NUEVO` o `IGUAL`; la ruta `dest` vieja sale como fila `HUERFANO` y el archivo no se toca; estado reescrito en esquema 2. **(E3)** No afirma la nota de huérfanos ni que stderr esté vacío: eso lo define el aviso de 3.7 y lo fija T7 (casos 50 y 51) | T3 |
+| 21 | Estado esquema 3 inválido: sin `dest`, `dest` fuera de `AllowedPattern`, con `..`, repetido, igual al `path` de otra entrada, `dest` distinto en un archivo fijo, clave extra, `dest` no texto, `dest` como lista de un elemento (`["agents/x.md"]`: estricto, D2) | Ausente con aviso; nunca `ACTUALIZAR` ni `HUERFANO`; no se respalda | T3 |
 | 22 | Estado esquema 2 con clave `dest`; `schema` 4 | Ausente | T3 |
 | 23 | `prevByDest` | Estado 3 con `dest` = ruta actual y `written` = hash del destino: `ACTUALIZAR`; con `written` de otra ruta: `MODIFICADO` | T3 |
 | 24 | Estado esquema 1 y 2 sin alias | Toda la suite existente pasa sin cambios; `Nivel anterior:` igual | T3 |
-| 25 | Estado hostil con `dest` enorme o no ASCII | stderr acotado y escapado | T3 |
+| 25 | Estado hostil con `dest` enorme o no ASCII | stderr acotado y escapado; **(E3)** stdout también acotado: el `dest` no aparece entero en ninguna fila | T3 |
 | 26 | `destRel` inyectado (después de `# Alias:`): instalación limpia | El archivo se escribe sólo en la ruta de destino; `Copiado:` y fila con esa ruta; estado = `state_for3` | T4 |
 | 27 | `destRel` inyectado sobre un destino existente intacto y editado | `ACTUALIZAR` con respaldo en `<respaldo>/<ruta de destino>`; `MODIFICADO`, exit 3 | T4 |
 | 28 | Verificación con ruta distinta del rol (alteración inyectada en el Paso 8) | Exit 4; el mensaje nombra la ruta de destino | T4 |
@@ -643,8 +733,8 @@ Casos:
 | 47 | S1 a S5 | Tabla de situaciones | T7 |
 | 48 | S6, S7 | Alias con cambios de nivel | T7 |
 | 49 | S8 a S12 | Edición a mano, `-Force`, reasignación, estado ausente, estados 1 y 2, idempotencia | T7 |
-| 50 | Huérfano por cambio de nombre | Aviso por stderr sólo si el archivo existe; el archivo queda intacto (bytes y mtime); no entra en el respaldo; en `-DryRun` y real; mismo código de salida | T7 |
-| 51 | Huérfano clásico sin alias | Nota por stdout y ningún aviso (prueba existente intacta) | T7 |
+| 50 | Huérfano por cambio de nombre | Aviso por stderr sólo si el archivo existe; **la nota actual por stdout no se imprime si todos los huérfanos son por cambio de nombre**; el archivo queda intacto (bytes y mtime); no entra en el respaldo; en `-DryRun` y real; mismo código de salida | T7 |
+| 51 | Huérfano clásico sin alias | Nota por stdout y ningún aviso (prueba existente intacta). Mezcla de un huérfano clásico y uno por cambio de nombre: nota y aviso | T7 |
 | 52 | Exit 3 con alias | Frase añadida sólo si un `MODIFICADO` está en una ruta con alias | T7 |
 | 53 | Configuración intacta | Bytes y mtime de `synclayer-config.json` iguales tras instalar con alias y con `-Force`; no aparece en el respaldo | T7 |
 | 54 | `install.ps1` sigue en ASCII, sin asterisco, `&&`, `??` ni datos personales | Pruebas estáticas existentes | T1 a T7 |
@@ -652,6 +742,9 @@ Casos:
 | 56 | Lo mismo en el instalador (E1) | Con `ALIAS_SAMPLE` en UTF-8: `«SENTINEL sólo escribe tests»` sale con el alias en mayúsculas y «escribe» intacto; `Sentinelé` y `ñforge` no cambian; bytes = `aliases_ref` | T5 |
 | 57 | Reservados añadidos por E2 | Alias `fork` y alias `output-style-setup`: exit 1 en `-DryRun` y real, nada escrito, motivo de V4, el mensaje nombra el rol y no el valor. Control: `forks` y `output-style` son válidos (la comparación es por nombre entero) | T2 (E2) |
 | 58 | V8 con el rol de origen fuera del manifiesto (E2) | Manifiesto con `agents/alfa.md` y sin `agents/forge.md`, configuración `{"aliases": {"forge": "alfa"}}`: exit 1 en ambos modos, nada escrito, motivo `coincide con otro archivo del manifiesto`. Controles: el mismo manifiesto con `{"forge": "beta"}` (destino libre) es válido; con el rol de origen presente, V8 sigue rechazando la coincidencia | T2 (E2) |
+| 59 | D5: `dest` con alias igual a una ruta del manifiesto (E3, S14) | Estado 3 con `agents/sentinel.md` a `agents/tester.md` y un manifiesto que trae `agents/tester.md`: estado ausente; el aviso nombra el motivo de 3.4 (dice que el destino es ahora un archivo del manifiesto y qué hacer); un archivo con cambios sale `MODIFICADO`, exit 3, nada escrito; con `-Force`, respaldo y sobrescritura; ningún `ACTUALIZAR` ni `HUERFANO`; el estado no se respalda. Control: el mismo estado con un manifiesto sin `agents/tester.md` es válido | T3 (E3) |
+| 60 | D6: tope de 74 caracteres (E3) | `dest` con alias de 64 caracteres (74 en total): válido. De 65 (75 en total): ausente. `dest` de 200 KB que casa con `AllowedPattern`: ausente, y no aparece entero ni en stdout ni en stderr (salida acotada). Prueba estática: el 74 de `install.ps1` es 7 + (1 + el máximo del cuantificador de la regex del alias) + 3; cambiar uno sin el otro la hace fallar | T3 (E3) |
+| 61 | D7 y mensajes (E3) | Estado de esquema 3 con 2000 entradas válidas: `-DryRun` termina dentro de un límite holgado (por ejemplo 60 s; antes, 304 s). Mensajes de `Read-State` y `Get-ManifestEntries` con una ruta o una clave larga: recortados a 40 caracteres y escapados. `Read-State` sin `$ManifestPaths` no es invocable (parámetro obligatorio; prueba estática de las llamadas) | T3 (E3) |
 
 ## 4. Tareas
 
@@ -771,10 +864,26 @@ ella.
 - **Archivos:** modificar `install.ps1`, `tests/test_install.py`, `tests/aliases_ref.py`.
 - **Pasos:** `write_state(..., schema=3, dests=...)` y `state_for3`; validaciones de `dest`; `Dest` en
   el resultado de `Read-State`; `prevByDest`; huérfano = destino previo que no es destino actual.
-- **Pruebas:** casos 20 a 25; toda la suite existente.
+- **Lo que quedó fijado al implementarla (E3; parte de la misma unidad):**
+  - `Read-State` recibe `$ManifestPaths`, obligatorio; el Paso 3 se lo pasa.
+  - Reglas D5 (segunda mitad: `dest` con alias no puede ser una ruta del manifiesto), D6 (74
+    caracteres, con la prueba que lo ata a la regex del alias) y D7 (conjuntos ordinales).
+  - `$dests` y `$prevByDest` como diccionarios ordinales.
+  - `Format-SafeShort` en todos los mensajes de `Read-State` y `Get-ManifestEntries`.
+  - Aviso de D5 con el motivo de 3.4. Si el texto implementado no dice que el destino es ahora un
+    archivo del manifiesto y qué hacer, se ajusta en esta misma unidad.
+  - El caso 20 no afirma la nota de huérfanos ni stderr vacío (lo define T7).
+  - `dest` se lee con `Get-PropRaw(...).Value` (estricto). El resto de campos sigue con `Get-Prop`:
+    defecto previo, P11; **no se corrige en T3**.
+- **Pruebas:** casos 20 a 25 y 59 a 61; toda la suite existente.
 - **Aceptación:** la suite pasa sin modificar ninguna prueba existente; con estados de esquema 1 y 2
   la clasificación es la de hoy; un estado de esquema 3 inválido nunca produce `ACTUALIZAR` ni
-  `HUERFANO`; `Read-Manifest` sigue exigiendo `schema` 1.
+  `HUERFANO`; `Read-Manifest` sigue exigiendo `schema` 1. **Con E3:** ningún `dest` con alias que
+  coincida con una ruta del manifiesto o con el `path` de otra entrada deja un estado válido; ningún
+  `dest` con alias de más de 74 caracteres deja un estado válido; ningún texto del estado sale sin
+  recorte por stdout ni por stderr; un estado de 2000 entradas se valida en tiempo lineal; no queda
+  ninguna llamada a `Read-State` sin `$ManifestPaths`; con el repositorio real y sin alias, la salida
+  es la de antes.
 - **Dependencias:** T2.
 - **Revisa:** `auditor` y `shield`.
 
@@ -786,13 +895,16 @@ ella.
   de la tabla desde T2 (E2) y el bloque no la repite; filas con `Dest`; pasos 4 a 9 según la tabla de
   3.3; `ConvertTo-StateBytes` con `$destRel` (esquema 2 con la identidad, 3 si no); las pruebas
   inyectan con `patch_script("# Alias:", ...)` un `destRel` no identidad.
-- **Punto abierto (P10, sin decidir):** T4 no añade ninguna comprobación sobre los archivos no
-  gestionados de `<Target>/agents/`. Si el propietario elige el aviso de P10, se implementa en T5.
-  `shield` lo tiene en cuenta al revisar T4.
+- **Coherencia con E3:** el estado que T4 escribe debe pasar las reglas D1 a D7 al releerlo. Un
+  `destRel` inyectado en las pruebas usa rutas que no están en el manifiesto y de 74 caracteres como
+  mucho; si no, la segunda corrida trataría el estado como ausente (el caso 31 lo detectaría).
+- **P10 (resuelta: sin código):** T4 no añade ninguna comprobación sobre los archivos no gestionados
+  de `<Target>/agents/`.
 - **Pruebas:** casos 26 a 31; toda la suite existente.
 - **Aceptación:** la suite pasa sin modificar ninguna prueba existente (las anclas de 3.3 intactas);
   con la identidad, los bytes del destino, del estado y de la salida son los de antes; con un
-  `destRel` inyectado nunca se crea ni se toca `agents/<rol>.md`; el hook sigue yendo primero.
+  `destRel` inyectado nunca se crea ni se toca `agents/<rol>.md`; el hook sigue yendo primero; el
+  estado escrito con un `destRel` no identidad se relee como válido.
 - **Dependencias:** T3.
 - **Revisa:** `auditor` y `shield`.
 
@@ -807,17 +919,14 @@ ella.
   la tabla efectiva y los bytes con alias de los nueve agentes y los dos textos; el bloque `# Nivel:`
   parte de esos bytes (la celda se sigue buscando por rol); mensajes de error de transformación;
   retirar la guarda temporal de T2 y su prueba; fixture `ALIAS_SAMPLE` y ayudas.
-- **Punto abierto (P10, sin decidir; debe estar resuelto antes de empezar T5):** T5 activa los alias,
-  así que es donde el caso 2 de 3.9 (otro archivo con el mismo `name:` que un alias) empieza a ser
-  posible. Con el valor por defecto de P10, T5 no añade código: sólo se documenta en T8. Si el
-  propietario elige el aviso opcional, se añade aquí con su prueba roja y el plan vuelve a `atlas`
-  para fijar el diseño (lectura de archivos no gestionados: entrada no confiable).
+- **P10 (resuelta el 2026-11-23 con el valor por defecto):** T5 no añade comprobación sobre agentes
+  propios del usuario; sólo se documenta en T8 y se comprueba en G1.
 - **Pruebas:** casos 32 a 40 y 56.
 - **Aceptación:** la suite pasa; sin alias no se llama a la transformación (caso 38) y los bytes son
   los de antes; con alias, todo byte escrito coincide con `aliases_ref`; un rol pegado a `«`, `»`,
   `¿` o `¡` se reemplaza y uno pegado a una letra acentuada no; el bloque `hooks:` de los agentes con
   guarda queda idéntico; el hook no se transforma; ningún archivo fuera de los once textos cambia.
-- **Dependencias:** T4 y la decisión de P10. G1 recomendada antes (no bloquea, P6).
+- **Dependencias:** T4. G1 recomendada antes (no bloquea, P6).
 - **Revisa:** `auditor` y `shield`.
 
 #### T6. Alias con niveles, repositorio real y `-DryRun` — tamaño M — revisión de seguridad
@@ -840,13 +949,21 @@ ella.
 
 - **Objetivo:** demostrar con pruebas la tabla de situaciones de 3.6 y el aviso de 3.7.
 - **Archivos:** modificar `tests/test_install.py`, `install.ps1`.
-- **Pasos:** pruebas S1 a S12; aviso del huérfano por cambio de nombre y condición de la nota actual;
-  frase añadida al exit 3; corregir lo que las pruebas destapen.
+- **Pasos:** pruebas S1 a S12; aviso del huérfano por cambio de nombre; frase añadida al exit 3;
+  corregir lo que las pruebas destapen.
+- **Nota de huérfanos (E3):** hasta T7 el instalador imprime la nota actual («los instalo una version
+  anterior y ya no estan en el manifiesto») también para el huérfano por cambio de nombre, y para ese
+  caso es falsa. T7 la **cambia**: se imprime sólo si hay algún huérfano que no es por cambio de
+  nombre; el de cambio de nombre lleva el aviso por stderr de 3.7. T7 afirma en los casos 50 y 51 lo
+  que el caso 20 dejó sin afirmar (nota y stderr), y revisa el caso 20: si tras el cambio puede
+  afirmar la ausencia de la nota, lo hace.
 - **Pruebas:** casos 47 a 53.
 - **Aceptación:** la suite pasa; cada fila S1 a S12 tiene una prueba; el archivo con el nombre
   anterior nunca se abre para escritura, se respalda ni se borra; ningún archivo ajeno en la ruta de
   un alias se sobrescribe sin `-Force`; ningún cambio de alias o de nivel produce `MODIFICADO` sobre
-  un destino intacto con estado válido, salvo S5.
+  un destino intacto con estado válido, salvo S5; ninguna corrida imprime «ya no estan en el
+  manifiesto» cuando todos los huérfanos son por cambio de nombre; sin alias, la salida de un
+  huérfano clásico es la de hoy.
 - **Dependencias:** T6.
 - **Revisa:** `auditor` y `shield`.
 
@@ -868,27 +985,36 @@ ella.
     3.5; **la lista de nombres reservados es cerrada y puede quedarse atrás frente a integrados
     nuevos de Claude Code: comprobar con `/agents` antes de elegir un alias; `output-style-setup` se
     reserva por prudencia, sin verificar**; **un agente propio con el mismo `name:` que un alias: no
-    está documentado cuál gana y el rol renombrado podría quedar sin su guarda (P10)**; bytes con
-    alias fuera del hash del manifiesto; esquema 3 ilegible para el instalador anterior; colisiones
-    de 3.9; referencias por nombre del usuario; renombrar en caliente no documentado; claves
-    repetidas y `__type`; G1 pendiente si no se corrió); «Límites del reporte de uso» (un agente con
-    alias sale como `(otro agente)`); copia inversa («Dos copias»); «Estructura» y «Pruebas» (conteos
-    de la salida real); «Línea de tiempo y avance».
+    está documentado cuál gana y el rol renombrado podría quedar sin su guarda (P10)**; **(E3) si una
+    versión nueva del repositorio añade un agente con el nombre de un alias ya instalado, la
+    configuración se rechaza (exit 1) y, tras cambiar el alias, el estado se trata como ausente: lo
+    que cambió sale `MODIFICADO` y hace falta `-Force`; el aviso lo dice**; **(E3) el estado admite
+    `dest` de 74 caracteres como mucho**; **(P11) laxitud heredada: varios campos del estado y del
+    manifiesto aceptan una lista de un elemento en lugar del valor**; bytes con alias fuera del hash
+    del manifiesto; esquema 3 ilegible para el instalador anterior; colisiones de 3.9; referencias
+    por nombre del usuario; renombrar en caliente no documentado; claves repetidas y `__type`; G1
+    pendiente si no se corrió); «Límites del reporte de uso» (un agente con alias sale como
+    `(otro agente)`); copia inversa («Dos copias»); «Estructura» y «Pruebas» (conteos de la salida
+    real); «Línea de tiempo y avance».
   - `CLAUDE.md`: arquitectura (alias, estado esquema 2 o 3), convenciones (`$AliasRoles`,
     `$ReservedAliases`, `$YamlWords`, el marcador `# Alias:` y `function ConvertTo-AliasBytes` son
-    contrato con las pruebas; diccionarios ordinales), no obvios (rol frente a ruta de destino; alias
-    primero y nivel después; el límite de palabra trabaja sobre ISO-8859-1 y sólo cuenta como letra
-    `[A-Za-z0-9_]` y la pareja `C3` más byte de continuación; `$ReservedAliases` es una lista cerrada
-    de nueve que hay que revisar cuando Claude Code añada integrados; V8 sólo ve el manifiesto; el
-    texto de `docs/agentes.md` y `rules/agentes.md` se transforma al instalar: una palabra igual a un
-    rol en esos archivos se reemplaza; el inventario de `tests/test_aliases.py` falla si aparece una
-    forma nueva).
+    contrato con las pruebas; diccionarios y conjuntos ordinales; `Read-State` exige
+    `$ManifestPaths`; `Format-SafeShort` en los mensajes del estado y del manifiesto), no obvios (rol
+    frente a ruta de destino; alias primero y nivel después; el límite de palabra trabaja sobre
+    ISO-8859-1 y sólo cuenta como letra `[A-Za-z0-9_]` y la pareja `C3` más byte de continuación;
+    `$ReservedAliases` es una lista cerrada de nueve que hay que revisar cuando Claude Code añada
+    integrados; V8 sólo ve el manifiesto; el tope de 74 de `dest` sale de la regex del alias y una
+    prueba los ata; `Get-Prop` desenrolla listas de un elemento y `Get-PropRaw(...).Value` no (P11);
+    el texto de `docs/agentes.md` y `rules/agentes.md` se transforma al instalar: una palabra igual a
+    un rol en esos archivos se reemplaza; el inventario de `tests/test_aliases.py` falla si aparece
+    una forma nueva).
   - `HISTORY.md`, `[Sin publicar]`: «Añadido (alias, Fase 4)».
   - `docs/agentes.md`: apartado «Cambiar el nombre de un agente» y el límite del reporte de uso. **Sin
     usar nombres de rol como ejemplo de alias** en el texto nuevo (se transformarían al instalar):
     usar `<rol>` y `<alias>`. Si cambia el conteo del caso 3, se actualiza en la misma task.
   - Regenerar el manifiesto: `python -B tools/build_manifest.py`.
-  - Backlog: estado de la Fase 4.
+  - Backlog: estado de la Fase 4 y, si P11 queda con su valor por defecto, la tarea pendiente de
+    `Get-Prop` anotada para después de la fase.
 - **Pruebas:** suite completa.
 - **Aceptación:** la suite pasa, incluidas la sincronía del manifiesto y los casos 3 a 5; ningún
   documento promete ahorro, calidad ni costo; siguen siendo doce archivos gestionados; nada personal;
@@ -899,7 +1025,7 @@ ella.
 
 #### Cierre (lo coordina la sesión principal; cuenta como una unidad)
 
-- **C1. `sentinel`:** suite completa con la salida a la vista; los 58 casos de 3.11 cubiertos.
+- **C1. `sentinel`:** suite completa con la salida a la vista; los 61 casos de 3.11 cubiertos.
 - **C2. `shield`:** T2 a T7. Aplica: entrada de usuario (`aliases`), escritura de rutas derivadas de
   esa entrada, estado como entrada no confiable. Focos: que ningún alias inyecte una línea, una clave
   o un indicador YAML en el frontmatter; que el bloque `hooks:` no cambie con ningún alias; que una
@@ -908,7 +1034,8 @@ ella.
   huérfano nunca se toque; fuga del valor de un alias o del contenido del archivo en mensajes;
   comparaciones no ordinales o con `IgnoreCase`; que el reemplazo no parta una secuencia UTF-8 ni deje
   un archivo que no sea UTF-8 válido; tamaño y carrera sobre la configuración; que lo decidido en P10
-  esté implementado o documentado tal como se decidió.
+  esté documentado tal como se decidió; salida acotada y validación lineal del estado (E3); que la
+  laxitud de P11 no abra una doble interpretación de ningún campo.
 - **C3. `auditor`** sobre el cambio completo.
 - **C4.** Memoria del proyecto actualizada por la sesión principal.
 - **V1. Renombrado en caliente (propietario; fuera del conteo):** parte de G1. Sólo si se confirma que
@@ -920,13 +1047,14 @@ ella.
 ### 4.5 Unidades y aritmética de la línea de tiempo
 
 La Fase 4 tiene **9 unidades**: T1 a T8 y el cierre. El paso previo, G1, V1 y V2 no cuentan. La
-enmienda T1-E es parte de la unidad T1 y los pasos de E2 son parte de la unidad T2: no añaden
-unidades y la tabla no cambia.
+enmienda T1-E es parte de la unidad T1, los pasos de E2 son parte de la unidad T2 y lo fijado por E3
+es parte de la unidad T3: no añaden unidades y la tabla no cambia. Con el valor por defecto de P11
+tampoco cambia (la corrección de `Get-Prop` queda fuera de la fase).
 
 | Frente | Unidades |
 |---|---|
 | Datos y configuración | 2 (T1 con T1-E, T2 con E2) |
-| Rol y ruta | 2 (T3, T4) |
+| Rol y ruta | 2 (T3 con E3, T4) |
 | Transformación | 3 (T5, T6, T7) |
 | Documentación y cierre | 2 (T8, cierre) |
 
@@ -948,8 +1076,9 @@ hacia arriba, y el porcentaje mostrado también.
 | 9 | 100 % | 100 % | 10 | 80 % | 80 % | 8 |
 
 Por frente: 2 unidades (0, 50, 100 %: 0, 5, 10 cuadros); 3 unidades (0, 33, 67, 100 %: 0, 3, 7, 10
-cuadros). Si G1 obliga a rehacer el plan, se añade la task de V1 o P10 se resuelve con una task
-propia, las unidades cambian y se recalcula con la misma fórmula.
+cuadros). Si G1 obliga a rehacer el plan, se añade la task de V1 o el propietario elige la
+alternativa de P11 (T3b dentro de la fase: 10 unidades, Fase 4 = k ÷ 10 y global = 60 + 2 × k), las
+unidades cambian y se recalcula con la misma fórmula.
 
 ## 5. Riesgos
 
@@ -968,26 +1097,35 @@ propia, las unidades cambian y se recalcula con la misma fórmula.
 | Refactor profundo de `install.ps1` rompe la instalación sin alias | T3 y T4 sin cambio de comportamiento, con toda la suite existente intacta; caso 46 |
 | Dos formatos de estado (2 y 3) | Difieren en una clave; una sola función los genera; casos 20 a 26 |
 | Un instalador anterior no lee el esquema 3 | Lo trata como ausente (nunca sobrescribe sin `-Force`); documentado |
+| Un `dest` del estado apunta a la ruta de un archivo del manifiesto (estado manipulado, o un agente nuevo del repositorio con el nombre de un alias) | D5 (E3): estado ausente, nunca `ACTUALIZAR`; caso 59 |
+| El repositorio añade un agente con el nombre de un alias ya instalado: el usuario se encuentra exit 1 y después todo `MODIFICADO` | Consecuencia aceptada de D5 (S14); aviso con el motivo y el remedio (3.4); documentado como límite en el README; siempre hay respaldo con `-Force` |
+| Un `dest` enorme del estado sale entero por stdout como huérfano | D6 (E3): 74 caracteres, atado por una prueba a la regex del alias; caso 60 |
+| La validación del estado es cuadrática y un estado grande bloquea el instalador (304 s con 2000 entradas) | D7 (E3): conjuntos ordinales; caso 61 |
+| Un mensaje de `Read-State` o `Get-ManifestEntries` imprime sin recorte texto del archivo | `Format-SafeShort` en todos (E3); casos 25 y 61 |
+| El tope de 74 y la longitud del alias se desincronizan | Prueba estática del caso 60 |
+| La nota de huérfanos dice «ya no estan en el manifiesto» para un huérfano por cambio de nombre (falso) entre T3 y T7 | Estado intermedio reconocido; el caso 20 no la afirma; T7 la corrige y lo fija (casos 50 y 51); los alias no se pueden activar antes de T5 |
+| `Get-Prop` desenrolla listas de un elemento: campos del estado y del manifiesto aceptan `[valor]` (defecto previo de las Fases 1 y 3) | **Abierto (P11).** Por defecto: documentado como laxitud heredada y corregido en una tarea aparte tras la fase; `dest` ya es estricto; foco de `shield` en C2 |
 | Archivo viejo activo junto al nuevo | Fila `HUERFANO` y aviso explícito por stderr; README; nunca se borra (decisión 3) |
 | El huérfano sólo se informa una vez | Documentado; P5 |
 | Archivo ajeno en la ruta del alias | Sale `MODIFICADO` (S2); frase del exit 3 |
 | Un alias sobrescribe a un agente integrado de Claude Code o choca con un valor especial de `subagent_type` | V4 con nueve nombres (E2): los siete integrados conocidos, `fork` y `output-style-setup`; casos 13 y 57 |
 | La lista de reservados es cerrada: Claude Code añade un integrado y el instalador no lo conoce; `output-style-setup` está reservado sin verificar | Documentado como límite (README, `CLAUDE.md`); consejo de comprobar con `/agents`; añadir un nombre es una línea y una prueba |
 | Un alias nombra un archivo del manifiesto que es otro agente, con el rol de origen fuera del manifiesto | V8 compara toda alias efectiva con todas las rutas del manifiesto (E2); caso 58 |
-| Otro archivo del usuario en `<Target>/agents/` declara el mismo `name:` que un alias: no está documentado cuál gana; si gana el del usuario, el rol renombrado pierde su `hooks:` sin aviso | **Abierto (P10).** Por defecto: documentado; G1 lo comprueba en Claude Code real; V8 no lo cubre (sólo ve el manifiesto) |
+| Otro archivo del usuario en `<Target>/agents/` declara el mismo `name:` que un alias: no está documentado cuál gana; si gana el del usuario, el rol renombrado pierde su `hooks:` sin aviso | P10, resuelta: documentado; G1 lo comprueba en Claude Code real; V8 no lo cubre (sólo ve el manifiesto) |
 | Colisión con agente de proyecto, plugin o gestionado; referencias por nombre del usuario | No detectable desde el instalador; documentado (3.9) |
 | El reporte de uso deja de atribuir el agente con alias | Decisión 6; documentado en README y guía |
 | `name:` con `_`, `-` o dígitos, o el renombrado en caliente, se comportan distinto de lo supuesto | G1; V2 bloqueada hasta G1; recordatorio de reiniciar sesiones |
 | Comportamiento de `ConvertFrom-Json` de 5.1 con objetos anidados, claves repetidas y `__type` | Casos 10 y 16 fijan el comportamiento real; lo que no se pueda distinguir falla cerrado |
 | Un alias inválido se filtra en un mensaje (inyección en la terminal o en logs) | Los mensajes nombran el rol, nunca el valor; caso 12 |
-| La suite se alarga | `subTest`; validación de la tabla sobre todo en Python |
+| La suite se alarga | `subTest`; validación de la tabla sobre todo en Python; el caso 61 usa un solo estado grande |
 | Un agente instala contra el `~/.claude` real | Regla en todos los prompts; `-Target` y `HOME` temporales |
 | Copia inversa de un archivo con alias al repositorio | Documentado; `git ls-files` no lista `agents/<alias>.md` |
 
 ## 6. Preguntas abiertas
 
 Cada una tiene un valor por defecto, que es lo que el plan implementa si no hay respuesta. P1 a P9
-quedaron aprobadas con su valor por defecto el 2026-11-22. **P10 está abierta.**
+quedaron aprobadas con su valor por defecto el 2026-11-22. P10 quedó resuelta el 2026-11-23 con su
+valor por defecto (ver «Decisión sobre P10»). **P11 está abierta.**
 
 - **P1. Primera letra obligatoria y palabras de YAML (V1, V2).** Endurece la decisión 4 («sin `-`
   inicial»): el alias debe empezar por letra y no puede ser `true`, `null`, `yes`... Por defecto: sí.
@@ -1013,14 +1151,14 @@ quedaron aprobadas con su valor por defecto el 2026-11-22. **P10 está abierta.*
   líneas `Alias:`. Alternativa: añadir `(rol <rol>)` a cada fila con alias (cambia el formato que leen
   las pruebas).
 - **P9. Nombre de la clave.** Por defecto: `aliases`. Alternativa: `names`.
-- **P10. Agente propio del usuario con el mismo `name:` que un alias (abierta; revisión de `shield`
-  de T2; afecta a T4 y T5; decidir antes de T5).** V8 sólo ve las rutas del manifiesto. Si el usuario
+- **P10. Agente propio del usuario con el mismo `name:` que un alias (resuelta el 2026-11-23:
+  opción (a); revisión de `shield` de T2).** V8 sólo ve las rutas del manifiesto. Si el usuario
   tiene en `<Target>/agents/` otro archivo, con otro nombre de archivo, que declara `name: <alias>`,
   el instalador no lo ve. No está documentado cuál de los dos gana; si gana el del usuario, las
   llamadas al alias no pasan por el bloque `hooks:` del rol renombrado. (El caso del archivo
   `agents/<alias>.md` propio ya está resuelto: `MODIFICADO`, S2.)
-  - **Por defecto (a):** documentarlo en el README («Límites del instalador») y en la guía, y
-    comprobarlo en G1. Sin código nuevo.
+  - **Por defecto (a), elegida:** documentarlo en el README («Límites del instalador») y en la guía,
+    y comprobarlo en G1. Sin código nuevo.
   - **Opcional (b), además de (a):** un aviso por stderr, sin cambiar el código de salida, si algún
     `agents/*.md` no gestionado del destino declara un `name:` igual a un alias efectivo. Coste: el
     instalador pasa a leer archivos que no gestiona (entrada no confiable: tope de tamaño, sólo la
@@ -1030,6 +1168,24 @@ quedaron aprobadas con su valor por defecto el 2026-11-22. **P10 está abierta.*
     vuelve a `atlas` y se implementa en T5.
   - **Alternativa (c):** lo mismo que (b) pero con exit 1 en vez de aviso (falla cerrado; un falso
     positivo bloquea la instalación hasta cambiar el alias).
+- **P11. `Get-Prop` desenrolla listas de un elemento (abierta; defecto previo de las Fases 1 y 3,
+  descubierto en T3; sin decidir).** `Get-Prop` devuelve el valor de la propiedad por la canalización
+  de PowerShell, que desenrolla una lista de un solo elemento. Efecto: aceptan `[valor]` en lugar de
+  `valor` los campos `path`, `sha256`, `written`, `level`, `schema`, `algorithm` y `eol` del estado,
+  y `schema`, `path`, `sha256` y `algorithm` de `install-manifest.json`.
+  - **Qué es y qué no.** No es un hueco conocido: el valor interno pasa las mismas validaciones y se
+    lee siempre con la misma función, así que no hay dos lecturas distintas del mismo campo. Sí
+    contradice lo que la documentación dice de esos archivos («tipos estrictos»). `dest` (Fase 4) se
+    lee con `Get-PropRaw(...).Value` y es estricto (caso 21).
+  - **Por defecto:** documentarlo como laxitud heredada (README, «Límites del instalador»;
+    `CLAUDE.md`) y corregirlo en una **tarea aparte después de la Fase 4**: usar
+    `Get-PropRaw(...).Value` en `Get-ManifestEntries`, `Read-Manifest` y `Read-State`, con la prueba
+    roja primero (un estado y un manifiesto con cada campo como lista de un elemento deben
+    rechazarse). Las 9 unidades y la tabla de 4.5 no cambian.
+  - **Alternativa:** añadirlo como **T3b** dentro de esta fase (tamaño S, revisión de seguridad,
+    después de T3 y antes de T4). Las unidades pasan de 9 a 10 y la aritmética cambia: Fase 4 =
+    k ÷ 10 y global = 60 + 2 × k; la tabla de 4.5 se rehace y el README se recalcula (el porcentaje
+    baja: es lo esperado). Riesgo: toca la lectura del manifiesto de la Fase 1, con su suite.
 
 ## Enmiendas
 
@@ -1086,8 +1242,50 @@ reabren»; por eso queda registrada con su motivo.
   pasos de E2 son parte de la unidad T2. Los textos de los mensajes de error. Las reglas V1 a V3 y V5
   a V7, la separación de rol y ruta, el estado, la transformación (E1 incluida), la clasificación y
   los huérfanos.
-- **Punto anotado y no decidido.** P10: agente propio del usuario con el mismo `name:` que un alias.
-  V8 no lo cubre. Lo decide el propietario antes de T5.
+- **Punto anotado entonces y decidido después.** P10: agente propio del usuario con el mismo `name:`
+  que un alias. V8 no lo cubre. Resuelta el 2026-11-23 (ver «Decisión sobre P10»).
+
+### E3. Reglas del estado con esquema 3 — aprobada tras T3 (2026-11-23)
+
+Salió de implementar T3 con `auditor` y `shield`. La sección 3.4 no tenía estas reglas.
+
+- **Regla 1 (D5): un `dest` distinto de su `path` no puede ser la ruta de ningún archivo del
+  manifiesto (`$ManifestPaths`) ni el `path` de otra entrada del estado.** Motivo: es lo conservador;
+  un estado que sitúa un rol en la ruta que hoy es el origen de otro archivo no se puede clasificar
+  sin ambigüedad. **Consecuencia aceptada:** si el usuario tenía `sentinel -> tester` y una versión
+  nueva del repositorio añade un agente `tester`, el estado se trata como ausente: todo archivo con
+  cambios sale `MODIFICADO` y hace falta `-Force`. El aviso debe decirlo con claridad (texto en
+  3.4). Se documenta como límite en T8 y en 3.9 (S14).
+- **Regla 2 (D6): tope de 74 caracteres para un `dest` distinto de su `path`.** `agents/` (7) + alias
+  de 64 + `.md` (3); el 64 sale de la regex del alias (`{0,63}` más la letra inicial). Una prueba ata
+  el número a esa regex. Motivo: sin el tope, un `dest` de 200 KB que casa con `$AllowedPattern`
+  salía entero por stdout como huérfano.
+- **Regla 3 (D7) y mensajes.** La validación de `dest` usa `HashSet` ordinal: la versión cuadrática
+  con listas tardaba 304 s con 2000 entradas. Todos los mensajes de `Read-State` y
+  `Get-ManifestEntries` usan `Format-SafeShort`. `$dests` y `$prevByDest` son diccionarios ordinales.
+- **Regla 4.** `Read-State` recibe `$ManifestPaths` de forma obligatoria (lo necesita D5).
+- **Regla 5 (caso 20 y nota de huérfanos).** El caso 20 ya no afirma la nota de huérfanos ni que
+  stderr esté vacío para el huérfano por cambio de nombre. El aviso de 3.7 lo define y lo implementa
+  T7, que además cambia la nota actual: para ese caso es falsa («ya no estan en el manifiesto»).
+- **Defecto previo registrado, sin decidir (P11).** `Get-Prop` desenrolla listas de un elemento:
+  `path`, `sha256`, `written`, `level`, `schema`, `algorithm` y `eol` del estado, y `schema`, `path`,
+  `sha256` y `algorithm` de `install-manifest.json`, aceptan `[valor]` en lugar de `valor`. No es un
+  hueco (el valor interno se valida igual y se lee siempre con la misma función), pero contradice
+  «tipos estrictos». `dest` se lee con `Get-PropRaw(...).Value` y es estricto. Valor por defecto:
+  documentarlo y corregirlo en una tarea aparte tras la Fase 4. Alternativa: T3b dentro de la fase
+  (10 unidades).
+- **Qué cambió en este plan.** Cabecera; fuera de alcance; supuesto 13; fila del Paso 3 en la tabla
+  de 3.3; 3.4 (parámetro obligatorio, tabla de reglas D1 a D7, motivos, consecuencia aceptada y texto
+  del aviso, reglas de implementación, laxitud heredada); 3.6 (diccionario ordinal, situación S14);
+  3.7 (estado intermedio de la nota, cambio en T7, ruta acotada); 3.8 (mensajes del estado); 3.9
+  (límite nuevo; P10 como resuelta); 3.10; casos 20, 21, 25, 50 y 51 y casos nuevos 59, 60 y 61; T3
+  (lo fijado, pruebas, aceptación); T4 (coherencia con D1 a D7, aceptación); T5 (sin dependencia de
+  P10); T7 (nota de huérfanos, aceptación); T8 (límites nuevos, `CLAUDE.md`, backlog); C2; C1 pasa de
+  58 a 61 casos; ocho filas de riesgos; pregunta P11.
+- **Qué no cambió.** El número de unidades (9), los frentes y la tabla de la línea de tiempo: lo
+  fijado por E3 es parte de la unidad T3. Las decisiones del propietario, la validación de la tabla
+  (3.2, E2 incluida), la transformación (E1 incluida), la elección del esquema 2 o 3 al escribir, la
+  regla de clasificación y la regla única de huérfanos.
 
 ## Decisión sobre P10 (2026-11-23, propietario)
 

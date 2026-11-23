@@ -2,6 +2,24 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 4, T3: lectura del estado con esquema 3 y huérfanos)
+
+- `install.ps1` lee el estado con esquema 3: cada entrada puede llevar `dest`, la ruta real de destino de ese
+  rol (en la Fase 4, `agents/<alias>.md`). Un `dest` distinto de `path` debe ser `agents/<alias>.md` de hasta
+  74 caracteres, único y sin coincidir con el `path` de otra entrada ni con una ruta del manifiesto actual; un
+  estado con esquema 3 inválido, o con la clave `dest` en esquema 2, se trata como ausente y nunca produce
+  `ACTUALIZAR` ni `HUERFANO`. La validación usa `HashSet` ordinales (con listas tardaba 304 s con 2000
+  entradas) y todos los mensajes del estado y del manifiesto se recortan con `Format-SafeShort`.
+- La clasificación usa `prevByDest` (lo escrito, por ruta de destino) y el huérfano es el destino previo que
+  ya no es destino actual. Con estados de esquema 1 y 2 el resultado es idéntico al de antes. El instalador
+  todavía escribe el esquema 2 y no aplica alias; ningún camino usa `dest` para escribir, respaldar o borrar.
+- Enmienda E3 del plan (aprobada tras T3): las reglas de `dest` (colisión con el manifiesto, tope de 74
+  caracteres, validación ordinal) y la situación S14 (el repositorio añade un agente con el nombre de un alias
+  ya instalado: el estado se trata como ausente y hace falta `-Force`). Punto abierto P11: `Get-Prop`
+  desenrolla listas de un elemento (laxitud heredada de las Fases 1 y 3).
+- Pruebas: casos 20 a 25 y 59 a 61 del plan; `tests/aliases_ref.py` gana la referencia independiente del estado
+  con esquema 3.
+
 ### Añadido (Fase 4, T2: clave `aliases` del archivo de configuración)
 
 - `install.ps1` acepta la clave opcional `aliases` (objeto rol a alias) en `<Target>/synclayer-config.json`,

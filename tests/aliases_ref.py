@@ -279,6 +279,80 @@ def state_for3(manifest, out_hashes=None, level=5, dests=None):
     return (json.dumps(state, indent=2, ensure_ascii=True) + "\n").encode("ascii")
 
 
+STATE_ROOT_KEYS = {"schema", "algorithm", "eol", "files"}
+STATE3_ENTRY_KEYS = {"path", "sha256", "written", "level", "dest"}
+_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+DEST_MAX = 74  # agents/ + alias de hasta 64 + .md
+
+
+def _bad_path(value):
+    return (not isinstance(value, str) or ".." in value or "\\" in value or ":" in value
+            or value.startswith("/") or not bm.ALLOWED.match(value))
+
+
+def state3_problem(state, manifest_paths=()):
+    """Primer problema de un estado esquema 3 (dict) segun 3.4 del plan, o None si es valido. Segunda
+    implementacion, independiente de Read-State: `manifest_paths` son las rutas del manifiesto (un dest distinto
+    de su path no puede ser la ruta de otro rol). Todo estado con problema es AUSENTE para el instalador."""
+    if not isinstance(state, dict):
+        return "raiz"
+    if set(state) - STATE_ROOT_KEYS:
+        return "clave desconocida en la raiz"
+    if type(state.get("schema")) is not int or state["schema"] != 3:
+        return "schema"
+    if state.get("algorithm") != "sha256" or state.get("eol") != "lf":
+        return "algorithm o eol"
+    files = state.get("files")
+    if not isinstance(files, list) or not files:
+        return "files"
+    paths, dests = [], []
+    for entry in files:
+        if not isinstance(entry, dict) or set(entry) - STATE3_ENTRY_KEYS:
+            return "clave desconocida en una entrada"
+        path = entry.get("path")
+        if _bad_path(path) or path in paths:
+            return "path"
+        if not isinstance(entry.get("sha256"), str) or not _HEX64.match(entry["sha256"]):
+            return "sha256"
+        if not isinstance(entry.get("written"), str) or not _HEX64.match(entry["written"]):
+            return "written"
+        level = entry.get("level")
+        if type(level) is not int or not 1 <= level <= 5:
+            return "level"
+        if "dest" not in entry:
+            return "falta dest"
+        dest = entry["dest"]
+        if _bad_path(dest):
+            return "dest"
+        if path.startswith("agents/") != dest.startswith("agents/") and dest != path:
+            return "dest fuera de agents/ o distinto en un archivo fijo"
+        if not path.startswith("agents/") and dest != path:
+            return "dest distinto en un archivo fijo"
+        if dest != path and len(dest) > DEST_MAX:
+            return "dest demasiado largo"
+        if dest in dests:
+            return "dest repetido"
+        paths.append(path)
+        dests.append(dest)
+    for path, dest in zip(paths, dests):
+        if dest != path and (dest in paths or dest in manifest_paths):
+            return "dest es la ruta de otro rol"
+    return None
+
+
+def state3_orphans(state, manifest_paths):
+    """Huerfanos (3.7): destinos del estado previo que no son destino actual de ningun rol del manifiesto (hoy el
+    destino de un rol es su ruta). Estado invalido: ninguno. Orden del estado."""
+    if state3_problem(state, manifest_paths) is not None:
+        return []
+    return [f["dest"] for f in state["files"] if f["dest"] not in manifest_paths]
+
+
+def prev_by_dest(state):
+    """prevByDest (3.6): ruta de destino del estado -> hash escrito."""
+    return {f["dest"]: f["written"] for f in state["files"]}
+
+
 # --- comprobaciones sobre los textos del repositorio (inventario y zonas sensibles) ---
 
 def repo_text(rel):

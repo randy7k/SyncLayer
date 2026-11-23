@@ -428,9 +428,9 @@ function Get-ManifestEntries($m) {
         if ($path -cnotmatch $AllowedPattern) {
             throw ('ruta fuera de la lista permitida: ' + (Format-SafeShort $path))
         }
-        if ($hashes.ContainsKey($path)) { throw ('ruta duplicada: ' + (Format-Safe $path)) }
+        if ($hashes.ContainsKey($path)) { throw ('ruta duplicada: ' + (Format-SafeShort $path)) }
         if (-not ($hash -is [string]) -or $hash -cnotmatch '^[0-9a-f]{64}\z') {
-            throw ('sha256 invalido para ' + (Format-Safe $path))
+            throw ('sha256 invalido para ' + (Format-SafeShort $path))
         }
         $hashes[$path] = $hash
         $order.Add($path)
@@ -453,9 +453,15 @@ function Test-TextHasTypeKey([string]$Text) {
 # porque aquel instalador escribia los bytes canonicos del origen. Esquema 2: ademas written (hash de
 # lo escrito, 64 hex minuscula) y level (entero de 1 a 5) por archivo, con claves de lista cerrada.
 # Cualquier otro schema, un JSON ilegible o un campo invalido lanza: el llamador lo trata como ausente
-# (nunca como ACTUALIZAR). Devuelve @{ Order; Hashes; Written; Levels; Bytes }. Levels da el nivel anterior
-# (linea Nivel anterior:); no interviene en la clasificacion.
-function Read-State([string]$FilePath) {
+# (nunca como ACTUALIZAR). Devuelve @{ Order; Hashes; Written; Levels; Dest; Bytes }. Levels da el nivel anterior
+# (linea Nivel anterior:); no interviene en la clasificacion. Esquema 3 (Fase 4): ademas dest por entrada, la
+# ruta real de destino de ese rol (agents/<alias>.md si el rol tuvo alias). Reglas de dest: cadena, sin .. \ : ni
+# / inicial, casa con $AllowedPattern, y si path es agents/... dest tambien (si no, dest = path); ningun dest
+# repetido; un dest distinto de su path no es el path de otra entrada ni la ruta de ningun rol del manifiesto
+# ($ManifestPaths, obligatorio: sin el la regla se desactivaria en silencio). En los esquemas 1 y 2 dest = path. Dest solo sirve para clasificar y para
+# informar huerfanos: nunca para escribir ni borrar.
+function Read-State([string]$FilePath, $ManifestPaths) {
+    if ($null -eq $ManifestPaths) { throw 'falta la lista de rutas del manifiesto (ManifestPaths)' }
     # Lectura unica con tope sobre lo leido (no sobre una medida previa): se abre una vez, en solo lectura, y se
     # leen como maximo $StateMaxBytes mas uno. Mismo patron que Read-LevelConfig.
     try {
@@ -494,14 +500,16 @@ function Read-State([string]$FilePath) {
     }
     $schema = Get-Prop $m 'schema'
     if (-not ($schema -is [int] -or $schema -is [long])) { throw 'schema no reconocido' }
-    if ($schema -ne 1 -and $schema -ne 2) { throw 'schema no reconocido' }
+    if ($schema -ne 1 -and $schema -ne 2 -and $schema -ne 3) { throw 'schema no reconocido' }
     if (-not (Test-OrdinalEqual (Get-Prop $m 'algorithm') 'sha256')) {
         throw 'algorithm debe ser sha256'
     }
     $entries = Get-ManifestEntries $m
     $written = @{}
     $levels = @{}
-    # Claves de lista cerrada en la raiz (los dos esquemas) y, en el esquema 1, tambien por entrada.
+    # Tablas nuevas de la Fase 4: ordinales (un Hashtable de 5.1 compara con la cultura y sin distinguir mayusculas).
+    $dests = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+    # Claves de lista cerrada en la raiz (los tres esquemas) y, en el esquema 1, tambien por entrada.
     foreach ($p in $m.PSObject.Properties) {
         if (-not (Test-OrdinalIn @('schema', 'algorithm', 'eol', 'files') $p.Name)) {
             throw ('clave desconocida: ' + (Format-SafeShort $p.Name))
@@ -518,13 +526,17 @@ function Read-State([string]$FilePath) {
         foreach ($rel in $entries.Order) {
             $written[$rel] = $entries.Hashes[$rel]
             $levels[$rel] = 5
+            $dests[$rel] = $rel
         }
     }
     else {
         if (-not (Test-OrdinalEqual (Get-Prop $m 'eol') 'lf')) { throw 'eol debe ser lf' }
+        $entryKeys = @('path', 'sha256', 'written', 'level')
+        if ($schema -eq 3) { $entryKeys = @('path', 'sha256', 'written', 'level', 'dest') }
+        $seenDests = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
         foreach ($entry in $entries.Files) {
             foreach ($p in $entry.PSObject.Properties) {
-                if (-not (Test-OrdinalIn @('path', 'sha256', 'written', 'level') $p.Name)) {
+                if (-not (Test-OrdinalIn $entryKeys $p.Name)) {
                     throw ('clave desconocida en una entrada: ' + (Format-SafeShort $p.Name))
                 }
             }
@@ -532,16 +544,64 @@ function Read-State([string]$FilePath) {
             $w = Get-Prop $entry 'written'
             $lv = Get-Prop $entry 'level'
             if (-not ($w -is [string]) -or $w -cnotmatch '^[0-9a-f]{64}\z') {
-                throw ('written invalido para ' + (Format-Safe $rel))
+                throw ('written invalido para ' + (Format-SafeShort $rel))
             }
             if (-not (($lv -is [int] -or $lv -is [long]) -and $lv -ge 1 -and $lv -le 5)) {
-                throw ('level invalido para ' + (Format-Safe $rel))
+                throw ('level invalido para ' + (Format-SafeShort $rel))
             }
             $written[$rel] = $w
             $levels[$rel] = [int]$lv
+            if ($schema -eq 2) {
+                $dests[$rel] = $rel
+            }
+            else {
+                # Value directo, sin Get-Prop: la salida de una funcion desenrolla una lista de un elemento y un dest
+                # de tipo lista pasaria por cadena.
+                $destProp = Get-PropRaw $entry 'dest'
+                if ($null -eq $destProp) { throw ('falta dest para ' + (Format-SafeShort $rel)) }
+                $d = $destProp.Value
+                if (-not ($d -is [string])) { throw ('dest invalido para ' + (Format-SafeShort $rel)) }
+                if ($d.Contains('..') -or $d.Contains('\') -or $d.Contains(':') -or $d.StartsWith('/')) {
+                    throw ('dest no permitido (absoluto, con .., \ o :): ' + (Format-SafeShort $d))
+                }
+                if ($d -cnotmatch $AllowedPattern) {
+                    throw ('dest fuera de la lista permitida: ' + (Format-SafeShort $d))
+                }
+                # Un alias tiene hasta 64 caracteres: agents/ + 64 + .md = 74. Un dest mas largo no lo escribio este instalador.
+                if ($d.Length -gt 74 -and -not (Test-OrdinalEqual $d $rel)) {
+                    throw ('dest demasiado largo para ' + (Format-SafeShort $rel))
+                }
+                if ($rel.StartsWith('agents/', [System.StringComparison]::Ordinal)) {
+                    if (-not $d.StartsWith('agents/', [System.StringComparison]::Ordinal)) {
+                        throw ('dest fuera de agents/ para ' + (Format-SafeShort $rel))
+                    }
+                }
+                elseif (-not (Test-OrdinalEqual $d $rel)) {
+                    throw ('dest distinto de path en un archivo fijo: ' + (Format-SafeShort $rel))
+                }
+                if (-not $seenDests.Add($d)) { throw ('dest duplicado: ' + (Format-SafeShort $d)) }
+                $dests[$rel] = $d
+            }
+        }
+        if ($schema -eq 3) {
+            # Conjuntos ordinales creados una vez: una busqueda por lista era cuadratica con miles de entradas.
+            $entryPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+            foreach ($rel in $entries.Order) { [void]$entryPaths.Add($rel) }
+            $manifestSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+            foreach ($rel in $ManifestPaths) { [void]$manifestSet.Add([string]$rel) }
+            foreach ($rel in $entries.Order) {
+                $d = $dests[$rel]
+                if (Test-OrdinalEqual $d $rel) { continue }
+                if ($entryPaths.Contains($d)) { throw ('dest igual al path de otra entrada: ' + (Format-SafeShort $d)) }
+                if ($manifestSet.Contains($d)) {
+                    throw ('el destino ' + (Format-SafeShort $d) + ' de ' + (Format-SafeShort $rel) +
+                        ' es ahora un archivo del manifiesto; si el repositorio anadio un agente con el nombre de tu alias,' +
+                        ' elige otro alias y repite con -Force')
+                }
+            }
         }
     }
-    return @{ Order = $entries.Order; Hashes = $entries.Hashes; Written = $written; Levels = $levels; Bytes = $bytes }
+    return @{ Order = $entries.Order; Hashes = $entries.Hashes; Written = $written; Levels = $levels; Dest = $dests; Bytes = $bytes }
 }
 
 # Texto no confiable para un mensaje: recortado a 40 caracteres y escapado (Format-Safe).
@@ -1103,7 +1163,7 @@ try {
     $stateDestHash = $null
     if ($stateExists) {
         try {
-            $prev = Read-State $statePath
+            $prev = Read-State $statePath $manifest.Order
             $stateDestHash = Get-Sha256Hex (ConvertTo-CanonicalBytes $prev.Bytes)
         }
         catch {
@@ -1121,6 +1181,13 @@ try {
         $prevLevels = @{}
         foreach ($rel in $prev.Order) { $prevLevels[[string]$prev.Levels[$rel]] = $true }
         if ($prevLevels.Count -eq 1) { $prevLevel = [int]@($prevLevels.Keys)[0] }
+    }
+    # Lo escrito segun el estado, por ruta de destino (Fase 4): la clasificacion pregunta "el estado afirma que en
+    # ESTA ruta escribimos estos bytes". Con los esquemas 1 y 2 el destino es la ruta del rol: es Written. El
+    # destino actual de cada rol es todavia su ruta (los alias aun no se aplican).
+    $prevByDest = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+    if ($null -ne $prev) {
+        foreach ($rel in $prev.Order) { $prevByDest[$prev.Dest[$rel]] = $prev.Written[$rel] }
     }
 
     # Paso 4: clasificar.
@@ -1155,7 +1222,7 @@ try {
             if ($destHash -ceq $outHash[$rel]) {
                 $state = 'IGUAL'
             }
-            elseif ($null -ne $prev -and $prev.Written.ContainsKey($rel) -and ($prev.Written[$rel] -ceq $destHash)) {
+            elseif ($null -ne $prev -and $prevByDest.ContainsKey($rel) -and ($prevByDest[$rel] -ceq $destHash)) {
                 $state = 'ACTUALIZAR'
             }
             else {
@@ -1163,13 +1230,16 @@ try {
             }
         }
         $counts[$state]++
-        $rows.Add(@{ State = $state; Path = $rel; DestHash = $destHash })
+        $rows.Add(@{ State = $state; Path = $rel; Dest = $rel; DestHash = $destHash })
     }
+    # Huerfano: destino del estado previo que ya no es destino actual de ningun rol del manifiesto (con los esquemas
+    # 1 y 2, ruta del estado que no esta en el manifiesto). Solo se informa: Path = Dest = la ruta del archivo.
     if ($null -ne $prev) {
         foreach ($rel in $prev.Order) {
-            if (-not $manifest.Hashes.ContainsKey($rel)) {
+            $prevDest = $prev.Dest[$rel]
+            if (-not $manifest.Hashes.ContainsKey($prevDest)) {
                 $counts['HUERFANO']++
-                $rows.Add(@{ State = 'HUERFANO'; Path = $rel })
+                $rows.Add(@{ State = 'HUERFANO'; Path = $prevDest; Dest = $prevDest })
             }
         }
     }

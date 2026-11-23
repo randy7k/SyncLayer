@@ -19,6 +19,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -263,6 +264,34 @@ class StaticChecks(unittest.TestCase):
         # Python usa \Z para lo que .NET llama \z; el resto debe ser identico.
         self.assertEqual(ps_pattern[:-2] + r"\Z", bm.ALLOWED.pattern)
 
+    def test_f4t3_dest_max_length_is_derived_from_the_alias_rule(self):
+        # El tope de dest (74) = "agents/" + alias de hasta 64 (letra inicial + {0,63}) + ".md". Se deriva de la regex
+        # del alias de install.ps1 y se compara con el literal del instalador y con la referencia: si cambian por
+        # separado, falla.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        m = re.search(r"IsMatch\(\$value, '\^\[a-z\]\[a-z0-9_-\]\{0,(\d+)\}" + re.escape(chr(92)) + "z'", text)
+        self.assertIsNotNone(m, "no se encontro la regex del alias en install.ps1")
+        longest = 1 + int(m.group(1))
+        self.assertEqual(longest, 64)
+        expected = len("agents/") + longest + len(".md")
+        self.assertEqual(expected, 74)
+        lits = re.findall(r"\$d\.Length -gt (\d+) -and", text)
+        self.assertEqual(lits, [str(expected)])
+        self.assertEqual(ar.DEST_MAX, expected)
+        ref = re.search(r"\{0,(\d+)\}", ar._ALIAS_RE.pattern)
+        self.assertEqual(1 + int(ref.group(1)), longest)
+
+    def test_f4t3_read_state_requires_the_manifest_paths_and_dicts_are_ordinal(self):
+        # Sin valor por defecto: un llamador que olvide $ManifestPaths no desactiva la regla en silencio.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        self.assertEqual(re.findall(r"^function Read-State\((.*)\) \{$", text, re.M), [r"[string]$FilePath, $ManifestPaths"])
+        self.assertEqual(text.count("Read-State $statePath $manifest.Order"), 1)
+        self.assertEqual(len(re.findall(r"Read-State \$", text)), 1)
+        ordinal = "New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)"
+        self.assertIn("$dests = " + ordinal, text)
+        self.assertIn("$prevByDest = " + ordinal, text)
+        self.assertNotRegex(text, r"\$(dests|prevByDest) = @\{\}")
+
 
 class InstallCases:
     """Casos de install.ps1. Cada subclase fija self.exe (un interprete)."""
@@ -331,16 +360,19 @@ class InstallCases:
                 result[m.group(2)] = m.group(1)
         return result
 
-    def write_state(self, files, schema=2, written=None, level=5):
+    def write_state(self, files, schema=2, written=None, level=5, dests=None):
         """Estado previo en el destino, el de una instalacion anterior con esos archivos. schema=1: copia
         del manifiesto (instalador de la Fase 1); schema=2: el estado nuevo, con `written` (por defecto el
-        hash del origen) y `level`."""
+        hash del origen) y `level`; schema=3 (Fase 4): ademas `dest` por entrada, de `dests` {ruta: destino}
+        (por defecto la propia ruta), con la referencia aliases_ref.state_for3."""
         old = os.path.join(self.tmp, "viejo")
         for rel, data in files.items():
             write(old, rel, data)
         manifest = manifest_for(old, sorted(files))
         if schema == 1:
             data = manifest.encode("ascii")
+        elif schema == 3:
+            data = ar.state_for3(manifest, written, level, dests)
         else:
             data = lr.state_for(manifest, written, level)
         write(self.target, "synclayer-manifest.json", data)
@@ -4380,6 +4412,643 @@ class InstallCases:
                     self.run_install(*mode)
                     self.assertEqual(snapshot(self.target)[self.CONFIG], before)
                 shutil.rmtree(self.target)
+
+    # --- Fase 4, T3: estado con esquema 3 (lectura, prevByDest y huerfanos generalizados) ---
+    # Los alias aun no se aplican: el destino actual de cada rol es su ruta, y los estados de esquema 3 se escriben a mano
+    # (write_state con dests). El instalador sigue escribiendo el esquema 2.
+
+    F4_OLD_ALFA = b"alfa vieja\n"
+    F4_NEW_ALFA = b"alfa nueva\n"
+
+    def f4_old(self):
+        old = dict(SAMPLE)
+        old["agents/alfa.md"] = self.F4_OLD_ALFA
+        return old
+
+    def f4_target(self, files):
+        """Destino limpio con esos archivos en disco."""
+        shutil.rmtree(self.target, ignore_errors=True)
+        for rel, data in files.items():
+            write(self.target, rel, data)
+
+    def f4_state3(self, files=None, dests=None, written=None, level=5):
+        """Escribe un estado esquema 3 valido (alfa vieja por defecto) y lo devuelve como dict."""
+        self.write_state(files or self.f4_old(), schema=3, written=written, level=level, dests=dests)
+        return json.loads(read(self.target, self.STATE))
+
+    def f4_entry(self, data, rel="agents/alfa.md"):
+        return next(f for f in data["files"] if f["path"] == rel)
+
+    def f4_tree(self, base):
+        """{ruta relativa: bytes} de los archivos bajo base."""
+        found = {}
+        for dirpath, _dirs, names in os.walk(base):
+            for name in names:
+                full = os.path.join(dirpath, name)
+                with open(full, "rb") as f:
+                    found[os.path.relpath(full, base).replace(os.sep, "/")] = f.read()
+        return found
+
+    def test_f4t3_case20_schema3_state_without_aliases_old_dest_is_orphan_and_state_goes_back_to_schema2(self):
+        # Caso 20: estado esquema 3 (alfa estuvo en agents/viejo-alfa.md), sin alias en la configuracion: el rol sale
+        # IGUAL o NUEVO, la ruta dest vieja HUERFANO (informada, intacta), y el estado se reescribe en esquema 2.
+        self.make_source()
+        for present, expected in ((True, "IGUAL"), (False, "NUEVO")):
+            with self.subTest(alfa_on_disk=present):
+                files = dict(SAMPLE)
+                disk = dict(files)
+                disk["agents/viejo-alfa.md"] = b"nombre anterior\n"
+                if not present:
+                    del disk["agents/alfa.md"]
+                self.f4_target(disk)
+                self.write_state(files, schema=3, dests={"agents/alfa.md": "agents/viejo-alfa.md"})
+                prev_state = read(self.target, self.STATE)
+                self.assertIn(b'"schema": 3', prev_state)
+                before = snapshot(self.target)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, out + err)
+                st = self.states(out)
+                self.assertEqual(st["agents/alfa.md"], expected)
+                self.assertEqual(st["agents/viejo-alfa.md"], "HUERFANO")
+                self.assertEqual(sorted(k for k, v in st.items() if v == "HUERFANO"), ["agents/viejo-alfa.md"])
+                # igual que la referencia independiente (huerfanos y prevByDest)
+                prev = json.loads(prev_state)
+                self.assertEqual(ar.state3_orphans(prev, sorted(SAMPLE)), ["agents/viejo-alfa.md"])
+                self.assertNotIn("agents/alfa.md", ar.prev_by_dest(prev))
+                self.assertIn("HUERFANO=1", out)
+                # Contrato de T3: clasificacion, HUERFANO informado y archivo intacto. No se afirma la nota de stdout
+                # ni stderr vacio: este huerfano es por cambio de nombre (su rol sigue en el manifiesto) y T7 define su
+                # aviso propio (3.7 del plan); la nota actual habla de archivos que ya no estan en el manifiesto.
+                self.assertEqual(snapshot(self.target), before)
+                backup = os.path.join(self.tmp, "respaldo")
+                shutil.rmtree(backup, ignore_errors=True)
+                orphan_before = os.stat(os.path.join(self.target, "agents", "viejo-alfa.md")).st_mtime_ns
+                out, err = self.install_ok("-BackupDir", backup)
+                self.assertEqual(self.states(out)["agents/viejo-alfa.md"], "HUERFANO")
+                self.assertEqual(read(self.target, "agents/viejo-alfa.md"), b"nombre anterior\n")
+                self.assertEqual(os.stat(os.path.join(self.target, "agents", "viejo-alfa.md")).st_mtime_ns, orphan_before)
+                self.assertEqual(read(self.target, "agents/alfa.md"), SAMPLE["agents/alfa.md"])
+                # esquema 2 (no se escribe el 3), sin el huerfano, y el estado previo va al respaldo
+                self.assert_state(5)
+                self.assertNotIn(b'"dest"', read(self.target, self.STATE))
+                self.assertNotIn(b"viejo-alfa", read(self.target, self.STATE))
+                self.assertEqual(self.f4_tree(backup), {self.STATE: prev_state})
+
+    def test_f4t3_case20_schema3_with_dest_equal_to_path_behaves_like_schema2(self):
+        # Esquema 3 valido con dest = ruta del rol: misma clasificacion, salida y destino que el esquema 2.
+        old = self.f4_old()
+        scenarios = {
+            "ACTUALIZAR y huerfano": (dict(old, **{"agents/viejo.md": b"anterior\n"}), True, 0),
+            "intacto": (old, False, 0),
+            "MODIFICADO": (dict(old, **{"agents/beta.md": b"editado a mano\n"}), False, 3),
+        }
+        for name, (disk, alfa_new, expected_code) in scenarios.items():
+            with self.subTest(case=name):
+                results = {}
+                for schema in (2, 3):
+                    self.update_source("agents/alfa.md", self.F4_NEW_ALFA if alfa_new else self.F4_OLD_ALFA)
+                    self.f4_target(disk)
+                    state_files = dict(old)
+                    if "agents/viejo.md" in disk:
+                        state_files["agents/viejo.md"] = disk["agents/viejo.md"]
+                    self.write_state(state_files, schema=schema)
+                    backup = os.path.join(self.tmp, "respaldo")
+                    shutil.rmtree(backup, ignore_errors=True)
+                    code, out, err = self.run_install("-BackupDir", backup, "-Force" if expected_code == 3 else "-DryRun")
+                    # Se compara la clasificacion (no el manejo del estado: un esquema 3 distinto del que se escribiria
+                    # se reescribe y se respalda; un esquema 2 igual, no).
+                    summary = [l for l in out.splitlines() if l.startswith("Resumen:")]
+                    results[schema] = (code, self.states(out), summary, err,
+                                       {k: v for k, v in self.f4_tree(self.target).items() if k != self.STATE},
+                                       sorted(k for k in self.f4_tree(backup) if k != self.STATE)
+                                       if os.path.isdir(backup) else None)
+                self.assertEqual(results[2], results[3])
+                self.assertEqual(results[2][0], 0, str(results[2]))
+
+    def test_f4t3_case21_invalid_schema3_state_is_absent_never_actualizar_never_huerfano(self):
+        # Caso 21: un estado esquema 3 invalido se trata como ausente: con la version vieja en el destino sale
+        # MODIFICADO (exit 3), nunca ACTUALIZAR ni HUERFANO; aviso limpio por stderr; ni se respalda ni se toca.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        alfa = "agents/alfa.md"
+
+        def dest(value):
+            def mut(d):
+                self.f4_entry(d)["dest"] = value
+            return mut
+
+        def drop_dest(d):
+            del self.f4_entry(d)["dest"]
+
+        def dest_of(rel, value):
+            def mut(d):
+                self.f4_entry(d, rel)["dest"] = value
+            return mut
+
+        def dup_dest(d):
+            self.f4_entry(d)["dest"] = "agents/x.md"
+            self.f4_entry(d, "agents/beta.md")["dest"] = "agents/x.md"
+
+        def other_entry_path(d):
+            self.f4_entry(d)["dest"] = "agents/beta.md"
+            self.f4_entry(d, "agents/beta.md")["dest"] = "agents/beta2.md"
+
+        def other_entry_path_not_in_manifest(d):
+            # El "otro path" (agents/viejo.md) no esta en el manifiesto: solo la regla "dest igual al path de otra
+            # entrada" lo atrapa, no la de las rutas del manifiesto.
+            d["files"].append({"path": "agents/viejo.md", "sha256": self.f4_entry(d)["sha256"],
+                               "written": self.f4_entry(d)["written"], "level": 5, "dest": "agents/viejo2.md"})
+            self.f4_entry(d)["dest"] = "agents/viejo.md"
+
+        def other_role_without_entry(d):
+            d["files"] = [f for f in d["files"] if f["path"] != "agents/beta.md"]
+            self.f4_entry(d)["dest"] = "agents/beta.md"
+
+        def top(key, value):
+            def mut(d):
+                d[key] = value
+            return mut
+
+        def field(key, value):
+            def mut(d):
+                self.f4_entry(d)[key] = value
+            return mut
+
+        def rename_key(owner, old_key, new_key):
+            def mut(d):
+                target = d if owner == "top" else self.f4_entry(d)
+                items = list(target.items())
+                target.clear()
+                for k, v in items:
+                    target[new_key if k == old_key else k] = v
+            return mut
+
+        def schema1_with_dest(d):
+            d.clear()
+            d.update({"schema": 1, "algorithm": "sha256", "files": [
+                {"path": f["path"], "sha256": f["sha256"], "dest": f["dest"]} for f in
+                json.loads(read(self.target, self.STATE))["files"]]})
+
+        variants = {
+            "sin dest": drop_dest,
+            "dest null": dest(None),
+            "dest numero": dest(5),
+            "dest booleano": dest(True),
+            "dest lista": dest(["agents/x.md"]),
+            "dest objeto": dest({"a": 1}),
+            "dest vacio": dest(""),
+            "dest settings.json": dest("settings.json"),
+            "dest con ..": dest("agents/../x.md"),
+            "dest con barra invertida": dest("agents\\x.md"),
+            "dest con dos puntos": dest("agents/x:y.md"),
+            "dest absoluto": dest("/agents/x.md"),
+            "dest con mayusculas": dest("agents/Amigo.md"),
+            "dest con salto final": dest("agents/amigo.md\n"),
+            "dest reservado de Windows": dest("agents/con.md"),
+            "dest con otra extension": dest("agents/amigo.txt"),
+            "dest en subcarpeta": dest("agents/sub/x.md"),
+            "dest de 75 caracteres": dest("agents/" + "a" * 65 + ".md"),
+            "dest no ASCII": dest("agents/\u00e9.md"),
+            "dest con NUL": dest("agents/a\u0000b.md"),
+            "dest con guion blando": dest("agents/a\u00adb.md"),
+            "dest de otra carpeta fija": dest("rules/agentes.md"),
+            "dest repetido entre entradas": dup_dest,
+            "dest igual al path de otra entrada": other_entry_path,
+            "dest igual al path de otra entrada que no esta en el manifiesto": other_entry_path_not_in_manifest,
+            "dest igual a la ruta de otro rol del manifiesto sin entrada": other_role_without_entry,
+            "dest distinto en la regla fija": dest_of("rules/agentes.md", "agents/otro.md"),
+            "dest distinto en el hook": dest_of("hooks/agent_guard.py", "agents/otro.md"),
+            "dest distinto en la guia": dest_of("docs/agentes.md", "docs/otra.md"),
+            "clave de mas en una entrada": field("extra", 1),
+            "clave de mas en la raiz": top("extra", 1),
+            "clave Dest con otra capitalizacion": rename_key("entry", "dest", "Dest"),
+            "clave dest con NUL": rename_key("entry", "dest", "dest\u0000"),
+            "clave __type": top("__type", "x"),
+            "level 6": field("level", 6),
+            "sin level": lambda d: self.f4_entry(d).pop("level"),
+            "written invalido": field("written", "XYZ"),
+            "eol crlf": top("eol", "crlf"),
+            "algorithm md5": top("algorithm", "md5"),
+            "schema 4": top("schema", 4),
+            "schema 0": top("schema", 0),
+            "schema texto": top("schema", "3"),
+            "schema decimal": top("schema", 3.0),
+            "schema 2 con la clave dest": top("schema", 2),
+            "schema 1 con la clave dest": schema1_with_dest,
+            "files vacio": top("files", []),
+        }
+        # Control: sin mutar, el mismo estado clasifica ACTUALIZAR (las variantes fallan por su campo).
+        self.f4_target(self.f4_old())
+        control = self.f4_state3()
+        self.assertIsNone(ar.state3_problem(control, sorted(SAMPLE)))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(out)[alfa], "ACTUALIZAR")
+        for name, mutate in variants.items():
+            with self.subTest(case=name):
+                self.f4_target(self.f4_old())
+                data = self.f4_state3()
+                mutate(data)
+                # La referencia independiente tambien lo rechaza (o no es un esquema 3).
+                self.assertIsNotNone(ar.state3_problem(data, sorted(SAMPLE)))
+                raw = self.dump_state(data)
+                before = snapshot(self.target)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                st = self.states(out)
+                self.assertEqual(st[alfa], "MODIFICADO")
+                self.assertNotIn("ACTUALIZAR", set(st.values()))
+                self.assertNotIn("HUERFANO", set(st.values()))
+                self.assertIn("HUERFANO=0", out)
+                self.assertNotIn("nota:", out)
+                self.assert_clean_unreadable_warning(err)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(read(self.target, self.STATE), raw)
+
+    def test_f4t3_case21_invalid_schema3_state_real_run_replaces_it_without_backup(self):
+        # Un esquema 3 invalido no se respalda: con -Force se reescribe en esquema 2 y solo se respalda lo sobrescrito.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        self.f4_target(self.f4_old())
+        data = self.f4_state3(dests={"agents/alfa.md": "agents/viejo-alfa.md"})
+        del self.f4_entry(data)["dest"]
+        self.dump_state(data)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-Force", "-BackupDir", backup)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+        self.assertNotIn("HUERFANO", set(self.states(out).values()))
+        self.assert_clean_unreadable_warning(err)
+        self.assert_state(5)
+        self.assertEqual(self.f4_tree(backup), {"agents/alfa.md": self.F4_OLD_ALFA})
+
+    def test_f4t3_case21_state_size_limit_is_exact_for_schema3(self):
+        # 1048576 bytes validos se leen (ACTUALIZAR); un byte mas, estado ausente (MODIFICADO).
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        for extra, expected, expected_code in ((0, "ACTUALIZAR", 0), (1, "MODIFICADO", 3)):
+            with self.subTest(extra=extra):
+                self.f4_target(self.f4_old())
+                self.f4_state3()
+                raw = read(self.target, self.STATE)
+                raw += b" " * (1048576 + extra - len(raw))
+                write(self.target, self.STATE, raw)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, expected_code, out + err)
+                self.assertEqual(self.states(out)["agents/alfa.md"], expected)
+
+    def test_f4t3_case22_schema2_with_dest_key_and_schema4_are_absent(self):
+        # Caso 22: esquema 2 con la clave dest (desconocida en ese esquema) y schema 4: ausentes, con aviso.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        for name, mutate in (("esquema 2 con dest", lambda d: d.update(schema=2)),
+                             ("esquema 4", lambda d: d.update(schema=4))):
+            with self.subTest(case=name):
+                self.f4_target(self.f4_old())
+                data = self.f4_state3(dests={"agents/alfa.md": "agents/viejo-alfa.md"})
+                mutate(data)
+                self.dump_state(data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+                self.assertNotIn("HUERFANO", set(self.states(out).values()))
+                self.assert_clean_unreadable_warning(err)
+
+    def test_f4t3_case23_prev_by_dest_actualizar_when_state_says_we_wrote_these_bytes_in_this_path(self):
+        # Caso 23: estado 3 con dest = ruta actual y written = hash del destino: ACTUALIZAR, con respaldo del destino.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        self.f4_target(self.f4_old())
+        self.f4_state3()
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(out)["agents/alfa.md"], "ACTUALIZAR")
+        self.assertEqual(err, "")
+        backup = os.path.join(self.tmp, "respaldo")
+        self.install_ok("-BackupDir", backup)
+        self.assertEqual(read(self.target, "agents/alfa.md"), self.F4_NEW_ALFA)
+        self.assertEqual(self.f4_tree(backup)["agents/alfa.md"], self.F4_OLD_ALFA)
+        self.assert_state(5)
+
+    def test_f4t3_case23_prev_by_dest_written_of_another_path_is_modified(self):
+        # written de otra ruta (el hash de beta): el estado no afirma esos bytes para esta ruta: MODIFICADO.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        self.f4_target(self.f4_old())
+        self.f4_state3(written={"agents/alfa.md": self.sha(SAMPLE["agents/beta.md"])})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+        self.assertNotIn("ACTUALIZAR", set(self.states(out).values()))
+
+    def test_f4t3_case23_prev_by_dest_role_with_a_previous_alias_is_not_actualizar_in_its_own_path(self):
+        # El estado dice que el rol estuvo en agents/amigo.md: en agents/alfa.md (hoy su destino) no hay nada
+        # escrito por nosotros. Con la version vieja da MODIFICADO aunque written coincida con ese hash (clasificar
+        # contra el hash del rol daria ACTUALIZAR). El archivo viejo es HUERFANO, informado y sin tocar.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        disk = dict(self.f4_old())
+        disk["agents/amigo.md"] = b"nombre anterior\n"
+        self.f4_target(disk)
+        self.f4_state3(dests={"agents/alfa.md": "agents/amigo.md"})
+        before = snapshot(self.target)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 3, out + err)
+        st = self.states(out)
+        self.assertEqual(st["agents/alfa.md"], "MODIFICADO")
+        self.assertEqual(st["agents/amigo.md"], "HUERFANO")
+        self.assertNotIn("ACTUALIZAR", set(st.values()))
+        self.assertEqual(snapshot(self.target), before)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(self.states(out)["agents/amigo.md"], "HUERFANO")
+        self.assertEqual(read(self.target, "agents/amigo.md"), b"nombre anterior\n")
+        self.assertEqual(read(self.target, "agents/alfa.md"), self.F4_NEW_ALFA)
+        self.assertEqual(sorted(self.f4_tree(backup)), ["agents/alfa.md", self.STATE])
+        self.assertEqual(self.f4_tree(backup)["agents/alfa.md"], self.F4_OLD_ALFA)
+        self.assert_state(5)
+
+    def test_f4t3_case23_orphan_by_dest_is_reported_even_if_the_file_is_gone(self):
+        # El huerfano se informa aunque el archivo ya no exista (como hoy) y nunca se crea ni se borra nada.
+        self.make_source()
+        disk = dict(SAMPLE)
+        self.f4_target(disk)
+        self.write_state(dict(SAMPLE), schema=3, dests={"agents/alfa.md": "agents/amigo.md"})
+        out, err = self.install_ok("-DryRun")
+        self.assertEqual(self.states(out)["agents/amigo.md"], "HUERFANO")
+        self.assertEqual(self.states(out)["agents/alfa.md"], "IGUAL")
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "amigo.md")))
+
+    def test_f4t3_case23_reassignment_in_the_state_gives_one_orphan_per_old_dest(self):
+        # Dos roles con alias previos: cada destino previo que ya no es destino actual es un HUERFANO.
+        self.make_source()
+        self.f4_target(dict(SAMPLE))
+        self.write_state(dict(SAMPLE), schema=3, dests={"agents/alfa.md": "agents/uno.md", "agents/beta.md": "agents/dos.md"})
+        out, err = self.install_ok("-DryRun")
+        st = self.states(out)
+        self.assertEqual(sorted(k for k, v in st.items() if v == "HUERFANO"), ["agents/dos.md", "agents/uno.md"])
+        self.assertIn("HUERFANO=2", out)
+
+    def test_f4t3_case24_schema1_and_2_states_classify_as_before_and_keep_the_previous_level(self):
+        # Caso 24: con estados de esquema 1 y 2 (y el 3 con dest = ruta) la clasificacion es la de hoy y
+        # `Nivel anterior:` se calcula igual.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        old = dict(self.f4_old())
+        old["agents/viejo.md"] = b"anterior\n"
+        for schema, level in ((1, 5), (2, 5), (3, 5), (2, 3), (3, 3)):
+            with self.subTest(schema=schema, level=level):
+                self.f4_target(old)
+                self.write_state(old, schema=schema, level=level)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.states(out), {
+                    "agents/alfa.md": "ACTUALIZAR", "agents/beta.md": "IGUAL", "rules/agentes.md": "IGUAL",
+                    "hooks/agent_guard.py": "IGUAL", "docs/agentes.md": "IGUAL", "agents/viejo.md": "HUERFANO"})
+                self.assertIn("Resumen: NUEVO=0 IGUAL=4 ACTUALIZAR=1 MODIFICADO=0 HUERFANO=1", out)
+                self.assertIn("nota: los HUERFANO", out)
+                self.assertEqual(err, "")
+                if level == 3:
+                    self.assertIn("Nivel anterior: 3", out.splitlines())
+                else:
+                    self.assertNotIn("Nivel anterior", out)
+
+    def test_f4t3_case25_hostile_dest_gives_bounded_escaped_stderr(self):
+        # Caso 25: un dest enorme o no ASCII no llega crudo ni entero a stdout ni a stderr.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        variants = {
+            "enorme": ("agents/" + "a" * 200000 + ".md", None),
+            "no ASCII": ("agents/\u00e9\u202e\u0301\u00ad.md", ("\\u00e9", "\\u202e", "\\u0301", "\\u00ad")),
+            "enorme no ASCII": ("agents/" + "\u00e9" * 50000 + ".md", ("\\u00e9",)),
+        }
+        for name, (value, escapes) in variants.items():
+            with self.subTest(case=name):
+                self.f4_target(self.f4_old())
+                data = self.f4_state3()
+                self.f4_entry(data)["dest"] = value
+                self.dump_state(data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                self.assertTrue(out.isascii() and err.isascii(), repr(out + err)[:300])
+                self.assertLess(len(out) + len(err), 4000)
+                self.assertNotIn("a" * 60, out + err)
+                self.assertNotIn("HUERFANO", set(self.states(out).values()))
+                self.assert_clean_unreadable_warning(err)
+                for esc in escapes or ():
+                    self.assertIn(esc, err)
+
+    def test_f4t3_dest_of_74_characters_is_valid(self):
+        # Limite exacto: agents/ + alias de 64 + .md = 74 caracteres es un dest valido (el de 75 se rechaza en el caso 21).
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        long_dest = "agents/" + "a" * 64 + ".md"
+        self.f4_target(self.f4_old())
+        self.f4_state3(dests={"agents/alfa.md": long_dest})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out)[long_dest], "HUERFANO")
+        self.assertNotIn("aviso", err)
+
+    def test_f4t3_dest_outside_agents_is_checked_on_its_own(self):
+        # El chequeo "dest fuera de agents/" aislado: sin docs/agentes.md en el manifiesto ni en el estado, un agente
+        # con dest docs/agentes.md no choca con ninguna otra regla (ni path de otra entrada, ni ruta del manifiesto).
+        files = {k: v for k, v in SAMPLE.items() if k != "docs/agentes.md"}
+        self.make_source(dict(files, **{"agents/alfa.md": self.F4_NEW_ALFA}))
+        old = dict(files, **{"agents/alfa.md": self.F4_OLD_ALFA})
+        for dest, valid in (("docs/agentes.md", False), ("agents/otro.md", True)):
+            with self.subTest(dest=dest):
+                self.f4_target(old)
+                data = self.f4_state3(files=old)
+                self.f4_entry(data)["dest"] = dest
+                self.assertEqual(ar.state3_problem(data, sorted(files)) is None, valid)
+                self.dump_state(data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                st = self.states(out)
+                self.assertEqual(st["agents/alfa.md"], "MODIFICADO")
+                if valid:
+                    self.assertEqual(st["agents/otro.md"], "HUERFANO")  # control: el estado es valido
+                    self.assertNotIn("aviso", err)
+                else:
+                    self.assertNotIn("HUERFANO", set(st.values()))
+                    self.assert_clean_unreadable_warning(err)
+                    self.assertNotIn("HUERFANO=1", out)
+
+    def f4_big_state(self, schema, n=2000, clash=False):
+        files = []
+        for i in range(n):
+            h = "%064x" % (i + 1)
+            entry = {"path": "agents/p%d.md" % i, "sha256": h, "written": h, "level": 5}
+            if schema == 3:
+                entry["dest"] = "agents/q%d.md" % i
+            files.append(entry)
+        if clash:
+            files[0]["dest"] = "agents/p%d.md" % (n - 1)
+        return {"schema": schema, "algorithm": "sha256", "eol": "lf", "files": files}
+
+    def test_f4t3_schema3_validation_is_not_quadratic(self):
+        # 2000 entradas con dest distinto: tiempo del instalador relativo al esquema 2 equivalente (no depende de la
+        # maquina) y misma decision. Una busqueda por lista en la regla "dest igual al path de otra entrada" tardaba minutos.
+        self.make_source()
+        self.f4_target(dict(SAMPLE))
+        timings = {}
+        for name, state in (("2", self.f4_big_state(2)), ("3", self.f4_big_state(3)),
+                            ("3 con choque", self.f4_big_state(3, clash=True))):
+            with self.subTest(state=name):
+                self.dump_state(state)
+                start = time.perf_counter()
+                code, out, err = self.run_install("-DryRun")
+                timings[name] = time.perf_counter() - start
+                self.assertEqual(code, 0, (out + err)[:500])
+                if name == "3 con choque":
+                    self.assertIn("HUERFANO=0", out)
+                    self.assertIn("dest igual al path de otra entrada", err)
+                else:
+                    self.assertIn("HUERFANO=2000", out)
+                    self.assertEqual(err, "")
+        self.assertLessEqual(timings["3"], 3 * timings["2"] + 2, timings)
+        self.assertLessEqual(timings["3 con choque"], 3 * timings["2"] + 2, timings)
+
+    def test_f4t3_huge_values_give_short_stderr_in_state_and_manifest(self):
+        # Toda ruta del estado o del manifiesto puede medir cientos de miles de caracteres y casar con la lista
+        # permitida: los mensajes la recortan. Estado ausente: todo IGUAL, exit 0, solo el aviso en stderr.
+        self.make_source()
+        huge = "agents/" + "a" * 450000 + ".md"
+        h = "%064x" % 7
+
+        def entry(**kw):
+            base = {"path": huge, "sha256": h, "written": h, "level": 5}
+            base.update(kw)
+            return base
+
+        cases = {
+            "esquema 2, written invalido": (2, [entry(written="zz")]),
+            "esquema 2, level invalido": (2, [entry(level=9)]),
+            "esquema 2, sha256 invalido": (2, [entry(sha256="zz")]),
+            "esquema 2, ruta duplicada": (2, [entry(), entry()]),
+            "esquema 3, written invalido": (3, [entry(written="zz", dest="agents/x.md")]),
+            "esquema 3, level invalido": (3, [entry(level=9, dest="agents/x.md")]),
+            "esquema 3, sin dest": (3, [entry()]),
+            "esquema 3, dest no texto": (3, [entry(dest=5)]),
+            "esquema 3, dest fuera de agents": (3, [entry(dest="rules/agentes.md")]),
+            "esquema 3, dest demasiado largo": (3, [entry(dest="agents/" + "b" * 400000 + ".md")]),
+        }
+        for name, (schema, files) in cases.items():
+            with self.subTest(case=name):
+                self.f4_target(dict(SAMPLE))
+                self.dump_state({"schema": schema, "algorithm": "sha256", "eol": "lf", "files": files})
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, (out + err)[:500])
+                self.assertLess(len(err.encode("utf-8")), 1000, len(err))
+                self.assert_clean_unreadable_warning(err)
+        good = json.loads(read(self.src, "install-manifest.json"))
+        for name, files in (("sha256 invalido", [{"path": huge, "sha256": "zz"}]),
+                            ("ruta duplicada", [{"path": huge, "sha256": h}, {"path": huge, "sha256": h}])):
+            with self.subTest(case="manifiesto, " + name):
+                write(self.src, "install-manifest.json", json.dumps(dict(good, files=files)).encode("ascii"))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, (out + err)[:500])
+                self.assertLess(len(err.encode("utf-8")), 1000, len(err))
+
+    @staticmethod
+    def d5_reason(dest):
+        short = dest[:40] + "..." if len(dest) > 40 else dest
+        return ("el destino " + short + " de agents/sentinel.md es ahora un archivo del manifiesto; si el "
+                "repositorio anadio un agente con el nombre de tu alias, elige otro alias y repite con -Force")
+
+    def test_f4t3_case59_dest_equal_to_a_manifest_path_is_absent_with_the_d5_warning(self):
+        for alias in ('tester', 'a' * 50):
+            with self.subTest(alias=alias):
+                self.f4_case59(alias)
+
+    def f4_case59(self, alias):
+        dest = 'agents/' + alias + '.md'
+        # Caso 59 (E3, S14): el estado dice sentinel -> tester y el repositorio ahora trae agents/tester.md: el estado se
+        # trata como ausente con el aviso de D5; lo que cambio sale MODIFICADO (exit 3, nada escrito); con -Force
+        # respaldo (sin el estado invalido) y sobrescritura; ni ACTUALIZAR ni HUERFANO. Control: sin tester en el
+        # manifiesto el mismo estado es valido y agents/tester.md sale HUERFANO, sin aviso.
+        old = dict(SAMPLE, **{"agents/sentinel.md": b"sentinel viejo\n"})
+        new_source = dict(old, **{"agents/sentinel.md": b"sentinel nuevo\n", dest: b"agente del repositorio\n"})
+        edited = b"sentinel editado a mano\n"
+
+        def prepare(source):
+            self.make_source(source)
+            self.f4_target(dict(old, **{"agents/sentinel.md": edited}))
+            data = self.f4_state3(files=old, dests={"agents/sentinel.md": dest})
+            self.dump_state(data)
+            return data
+
+        state = prepare(new_source)
+        self.assertIsNotNone(ar.state3_problem(state, sorted(new_source)))
+        raw = read(self.target, self.STATE)
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 3, out + err)
+                st = self.states(out)
+                self.assertEqual(st["agents/sentinel.md"], "MODIFICADO")
+                self.assertEqual(st[dest], "NUEVO")
+                self.assertNotIn("ACTUALIZAR", set(st.values()))
+                self.assertNotIn("HUERFANO", set(st.values()))
+                self.assertIn("aviso:", err)
+                self.assertIn("no se pudo leer o no es valido (" + self.d5_reason(dest) + "). Se trata como ausente: no se respalda.", err)
+                self.assertTrue(err.isascii())
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(read(self.target, self.STATE), raw)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-Force", "-BackupDir", backup)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(self.d5_reason(dest), err)
+        self.assertEqual(self.f4_tree(backup), {"agents/sentinel.md": edited})
+        self.assertEqual(read(self.target, "agents/sentinel.md"), b"sentinel nuevo\n")
+        self.assertEqual(read(self.target, dest), b"agente del repositorio\n")
+        self.assert_state(5)
+        # Control: el manifiesto no trae agents/tester.md.
+        shutil.rmtree(backup, ignore_errors=True)
+        control_source = dict(new_source)
+        del control_source[dest]
+        state = prepare(control_source)
+        self.assertIsNone(ar.state3_problem(state, sorted(control_source)))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 3, out + err)
+        st = self.states(out)
+        self.assertEqual(st["agents/sentinel.md"], "MODIFICADO")
+        self.assertEqual(st[dest], "HUERFANO")
+        self.assertNotIn("aviso", err)
+
+    def test_f4t3_read_state_without_manifest_paths_fails_clearly(self):
+        # Llamar a Read-State sin la lista del manifiesto (o con $null) lanza un error claro, no desactiva la regla.
+        self.make_source()
+        self.f4_target(dict(SAMPLE))
+        self.write_state(dict(SAMPLE), schema=3)
+        self.patch_script("$prevLevel = $null",
+                          "try { [void](Read-State $statePath $null) } catch { Write-Err ('PROBE ' + $_.Exception.Message) }")
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("PROBE falta la lista de rutas del manifiesto (ManifestPaths)", err)
+
+    def test_f4t3_read_manifest_still_requires_schema_1(self):
+        # install-manifest.json sigue siendo esquema 1: un manifiesto con schema 3 (y dest) no es valido.
+        self.make_source()
+        good = json.loads(read(self.src, "install-manifest.json"))
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                bad = dict(good, schema=schema)
+                bad["files"] = [dict(f, dest=f["path"]) for f in good["files"]]
+                write(self.src, "install-manifest.json", json.dumps(bad).encode("ascii"))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("schema debe ser 1", err)
+                self.assertFalse(os.path.exists(self.target))
+
+    def test_f4t3_dest_never_leads_to_a_write_or_delete(self):
+        # Un estado forjado con un dest valido solo puede dar un HUERFANO informado: ni se borra, ni se respalda, ni
+        # se escribe en esa ruta (bytes y mtime intactos tras una instalacion real con -Force).
+        self.make_source()
+        disk = dict(SAMPLE)
+        disk["agents/ajeno.md"] = b"archivo del usuario\n"
+        self.f4_target(disk)
+        self.write_state(dict(SAMPLE), schema=3, dests={"agents/alfa.md": "agents/ajeno.md"})
+        before = snapshot(self.target)["agents\\ajeno.md" if os.name == "nt" else "agents/ajeno.md"]
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(self.states(out)["agents/ajeno.md"], "HUERFANO")
+        after = snapshot(self.target)["agents\\ajeno.md" if os.name == "nt" else "agents/ajeno.md"]
+        self.assertEqual(after, before)
+        self.assertNotIn("agents/ajeno.md", self.f4_tree(backup))
+        self.assertEqual(self.leftover_temps(), [])
 
 
 def _make_class(label, exe, reason):

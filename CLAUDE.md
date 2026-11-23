@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1382 pruebas, 229 saltadas (226 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1426 pruebas, 250 saltadas (247 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -201,7 +201,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
-- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, T1 y T2
+- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, T1 a T3
   hechas): `install.ps1` lee y valida la clave `aliases` de `synclayer-config.json` (lectura única;
   `Get-AliasTableProblem`, V1 a V8, tabla entera antes de escribir; líneas `Alias:`) pero NO la aplica: una
   tabla efectiva válida termina con exit 1 (guardia temporal, la retira T5). `$ReservedAliases` son nueve
@@ -212,6 +212,17 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   combinantes). `scribe` es subcadena de `escribe`, `describe`, `reescribe`, `sobrescribe`: sin límite de
   palabra se rompen. Cuidado al editar con la herramienta Bash: colapsa `\\` a `\` y los escapes `\u00xx`
   pasan a ser el carácter; construye la barra con `chr(92)` y verifica que el archivo no gane bytes no ASCII.
+  - Estado con esquema 3 (T3): `Read-State` lo lee (campo `dest` por entrada, la ruta real de destino) pero el
+    instalador sigue ESCRIBIENDO el esquema 2. Reglas de `dest` cuando difiere de `path`: `agents/<alias>.md`
+    de hasta 74 caracteres (`agents/` + 64 + `.md`, atado por una prueba a la regex del alias), sin colisión
+    con el `path` de otra entrada ni con ninguna ruta del manifiesto (`$ManifestPaths`, obligatorio en
+    `Read-State`); `dest` se lee con `Get-PropRaw` (estricto) y se valida con `HashSet` ordinales; los
+    mensajes usan `Format-SafeShort`. Un esquema 3 inválido es estado AUSENTE: nunca `ACTUALIZAR` ni
+    `HUERFANO`. `prevByDest` indexa lo escrito por ruta de destino y el huérfano es el destino previo que ya
+    no es destino actual; ningún camino usa `dest` para escribir, respaldar ni borrar.
+  - Límite conocido: `Get-Prop` desenrolla listas de un elemento, así que `path`, `sha256`, `written`,
+    `level`, `schema`, `algorithm` y `eol` del estado y del manifiesto aceptan `[valor]` (laxitud heredada de
+    las Fases 1 y 3, no es un hueco; P11 del plan decide cuándo corregirla).
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: T1,
   T2, T3, T4, T5 y T6 hechas; el cierre pendiente; T7 abierta hasta el cierre de la fase. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
@@ -262,7 +273,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (226 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (246 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los
