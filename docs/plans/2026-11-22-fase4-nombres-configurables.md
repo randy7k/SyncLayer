@@ -1088,3 +1088,7 @@ reabren»; por eso queda registrada con su motivo.
   los huérfanos.
 - **Punto anotado y no decidido.** P10: agente propio del usuario con el mismo `name:` que un alias.
   V8 no lo cubre. Lo decide el propietario antes de T5.
+
+## Decisión sobre P10 (2026-11-23, propietario)
+
+P10 se resuelve con el valor por defecto: **documentarlo y comprobarlo en G1, sin código nuevo.** Un agente propio del usuario en `<Target>/agents/` que declare el mismo `name:` que un alias no se detecta ni se avisa; se documenta como límite en T8 (README, «Límites del instalador» y la guía) y se añade como caso a la compuerta G1 del propietario (dos archivos del mismo ámbito con el mismo `name:` y cuerpos distintos, uno con `hooks:`: ver cuál carga y si el rol renombrado conserva su bloque `hooks:`). T5 no añade comprobación. Las 9 unidades no cambian y T5 ya no depende de una decisión pendiente. Si G1 mostrara que el agente del usuario puede ganar, el diseño vuelve a `atlas` antes de aplicar alias a un `~/.claude` real.
