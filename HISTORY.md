@@ -6,7 +6,7 @@
 
 Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
 con los valores por defecto de P1 a P14; rama `feat/configuraciones-dinamicas`. 9 unidades (T1 a T8 y el
-cierre), 3 cerradas (T1 a T3, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar.
+cierre), 4 cerradas (T1 a T4, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar.
 
 - Candidatas que entran: carpeta de planes configurable (clave `plans_dir` de `synclayer-config.json`,
   aplicada al instalar; sin la clave, bytes y salida idénticos a los de hoy); idioma del reporte de uso
@@ -21,6 +21,28 @@ cierre), 3 cerradas (T1 a T3, ver más abajo); la carpeta de planes se lee, se v
   editarla a mano o un agente de proyecto. (e) estrictez de la guarda: exige transformar el bloque `hooks:`,
   hoy prohibido, y un modo sin guarda contradice la falla cerrada; no se ofrece nada.
 - Pendiente del propietario, fuera del conteo: G1 de la Fase 5 (no bloquea), V1 y V2.
+
+### Añadido (Fase 5, T4)
+
+- Sólo pruebas: `install.ps1` no cambió. 10 `test_f5t4_*` en `tests/test_install.py` y los helpers `f5t4_repo`,
+  `f5t4_state_by_path` y `f5t4_split`.
+- Cubren la interacción alias, nivel y carpeta de planes con el repositorio real (nueve alias, niveles 5 y 3,
+  ningún nombre de rol residual; las 6 permutaciones del orden alias/planes/nivel contra la salida instalada,
+  con `segment_problems` vacío como condición previa), la celda del rol en `model:`/`effort:` y `Ajuste:` con la
+  ruta de destino, y `-DryRun` sobre una instalación existente.
+- Cambios de carpeta (K1 a K3: agregada, cambiada, quitada): `ACTUALIZAR`, nunca `MODIFICADO` sobre un destino
+  intacto, con y sin alias; el repositorio real da 3 `ACTUALIZAR` y 9 `IGUAL`. K4: edición a mano, exit 3 con sus
+  frases en orden y `-Force`. K5: estado ilegible, vacío, de esquema 99 o ausente, nunca `ACTUALIZAR`. K6:
+  reinstalar lo mismo no cambia nada, ni línea nueva salvo `Planes:`.
+- También: alias quitados con carpeta (huérfanos intactos, el estado vuelve al esquema 2) y la configuración
+  nunca escrita ni respaldada con alias, nivel y carpeta.
+- Mutaciones: 13 de `forge` murieron y `auditor` verificó 4 más. `auditor`: sin Critical ni Important; Minor
+  corregidos (constante muerta, caso 17 listaba la carpeta equivocada, rama duplicada, K6 comparado con la salida
+  sin `plans_dir`). Abiertos a propósito (Minor, aserciones opcionales): respaldo del estado y de los otros nueve
+  archivos en K1 a K3 del repo real, aserto redundante del esquema 2, respaldo del estado ilegible con `-Force`
+  final en K5. `shield`: no aplica (sin código de producción; la interacción ya la revisó en T3).
+- Pruebas: 10 `test_f5t4_*`. Suite: 1715 pruebas, 367 saltadas (365 contra pwsh y 2 de la rama POSIX del reporte
+  de uso).
 
 ### Añadido (Fase 5, T3)
 

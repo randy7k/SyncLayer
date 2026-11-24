@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1695 pruebas, 357 saltadas (355 contra pwsh, que no está instalado, y 2 de
+`__pycache__`. La suite: 1715 pruebas, 367 saltadas (365 contra pwsh, que no está instalado, y 2 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), más de una hora (unos 70 minutos). No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -302,7 +302,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     `tests/test_aliases.py` (`INVENTORY`) falla si aparece una forma nueva o cambia un conteo: actualízalo en el
     mismo cambio. `README.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` no se instalan ni se transforman.
 - Carpeta de planes (Fase 5, plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`; en curso, T1
-  a T3 hechas): `install.ps1` define `$PlansDirDefault`, `$PlansDirPattern` y `$PlansDirMaxLength` junto a
+  a T4 hechas): `install.ps1` define `$PlansDirDefault`, `$PlansDirPattern` y `$PlansDirMaxLength` junto a
   `$AliasRoles`. La referencia es `tests/plans_ref.py` (contrato: `script_constants` lee esas tres
   constantes de `install.ps1`) y las pruebas `tests/test_plans.py` (casos 1 a 9 y 31, sin PowerShell). El
   inventario falla si aparece una forma `<segmento>/plans/` distinta de `docs/plans/` (un alias válido podría
@@ -333,6 +333,18 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     El eco `Planes:` pasa por `Format-Safe`. El estado no guarda la carpeta: no hay «carpeta anterior» en la
     salida. Con carpeta efectiva la copia inversa `~/.claude` -> repo no vale. Pruebas: 37 `test_f5t3_*`. El efecto
     en Claude Code real (que `atlas` use la carpeta) NO está verificado (G1): no lo documentes como probado.
+  - T4 (hecha): SOLO pruebas; `install.ps1` no cambió. 10 `test_f5t4_*` en `tests/test_install.py` con los
+    helpers `f5t4_repo`, `f5t4_state_by_path` y `f5t4_split`. Cubren alias + nivel + carpeta con el repositorio
+    real (nueve alias, niveles 5 y 3, ningún nombre de rol residual, las 6 permutaciones del orden alias/planes/
+    nivel contra la salida instalada, con `segment_problems` vacío como condición previa), la celda del ROL en
+    `model:`/`effort:` y `Ajuste:` con la ruta de destino, `-DryRun` sobre una instalación existente, K1 a K3
+    (carpeta agregada, cambiada, quitada: `ACTUALIZAR`, nunca `MODIFICADO` sobre un destino intacto; con y sin
+    alias; repo real = 3 `ACTUALIZAR` y 9 `IGUAL`), K4 (edición a mano: exit 3 con sus frases en orden, y
+    `-Force`), K5 (estado ilegible, vacío, esquema 99 o ausente: nunca `ACTUALIZAR`), K6 (reinstalar lo mismo no
+    cambia nada, ni línea nueva salvo `Planes:`), alias quitados con carpeta (huérfanos intactos, el estado vuelve
+    al esquema 2) y la configuración nunca escrita ni respaldada. Abiertos a propósito (Minor, aserciones
+    opcionales): respaldo del estado y de los otros nueve archivos en K1 a K3 del repo real, aserto redundante
+    del esquema 2 y respaldo del estado ilegible con `-Force` final en K5.
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
   cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
@@ -383,7 +395,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (355 en la última corrida; las otras 2 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (365 en la última corrida; las otras 2 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

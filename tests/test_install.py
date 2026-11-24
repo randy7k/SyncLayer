@@ -7899,6 +7899,370 @@ class InstallCases:
         self.assert_plans_installed(files, PLANS_DIR, aliases={"scribe": "redactor"})
         self.assertTrue(os.path.exists(os.path.join(self.target, "agents", "amigo-qa.md")))
 
+    # --- Fase 5, T4: carpeta con alias y niveles, repositorio real y cambios (casos 17 y 25 a 29 del plan) ---
+    #
+    # Lo que T3 ya cubria (no se repite aqui), por prueba:
+    #   caso 25 (bytes = referencia, niveles 1 a 5, name: con el alias, texto de verificacion) ... test_f5t3_folder_alias_and_level_together_match_the_reference
+    #   caso 26 (13 archivos, once textos = referencia, hook con su hash, hooks: intactos, tres literales) ... test_f5t3_real_repository_nine_aliases_level_3_and_a_folder
+    #   caso 27 (Planes: y nada escrito, sobre destino vacio) ... test_f5t3_dryrun_with_a_folder_lists_the_line_and_writes_nothing
+    #   caso 28 (K1 a K3 con PLANS_SAMPLE sin alias ni nivel) ... test_f5t3_classification_folder_added_changed_and_removed
+    #   caso 29 (K4 con -Force, K5 sin estado, K6 reinstalar igual, sin alias) ... test_f5t3_classification_hand_edit_and_missing_state
+    #   caso 17 con la carpeta sola ... test_f5t2_case17_the_config_is_never_written_backed_up_or_listed
+    # Aqui se anade lo que faltaba: model:/effort:/Ajuste: de la celda del ROL con carpeta y alias; ausencia de residuo de
+    # roles y conmutacion de ordenes con el repositorio real en los niveles 5 y 3; -DryRun sobre una instalacion existente;
+    # K1 a K3 con alias y nivel (estado esquema 3, `written`, respaldo, sin huerfanos) y con el repositorio real; K4 con las
+    # frases del exit 3; K5 con estado ilegible; K6 con alias; huerfanos por quitar los alias con carpeta; el caso 17 con
+    # alias, nivel y carpeta.
+
+    def f5t4_repo(self):
+        """Repositorio real (doce archivos gestionados) como origen, con el manifiesto del repositorio."""
+        files = self.f4t6_repo_files()
+        self.f5t3_source(files)
+        shutil.copyfile(os.path.join(ROOT, "install-manifest.json"), os.path.join(self.src, "install-manifest.json"))
+        return files
+
+    def f5t4_state_by_path(self):
+        return {f["path"]: f for f in json.loads(read(self.target, self.STATE))["files"]}
+
+    def f5t4_split(self, files, table):
+        """(destinos de los cuatro archivos que nombran la carpeta, destinos de los demas) en PLANS_SAMPLE."""
+        dests = {rel: ar.dest_for(rel, table) for rel in files}
+        four = tuple(dests[r] for r in self.F5T3_FOUR)
+        return four, sorted(set(dests.values()) - set(four))
+
+    def test_f5t4_case25_role_cell_model_effort_and_ajuste_with_a_folder_and_aliases(self):
+        table = ALIAS_FOUR
+        for level in (1, 2, 3, 4, 5):
+            with self.subTest(level=level):
+                shutil.rmtree(self.target, ignore_errors=True)
+                files = self.f5t3_source()
+                self.f5t3_config(PLANS_DIR, level=level, aliases=table)
+                out, err = self.install_ok()
+                self.assert_plans_installed(files, PLANS_DIR, level=level, aliases=table)
+                ajustes = [l for l in out.splitlines() if l.startswith("Ajuste:")]
+                for role, alias in table.items():
+                    front = read(self.target, "agents/%s.md" % alias).decode("utf-8").split("\n---\n")[0]
+                    self.assertEqual(front.count("\nname: %s\n" % alias), 1, role)
+                    self.assertNotIn("\nname: %s\n" % role, front)
+                    self.assertFalse(os.path.exists(os.path.join(self.target, "agents", role + ".md")), role)
+                    self.assertFalse([l for l in ajustes if l.startswith("Ajuste: agents/%s.md " % role)], role)
+                    if level == 5:
+                        self.assertEqual(front.count("\nmodel: sonnet\n"), 1, role)
+                        self.assertNotIn("\neffort:", front)
+                        continue
+                    # la celda es la del ROL, no la del alias, y Ajuste: lleva la ruta de destino
+                    model, effort = self.f4t6_cell(level, role)
+                    self.assertEqual(front.count("\nmodel: %s\n" % model), 1, (level, role))
+                    if effort != "-":
+                        self.assertEqual(front.count("\neffort: %s\n" % effort), 1, (level, role))
+                    else:
+                        self.assertNotIn("\neffort:", front)
+                    self.assertIn("Ajuste: agents/%s.md  model: %s  effort: %s" % (alias, model, effort), ajustes)
+                self.assertEqual(len(ajustes), 0 if level == 5 else len(table))
+                # el hook y el agente fuera de los nueve no se tocan; el hooks: de sentinel (alias amigo-qa) queda intacto
+                self.assertEqual(read(self.target, "agents/alfa.md"), files["agents/alfa.md"])
+                self.assertIn(("\n".join(SENTINEL_HOOKS) + "\n").encode("ascii"), read(self.target, "agents/amigo-qa.md"))
+
+    def test_f5t4_case26_real_repository_no_role_residue_and_every_order_levels_5_and_3(self):
+        files = self.f4t6_repo_files()
+        # la conmutacion de ordenes solo vale mientras el inventario de formas <segmento>/plans/ pase (3.1.4)
+        self.assertEqual(pr.segment_problems(files), [])
+        table = dict(self.ALIAS_NINE)
+        texts = ["agents/%s.md" % r for r in ar.roles()] + ["rules/agentes.md", "docs/agentes.md"]
+        orders = [("alias", "plans", "level"), ("plans", "alias", "level"), ("level", "alias", "plans"),
+                  ("alias", "level", "plans"), ("plans", "level", "alias"), ("level", "plans", "alias")]
+        for level, folder in ((5, "a/b/c/d"), (3, PLANS_DIR)):
+            with self.subTest(level=level, folder=folder):
+                shutil.rmtree(self.target, ignore_errors=True)
+                self.f5t4_repo()
+                self.f5t3_config(folder, level=level, aliases=table)
+                out, err = self.install_ok()
+                self.assertNotIn("error", err)
+                self.assert_plans_installed(files, folder, level=level, aliases=table)
+                tree = self.f4_tree(self.target)
+                tree.pop(self.CONFIG)
+                self.assertEqual(len(tree), 13, sorted(tree))
+                for rel, data in files.items():
+                    dest = ar.dest_for(rel, table)
+                    for order in orders:
+                        self.assertEqual(tree[dest], pr.expected_bytes(rel, data, level, table, folder, order=order),
+                                         (rel, order))
+                hits = 0
+                for rel, data in tree.items():
+                    self.assertIsNone(self.F5T3_RX.search(data), rel)
+                    hits += data.count((folder + "/").encode("ascii"))
+                self.assertEqual(hits, 3)
+                # ningun nombre de rol en los once textos salvo las subcadenas conocidas
+                for rel in texts:
+                    text = tree[ar.dest_for(rel, table)].decode("utf-8")
+                    for role in ar.roles():
+                        self.assertFalse(role in self.F4T6_SCRIBE_WORDS.sub("", text).lower(), (rel, role))
+                # los cuatro agentes con guarda: bloque hooks: intacto; auditor, shield y debugger: frontmatter igual salvo
+                # name: y description:
+                for role in self.F4T6_HOOKED:
+                    src = files["agents/%s.md" % role].decode("utf-8").replace("\r\n", "\n").split("\n")
+                    dst = tree["agents/%s.md" % table[role]].decode("utf-8").split("\n")
+                    close = src.index("---", 1)
+                    self.assertEqual(dst.index("---", 1), close)
+                    hooks = [i for i in range(1, close) if src[i].startswith("hooks:")]
+                    self.assertTrue(hooks, role)
+                    self.assertEqual(dst[hooks[0]:close], src[hooks[0]:close], role)
+                    if role != "sentinel":
+                        for i in range(1, close):
+                            if not src[i].startswith(("name:", "description:")):
+                                self.assertEqual(dst[i], src[i], (role, i))
+                self.assertEqual(tree["hooks/agent_guard.py"], files["hooks/agent_guard.py"].replace(b"\r\n", b"\n"))
+
+    def test_f5t4_case27_dryrun_over_an_installation_lists_the_line_and_the_updates_and_writes_nothing(self):
+        files = self.f5t3_source()
+        self.f5t3_config(None, level=3, aliases=ALIAS_FOUR)
+        self.install_ok()
+        self.f5t3_config(PLANS_DIR, level=3, aliases=ALIAS_FOUR)
+        four, others = self.f5t4_split(files, ALIAS_FOUR)
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+        lines = out.splitlines()
+        self.assertEqual([l for l in lines if l.startswith("Planes:")], ["Planes: " + PLANS_DIR])
+        last_alias = max(i for i, l in enumerate(lines) if l.startswith("Alias:"))
+        self.assertEqual(lines[last_alias + 1], "Planes: " + PLANS_DIR)
+        rows = self.states(out)
+        self.assertEqual({d: rows[d] for d in four}, {d: "ACTUALIZAR" for d in four})
+        self.assertEqual({d: rows[d] for d in others}, {d: "IGUAL" for d in others})
+        self.assertIn("Resumen: NUEVO=0 IGUAL=%d ACTUALIZAR=4 MODIFICADO=0 HUERFANO=0" % len(others), lines)
+        self.assertNotIn("Copiado", out)
+        self.assertNotIn("Verificado", out)
+        # lo que muestra el simulacro es lo que despues hace la real
+        code2, out2, err2 = self.run_install()
+        self.assertEqual(code2, 0, out2 + err2)
+        # el plan: hasta la linea Resumen:, sin Modo: ni la carpeta de respaldo (lleva una marca de tiempo)
+        plan = lambda text: [l for l in text.split("\nResumen:", 1)[0].splitlines()
+                             if not l.startswith(("Modo:", "Respaldo:"))]
+        self.assertEqual(plan(out), plan(out2))
+        self.assertIn("Respaldado: agents/mapa.md", out2)
+        self.assert_plans_installed(files, PLANS_DIR, level=3, aliases=ALIAS_FOUR)
+
+    def test_f5t4_case28_k1_to_k3_with_aliases_and_level(self):
+        files = self.f5t3_source()
+        table, level = ALIAS_FOUR, 3
+        four, others = self.f5t4_split(files, table)
+        self.f5t3_config(None, level=level, aliases=table)
+        self.install_ok()
+        steps = ((PLANS_DIR, "K1"), ("planes", "K2"), (None, "K3"), ("x/y", "K1"), ("docs/plans", "K3 por defecto"),
+                 (PLANS_DIR, "K1"))
+        for n, (folder, label) in enumerate(steps):
+            with self.subTest(step=n, kind=label, folder=folder):
+                self.f5t3_config(folder, level=level, aliases=table)
+                old = {d: read(self.target, d) for d in four}
+                old_state = read(self.target, self.STATE)
+                old_by_path = self.f5t4_state_by_path()
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, out + err)
+                rows = self.states(out)
+                self.assertEqual({d: rows[d] for d in four}, {d: "ACTUALIZAR" for d in four})
+                self.assertEqual({d: rows[d] for d in others}, {d: "IGUAL" for d in others})
+                self.assertIn("MODIFICADO=0 HUERFANO=0", out)
+                backup = os.path.join(self.tmp, "respaldo-f5t4-%d" % n)
+                out, err = self.install_ok("-BackupDir", backup)
+                self.assertEqual({d: self.states(out)[d] for d in four}, {d: "ACTUALIZAR" for d in four})
+                self.assertEqual(self.f4t7_avisos(err), [])
+                for d in four:
+                    self.assertEqual(read(backup, d), old[d], d)
+                self.assertEqual(read(backup, self.STATE), old_state)
+                for d in others:
+                    self.assertFalse(os.path.exists(os.path.join(backup, *d.split("/"))), d)
+                self.assert_plans_installed(files, folder, level=level, aliases=table)
+                self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+                # written: cambia en los cuatro (rol), igual en los demas
+                by_path = self.f5t4_state_by_path()
+                for rel in files:
+                    changed = rel in self.F5T3_FOUR
+                    self.assertEqual(by_path[rel]["written"] != old_by_path[rel]["written"], changed, rel)
+                    self.assertEqual(by_path[rel]["sha256"], old_by_path[rel]["sha256"], rel)
+
+    def test_f5t4_case28_real_repository_folder_added_changed_and_removed(self):
+        files = self.f5t4_repo()
+        table = dict(self.ALIAS_NINE)
+        three = tuple(ar.dest_for(r, table) for r in self.F5T3_THREE)
+        others = sorted(set(ar.dest_for(r, table) for r in files) - set(three))
+        self.f5t3_config(None, level=3, aliases=table)
+        self.install_ok()
+        for n, folder in enumerate((PLANS_DIR, "planes", None)):
+            with self.subTest(folder=folder):
+                self.f5t3_config(folder, level=3, aliases=table)
+                old = {d: read(self.target, d) for d in three}
+                backup = os.path.join(self.tmp, "respaldo-real-%d" % n)
+                out, err = self.install_ok("-BackupDir", backup)
+                rows = self.states(out)
+                self.assertEqual({d: rows[d] for d in three}, {d: "ACTUALIZAR" for d in three})
+                self.assertEqual({d: rows[d] for d in others}, {d: "IGUAL" for d in others})
+                self.assertEqual(len(others), 9)
+                self.assertIn("Resumen: NUEVO=0 IGUAL=9 ACTUALIZAR=3 MODIFICADO=0 HUERFANO=0", out.splitlines())
+                for d in three:
+                    self.assertEqual(read(backup, d), old[d], d)
+                self.assert_plans_installed(files, folder, level=3, aliases=table)
+
+    def test_f5t4_case29_k4_hand_edit_exit3_phrases_and_force(self):
+        for aliased, rel in ((False, "docs/agentes.md"), (False, "agents/atlas.md"), (True, "agents/atlas.md"),
+                             (True, "rules/agentes.md")):
+            with self.subTest(aliased=aliased, rel=rel):
+                shutil.rmtree(self.target, ignore_errors=True)
+                table = ALIAS_FOUR if aliased else {}
+                files = self.f5t3_source()
+                self.f5t3_config(PLANS_DIR, level=3, aliases=table if aliased else None)
+                self.install_ok()
+                dest = ar.dest_for(rel, table)
+                write(self.target, dest, b"editado a mano\n")
+                before = snapshot(self.target)
+                listing = sorted(os.listdir(self.tmp))
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 3, out + err)
+                    rows = self.states(out)
+                    self.assertEqual([d for d, s in rows.items() if s == "MODIFICADO"], [dest])
+                    self.assertNotIn("ACTUALIZAR", rows.values())
+                    text = err.replace("\r\n", "\n")
+                    self.assertIn("(MODIFICADO):\n  %s\nNo se escribio nada." % dest, text)
+                    # la frase del alias solo si el destino difiere del rol; la de model:/effort: siempre y al final
+                    self.assertEqual(self.F4T7_ALIAS_HINT in text, dest != rel)
+                    self.assertTrue(text.strip().endswith(self.F4T7_MODEL_HINT), text)
+                    if dest != rel:
+                        self.assertLess(text.index(self.F4T7_ALIAS_HINT), text.index(self.F4T7_MODEL_HINT))
+                    self.assertEqual(snapshot(self.target), before)
+                    self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+                backup = os.path.join(self.tmp, "respaldo-f5t4-k4-%d-%s" % (aliased, rel.replace("/", "-")))
+                out, err = self.install_ok("-Force", "-BackupDir", backup)
+                self.assertEqual(read(backup, dest), b"editado a mano\n")
+                self.assertEqual(self.states(out)[dest], "MODIFICADO")
+                self.assert_plans_installed(files, PLANS_DIR, level=3, aliases=table)
+
+    def test_f5t4_case29_k5_unreadable_or_unknown_state_is_never_actualizar(self):
+        table = ALIAS_FOUR
+        bad_states = (("ilegible", b"{no es json"), ("vacio", b""), ("esquema desconocido", b'{"schema": 99, "files": []}'),
+                      ("ausente", None))
+        for label, state in bad_states:
+            with self.subTest(state=label):
+                shutil.rmtree(self.target, ignore_errors=True)
+                files = self.f5t3_source()
+                self.f5t3_config(PLANS_DIR, level=3, aliases=table)
+                self.install_ok()
+                state_path = os.path.join(self.target, self.STATE)
+                if state is None:
+                    os.remove(state_path)
+                else:
+                    write(self.target, self.STATE, state)
+                # con los bytes esperados: IGUAL en todo, y el estado se vuelve a escribir
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+                out, err = self.install_ok()
+                self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+                self.assert_plans_installed(files, PLANS_DIR, level=3, aliases=table)
+                # con bytes distintos (los de la carpeta anterior): MODIFICADO, nunca ACTUALIZAR
+                os.remove(state_path) if state is None else write(self.target, self.STATE, state)
+                write(self.target, "rules/agentes.md",
+                      pr.expected_bytes("rules/agentes.md", files["rules/agentes.md"], 3, table, None))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                rows = self.states(out)
+                self.assertEqual(rows["rules/agentes.md"], "MODIFICADO")
+                self.assertNotIn("ACTUALIZAR", rows.values())
+                self.assertTrue(err.replace("\r\n", "\n").strip().endswith(self.F4T7_MODEL_HINT), err)
+                out, err = self.install_ok("-Force", "-BackupDir", os.path.join(self.tmp, "respaldo-f5t4-k5-" + label.replace(" ", "-")))
+                self.assert_plans_installed(files, PLANS_DIR, level=3, aliases=table)
+
+    def test_f5t4_case29_k6_reinstalling_the_same_changes_nothing_with_aliases_level_and_folder(self):
+        files = self.f5t3_source()
+        table = ALIAS_FOUR
+        self.f5t3_config(PLANS_DIR, level=3, aliases=table)
+        first, err = self.install_ok()
+        # misma configuracion sin plans_dir, en otro destino: la salida de referencia
+        with_folder = self.target
+        bare = os.path.join(self.tmp, "destino-sin-planes")
+        self.target = bare
+        self.f5t3_config(None, level=3, aliases=table)
+        self.install_ok()
+        self.target = with_folder
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        quiet = lambda text, target: [l.replace(target, "<destino>") for l in text.splitlines()
+                                      if not l.startswith(("Planes:", "Respaldo:"))]
+        for mode in (["-DryRun"], [], ["-BackupDir", os.path.join(self.tmp, "respaldo-f5t4-k6")]):
+            code, out, err = self.run_install(*mode)
+            self.assertEqual(code, 0, out + err)
+            self.target = bare
+            code_bare, out_bare, err_bare = self.run_install(*mode)
+            self.target = with_folder
+            self.assertEqual(code_bare, 0, out_bare + err_bare)
+            self.assertEqual(quiet(out, with_folder), quiet(out_bare, bare))
+            self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+            self.assertEqual([l for l in out.splitlines() if l.startswith("Planes:")], ["Planes: " + PLANS_DIR])
+            self.assertIn("Resumen: NUEVO=0 IGUAL=%d ACTUALIZAR=0 MODIFICADO=0 HUERFANO=0" % len(files), out.splitlines())
+            self.assertNotIn("Copiado", out)
+            self.assertEqual(self.f4t7_avisos(err), [])
+            self.assertEqual(snapshot(self.target), before)
+            self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+
+    def test_f5t4_alias_removed_with_a_folder_keeps_the_orphans_and_goes_back_to_schema_2(self):
+        files = self.f5t3_source()
+        table = ALIAS_FOUR
+        self.f5t3_config(PLANS_DIR, level=3, aliases=table)
+        self.install_ok()
+        old = {}
+        for alias in table.values():
+            path = os.path.join(self.target, "agents", alias + ".md")
+            stamp = os.stat(path).st_mtime_ns - 5_000_000_000
+            os.utime(path, ns=(stamp, stamp))
+            old[alias] = (read(self.target, "agents/%s.md" % alias), stamp)
+        self.f5t3_config(PLANS_DIR, level=3)
+        before = snapshot(self.target)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        rows = self.states(out)
+        for role, alias in table.items():
+            self.assertEqual(rows["agents/%s.md" % alias], "HUERFANO", alias)
+            self.assertEqual(rows["agents/%s.md" % role], "NUEVO", role)
+        self.assertEqual(rows["rules/agentes.md"], "ACTUALIZAR")
+        self.assertEqual(rows["docs/agentes.md"], "ACTUALIZAR")
+        self.assertNotIn("MODIFICADO", rows.values())
+        self.assertIn("Resumen: NUEVO=4 IGUAL=2 ACTUALIZAR=2 MODIFICADO=0 HUERFANO=4", out.splitlines())
+        self.assertEqual(sorted(self.f4t7_avisos(err)),
+                         sorted(self.f4t7_aviso("agents/%s.md" % a, "agents/%s.md" % r) for r, a in table.items()))
+        self.assertEqual(snapshot(self.target), before)
+        out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo-f5t4-orf"))
+        self.assert_plans_installed(files, PLANS_DIR, level=3)
+        self.assertNotIn(b'"dest"', read(self.target, self.STATE))
+        self.assertIn(b'"schema": 2', read(self.target, self.STATE))
+        for alias, (data, stamp) in old.items():
+            path = os.path.join(self.target, "agents", alias + ".md")
+            self.assertEqual(read(self.target, "agents/%s.md" % alias), data, alias)
+            self.assertEqual(os.stat(path).st_mtime_ns, stamp, alias)
+            self.assertNotIn("agents/%s.md" % alias, self.f5t4_state_by_path())
+
+    def test_f5t4_case17_config_with_aliases_level_and_folder_is_never_touched(self):
+        self.f5t3_source()
+        path = self.f5t3_config(PLANS_DIR, level=3, aliases=ALIAS_FOUR)
+        old = os.stat(path).st_mtime_ns - 5_000_000_000
+        os.utime(path, ns=(old, old))
+        before = snapshot(self.target)[self.CONFIG]
+        self.install_ok()
+        self.assertEqual(snapshot(self.target)[self.CONFIG], before)
+        write(self.target, "agents/mapa.md", b"editado a mano\n")
+        backup = os.path.join(self.tmp, "respaldo-f5t4-c17")
+        for mode, code in ((["-DryRun"], 3), (["-BackupDir", backup], 3), (["-Force", "-BackupDir", backup], 0)):
+            got, out, err = self.run_install(*mode)
+            self.assertEqual(got, code, out + err)
+            self.assertEqual(snapshot(self.target)[self.CONFIG], before)
+        found = []
+        for dirpath, _dirs, names in os.walk(backup):
+            found += [n for n in names if n == self.CONFIG]
+        self.assertEqual(found, [])
+        self.assertEqual(read(backup, "agents/mapa.md"), b"editado a mano\n")
+        self.assertEqual([n for n in os.listdir(self.target) if n.startswith(self.CONFIG) and n != self.CONFIG], [])
+
 
 def f4t6_normalize_paths(text, pairs):
     """Reemplaza cada ruta por su etiqueta, tal cual y en la forma escapada por Format-Safe de install.ps1 (todo lo

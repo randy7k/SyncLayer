@@ -5,7 +5,8 @@ de P1 a P14**. Rama: `feat/configuraciones-dinamicas`. Avance: T1 cerrada (2026-
 (43 pruebas, casos 1 a 9 y 31). T2 cerrada (2026-11-24): clave `plans_dir` leída y validada (`Get-PlansDirProblem`,
 L1 a L5) con guarda temporal que impide aplicarla; 22 pruebas nuevas (3 estáticas y 19 `test_f5t2_*`), suite de 1663 pruebas. T3 cerrada (2026-11-24): `plans_dir` se aplica al instalar (`Get-PlansMatchIndexes`,
 `ConvertTo-PlansText`, `ConvertTo-PlansBytes`, bloque `# Planes:`), guarda temporal retirada; 37 pruebas `test_f5t3_*`,
-suite de 1695 pruebas, 357 saltadas.
+suite de 1695 pruebas, 357 saltadas. T4 cerrada (2026-11-24): sólo pruebas (10 `test_f5t4_*` en `tests/test_install.py`;
+`install.ps1` no cambió), suite de 1715 pruebas, 367 saltadas.
 
 Fuentes: [`2026-11-19-backlog-configuracion-y-reportes.md`](2026-11-19-backlog-configuracion-y-reportes.md)
 (Fase 5 y «Restricción de diseño: simple»),
