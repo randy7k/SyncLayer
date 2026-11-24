@@ -25,9 +25,9 @@ MANIFEST_NAME = "install-manifest.json"
 # y cualquier agents/<nombre>.md con nombre [a-z0-9_-]+. NO es una lista cerrada de doce
 # nombres: hoy se instalan doce archivos, pero el patron acepta cualquier agente nuevo.
 # install.ps1 lleva la misma regex, pero con \z: en .NET \Z (y $) aceptan un \n final, \z no.
-# El lookahead excluye los nombres reservados de Windows (con, prn, aux, nul, com1-9, lpt1-9).
+# El lookahead excluye los nombres reservados de Windows (con, prn, aux, nul, com0-9, lpt0-9).
 ALLOWED = re.compile(
-    r"^(agents/(?!(con|prn|aux|nul|com[1-9]|lpt[1-9])\.)[a-z0-9_-]+\.md|rules/agentes\.md|hooks/agent_guard\.py|docs/agentes\.md)\Z"
+    r"^(agents/(?!(con|prn|aux|nul|com[0-9]|lpt[0-9])\.)[a-z0-9_-]+\.md|rules/agentes\.md|hooks/agent_guard\.py|docs/agentes\.md)\Z"
 )
 
 # Carpetas donde un archivo fuera de la lista permitida obliga a decidir si se instala.

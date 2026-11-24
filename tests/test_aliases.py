@@ -476,10 +476,10 @@ class TableValidation(unittest.TestCase):
                 self.assertProblem({"forge": word}, "palabra reservada de YAML")
 
     def test_v3_windows_reserved_names(self):
-        for word in ("con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9"):
+        for word in ("con", "prn", "aux", "nul", "com0", "com1", "com9", "lpt0", "lpt1", "lpt9"):
             with self.subTest(word=word):
                 self.assertProblem({"forge": word}, "nombre reservado de Windows")
-        for ok in ("com0", "com10", "lpt0", "conx", "nulo"):
+        for ok in ("com10", "lpt10", "conx", "nulo"):
             self.assertIsNone(ar.validate_table({"forge": ok}), ok)
 
     def test_v4_builtin_agents(self):

@@ -15,8 +15,8 @@ name: <alias> y los textos gestionados cambian el nombre del rol por el alias; s
 cambia nada). Un archivo invalido, o una carpeta o un enlace con ese
 nombre, detiene la instalacion con exit 1 antes de escribir nada (tambien con -DryRun). Con el nivel 1 a 4, el
 instalador reescribe model: y effort: del frontmatter de los seis agentes modificables (atlas, forge, sentinel,
-scribe, scout, oracle) con los valores de la tabla de niveles; auditor, shield, debugger, el hook y el resto
-quedan como el origen. El nivel 5 es el repositorio tal cual. El instalador nunca escribe, respalda ni borra
+scribe, scout, oracle) con los valores de la tabla de niveles; auditor, shield, debugger y el resto quedan como
+el origen, o con alias si hay tabla efectiva; solo el hook queda siempre como el origen. El nivel 5 es el repositorio tal cual. El instalador nunca escribe, respalda ni borra
 el archivo de configuracion.
 
 Estado: esquema 2 (esquema 3, con dest por archivo, si algun archivo se escribe en una ruta distinta de la de su
@@ -62,13 +62,13 @@ $ErrorActionPreference = 'Stop'
 # hoy el repositorio instala doce archivos, pero el patron acepta cualquier agente nuevo. Misma
 # regex que ALLOWED de tools/build_manifest.py, pero con \z: en .NET \Z y $ aceptan un salto de
 # linea final. El lookahead excluye los nombres reservados de Windows (con, prn, aux, nul,
-# com1-9, lpt1-9).
+# com0-9, lpt0-9).
 #
 # Codigos de salida por fase (inconsistencia documentada, T6 la recoge en el README): un punto de
 # reanalisis hallado al clasificar o al respaldar (antes de escribir en el destino) da exit 1; uno
 # hallado al copiar, al verificar o al escribir el estado (ya se escribio algo, o se pudo escribir
 # fuera) da exit 4. Igual con un archivo bloqueado: antes de escribir es exit 1; al escribir, 4.
-$AllowedPattern = '^(agents/(?!(con|prn|aux|nul|com[1-9]|lpt[1-9])\.)[a-z0-9_-]+\.md|rules/agentes\.md|hooks/agent_guard\.py|docs/agentes\.md)\z'
+$AllowedPattern = '^(agents/(?!(con|prn|aux|nul|com[0-9]|lpt[0-9])\.)[a-z0-9_-]+\.md|rules/agentes\.md|hooks/agent_guard\.py|docs/agentes\.md)\z'
 $StateName = 'synclayer-manifest.json'
 $ManifestName = 'install-manifest.json'
 # Tamano maximo del estado previo que se interpreta (entrada no confiable): el de doce archivos son
@@ -1399,7 +1399,7 @@ try {
     # Nivel: bytes a escribir por archivo. Con el nivel 5 (el repositorio) son los bytes de $aliasBytes (los canonicos
     # del origen, con alias si hay tabla efectiva) y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
     # manifiesto pasan por ConvertTo-LevelBytes con su celda de $LevelRows; el resto (auditor, shield,
-    # debugger, el hook, las reglas, la guia) queda en los bytes del origen. Un error de renderizado es un
+    # debugger, el hook, las reglas, la guia) queda en los bytes de $aliasBytes (los del origen, o con alias si hay tabla efectiva). Un error de renderizado es un
     # defecto del origen que el manifiesto no detecta: exit 1 antes de escribir, tambien en -DryRun.
     # $outHash (hash de $outBytes) es lo que clasifica, verifica y se guarda en el estado como written.
     # Sin tabla efectiva de alias, con el nivel 5 los mensajes de verificacion dicen lo de siempre (el manifiesto):
@@ -1747,7 +1747,7 @@ try {
     }
 
     # Paso 7: copiar los bytes de salida (las pruebas inyectan codigo justo despues de esta linea).
-    # Son los canonicos ya verificados en memoria, o su renderizado por nivel; cada uno se verifica al instante.
+    # Son los canonicos ya verificados en memoria (o con alias), o su renderizado por nivel; cada uno se verifica al instante.
     foreach ($row in $writeRows) {
         # $rel es el rol (bytes y hash esperados); $destPath, la ruta de destino donde se escribe.
         $rel = $row.Path

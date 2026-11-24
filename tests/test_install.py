@@ -669,7 +669,7 @@ class InstallCases:
             "//srv/share/a.md", "\\\\srv\\share\\a.md",
             "agents/a‐b.md", "agents/K.md", "agents/ａ.md",
         ] + ["agents/" + n + ".md" for n in
-             ("con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9")]
+             ("con", "prn", "aux", "nul", "com0", "com1", "com9", "lpt0", "lpt1", "lpt9")]
         for bad in bad_paths:
             with self.subTest(path=bad):
                 m = dict(base)
@@ -4299,7 +4299,7 @@ class InstallCases:
 
     def test_t2_case13_reserved_names_yaml_words_and_windows_names(self):
         words = (ar.reserved() + ["Explore", "PLAN", "General-Purpose"] + ar.yaml_words() +
-                 ["con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9"])
+                 ["con", "prn", "aux", "nul", "com0", "com1", "com9", "lpt0", "lpt1", "lpt9"])
         self.assertIn("fork", ar.reserved())
         self.assertIn("output-style-setup", ar.reserved())
         for value in words:
@@ -4385,7 +4385,7 @@ class InstallCases:
         # Pasan V1 a V8 (y de ahi se aplican): las dos mitades del veredicto de cada regla.
         valid = [{"forge": "dev"}, {"sentinel": "amigo-qa", "forge": "dev"}, dict(self.ALIAS_NINE),
                  {"forge": "a" * 64}, {"forge": "forge_2"}, {"forge": "forgery"}, {"forge": "sentinels"},
-                 {"forge": "com10"}, {"forge": "com0"}, {"forge": "yes-no"}, {"forge": "x1"}, {"forge": "y2"},
+                 {"forge": "com10"}, {"forge": "lpt10"}, {"forge": "yes-no"}, {"forge": "x1"}, {"forge": "y2"},
                  {"forge": "explorer"}, {"forge": "forge", "scribe": "dev"}, {"forge": "conx"}, {"forge": "nulo"}]
         for table in valid:
             self.assertIsNone(ar.validate_table(table, manifest_paths=sorted(SAMPLE)), table)
@@ -6914,6 +6914,74 @@ class InstallCases:
         self.assertEqual(os.stat(config).st_mtime_ns, mtime)
         self.assertNotIn(self.CONFIG, self.f4_tree(backup2))
         self.assertTrue(self.f4_tree(backup2))
+
+    # --- Fase 4, cierre C1: bordes entre alias, nivel, estado esquema 3, -Force y configuracion invalida ---
+
+    def test_f4c1_invalid_level_with_valid_aliases_exit1_in_both_modes_and_no_alias_line(self):
+        for level in (0, 6, "3", None):
+            with self.subTest(level=level):
+                data = json.dumps({"level": level, "aliases": ALIAS_ONE}).encode("ascii")
+                self.assert_config_rejected(data, "level debe ser un entero de 1 a 5")
+                shutil.rmtree(self.target)
+
+    def test_f4c1_invalid_alias_table_with_force_writes_and_backs_up_nothing(self):
+        self.f4t7_start(ALIAS_ONE)
+        path = os.path.join(self.target, "agents", "amigo-qa.md")
+        with open(path, "ab") as f:
+            f.write(b"editado a mano\n")
+        self.f4t7_config({"sentinel": "Mal"}, level=2)
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        backup = os.path.join(self.tmp, "respaldo")
+        for flags in (["-Force", "-BackupDir", backup], ["-Force", "-DryRun", "-BackupDir", backup]):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assert_quiet_failure(code, out, err, before, listing)
+                self.assertIn(self.CONFIG_ERR + "el alias de sentinel ", err)
+                self.assertNotIn("Alias:", out)
+                self.assertFalse(os.path.exists(backup))
+
+    def test_f4c1_schema3_state_with_mixed_levels_prints_no_previous_level(self):
+        # Contrato de T5: `Nivel anterior:` solo si TODAS las entradas del estado previo tienen el mismo nivel.
+        self.f4t7_start(ALIAS_ONE, level=3)
+        state_path = os.path.join(self.target, self.STATE)
+        data = json.loads(read(self.target, self.STATE))
+        self.assertEqual(data["schema"], 3)
+        self.assertEqual({e["level"] for e in data["files"]}, {3})
+        self.f4t7_config(ALIAS_ONE, level=1)
+        out, err = self.install_ok("-DryRun")
+        self.assertIn("Nivel anterior: 3", out.splitlines())  # control: nivel uniforme
+        data["files"][0]["level"] = 2
+        with open(state_path, "wb") as f:
+            f.write((json.dumps(data, indent=2) + "\n").encode("ascii"))
+        for flags in (["-DryRun"], []):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertNotEqual(code, 1, out + err)
+                self.assertIn("Nivel: 1 (synclayer-config.json)", out.splitlines())
+                self.assertNotIn("Nivel anterior", out)
+
+    def test_f4c1_schema3_state_with_a_foreign_valid_dest_keeps_the_real_alias_file_igual(self):
+        # Estado esquema 3 valido pero manipulado: dest apunta a otra ruta. El archivo de alias real, intacto y con los
+        # bytes que se escribirian, es IGUAL; la ruta falsa es HUERFANO y nunca se toca (no existe, no hay aviso).
+        files = self.f4t7_start(ALIAS_ONE)
+        state_path = os.path.join(self.target, self.STATE)
+        data = json.loads(read(self.target, self.STATE))
+        moved = [e for e in data["files"] if e["path"] == "agents/sentinel.md"]
+        self.assertEqual(len(moved), 1)
+        self.assertEqual(moved[0]["dest"], "agents/amigo-qa.md")
+        moved[0]["dest"] = "agents/otro.md"
+        with open(state_path, "wb") as f:
+            f.write((json.dumps(data, indent=2) + "\n").encode("ascii"))
+        before = snapshot(self.target)
+        out, err = self.install_ok("-DryRun")
+        st = self.states(out)
+        self.assertEqual(st["agents/amigo-qa.md"], "IGUAL")
+        self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), ["agents/otro.md"])
+        self.assertEqual(self.f4t7_avisos(err), [])
+        self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+        self.assertEqual(snapshot(self.target), before)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "otro.md")))
 
 
 def f4t6_normalize_paths(text, pairs):
