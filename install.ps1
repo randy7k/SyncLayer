@@ -87,6 +87,14 @@ $AliasRoles = @('atlas', 'auditor', 'debugger', 'forge', 'oracle', 'scout', 'scr
 $ReservedAliases = @('explore', 'plan', 'general-purpose', 'claude', 'statusline-setup', 'claude-code-guide', 'web-fetch', 'fork', 'output-style-setup')
 $YamlWords = @('true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n')
 
+# Datos de la carpeta de planes (Fase 5, clave plans_dir). Aun sin uso: una definicion por linea. Contrato con
+# tests/test_plans.py y tests/plans_ref.py: son los mismos que los de la referencia. $PlansDirPattern: de una a cuatro
+# carpetas separadas por /, en minusculas; el valor no puede inyectar Markdown ni instrucciones en un prompt. En .NET
+# la expresion usa \z (con \Z y $ un salto de linea final pasaria).
+$PlansDirDefault = 'docs/plans'
+$PlansDirPattern = '^[a-z0-9][a-z0-9_-]{0,31}(/[a-z0-9][a-z0-9_-]{0,31}){0,3}\z'
+$PlansDirMaxLength = 64
+
 # Tabla de niveles (Fase 3). La usa el renderizado de los niveles 1 a 4 (ConvertTo-LevelBytes). Una fila
 # por linea, nivel|agente|modelo|esfuerzo, con - para "sin effort:". El nivel 5 es el repositorio y
 # no tiene filas. auditor, shield y debugger no estan: quedan fijos en todos los niveles. Contrato

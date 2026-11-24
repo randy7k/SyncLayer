@@ -6,7 +6,7 @@
 
 Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
 con los valores por defecto de P1 a P14; rama `feat/configuraciones-dinamicas`. 9 unidades (T1 a T8 y el
-cierre), 0 cerradas. Todavía no hay código.
+cierre), 1 cerrada (T1, ver más abajo); la carpeta de planes aún no se aplica.
 
 - Candidatas que entran: carpeta de planes configurable (clave `plans_dir` de `synclayer-config.json`,
   aplicada al instalar; sin la clave, bytes y salida idénticos a los de hoy); idioma del reporte de uso
@@ -21,6 +21,25 @@ cierre), 0 cerradas. Todavía no hay código.
   editarla a mano o un agente de proyecto. (e) estrictez de la guarda: exige transformar el bloque `hooks:`,
   hoy prohibido, y un modo sin guarda contradice la falla cerrada; no se ofrece nada.
 - Pendiente del propietario, fuera del conteo: G1 de la Fase 5 (no bloquea), V1 y V2.
+
+### Añadido (Fase 5, T1)
+
+- `install.ps1` define tres constantes sin uso junto a `$AliasRoles`: `$PlansDirDefault` (`docs/plans`),
+  `$PlansDirPattern` (de una a cuatro carpetas en minúsculas separadas por `/`, con `\z`) y
+  `$PlansDirMaxLength` (64). El instalador se comporta igual que antes (10 escenarios comparados byte a byte
+  con la base).
+- `tests/plans_ref.py`: referencia independiente en Python (validación por segmentos, transformación con
+  búsqueda manual y autocomprobación, composición con `aliases_ref` y `levels_ref` en cualquier orden, lectura
+  de las tres constantes del script, inventario, zonas y comprobación de segmentos `<segmento>/plans/`).
+- `tests/test_plans.py`: 43 pruebas (casos 1 a 9 y 31 del plan), sin PowerShell.
+- Plan 3.1.4 y caso 8 corregidos: un alias puede crear o destruir el literal `docs/plans/` en general; hoy no
+  ocurre en los once textos y el inventario falla si aparece otra forma `<segmento>/plans/`. La conmutación del
+  caso 8 vale sólo mientras esa comprobación pase.
+- `auditor`: sin Critical; 1 Important de prueba (la aserción de CRLF dependía de `autocrlf`) y 9 Minor,
+  corregidos.
+- Nada se aplica todavía: no existe la clave `plans_dir` ni la carpeta configurable.
+- Pruebas: 1622 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de
+  uso); las 43 nuevas no tienen duplicado contra pwsh.
 
 ### Añadido (alias, Fase 4)
 

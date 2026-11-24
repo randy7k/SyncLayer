@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1579 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1622 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -301,6 +301,12 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     línea. Al editarlos usa `<rol>` y `<alias>` como ejemplo, nunca un nombre de rol. El inventario de
     `tests/test_aliases.py` (`INVENTORY`) falla si aparece una forma nueva o cambia un conteo: actualízalo en el
     mismo cambio. `README.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` no se instalan ni se transforman.
+- Carpeta de planes (Fase 5, plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`; en curso, T1
+  hecha): `install.ps1` define `$PlansDirDefault`, `$PlansDirPattern` y `$PlansDirMaxLength` junto a
+  `$AliasRoles`, sin uso. La referencia es `tests/plans_ref.py` (contrato: `script_constants` lee esas tres
+  constantes de `install.ps1`) y las pruebas `tests/test_plans.py` (casos 1 a 9 y 31, sin PowerShell). El
+  inventario falla si aparece una forma `<segmento>/plans/` distinta de `docs/plans/` (un alias válido podría
+  crear o destruir el literal; de eso depende el orden alias, planes, nivel). Nada se aplica todavía.
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
   cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en

@@ -1,7 +1,8 @@
 # Plan: Fase 5, otras configuraciones dinámicas (carpeta de planes, idioma del reporte de uso, perfiles por proyecto)
 
 Fecha: 2026-11-24. Estado: **aprobado por el propietario el 2026-11-24, con los valores por defecto
-de P1 a P14**. Rama: `feat/configuraciones-dinamicas`.
+de P1 a P14**. Rama: `feat/configuraciones-dinamicas`. Avance: T1 cerrada (2026-11-24): tres constantes sin uso en `install.ps1`, `tests/plans_ref.py` y `tests/test_plans.py`
+(43 pruebas, casos 1 a 9 y 31).
 
 Fuentes: [`2026-11-19-backlog-configuracion-y-reportes.md`](2026-11-19-backlog-configuracion-y-reportes.md)
 (Fase 5 y «Restricción de diseño: simple»),
@@ -213,9 +214,13 @@ Opciones:
 
 Se elige **B**. Las tres transformaciones tocan zonas que no se pisan: alias (`name:`,
 `description:`, palabras del cuerpo), planes (el literal `docs/plans/` del cuerpo), nivel (`model:` y
-`effort:`). Con L5 y con el alfabeto del alias (sin `/`), el resultado es el mismo en cualquier
-orden: un alias no puede crear ni destruir el literal, y la carpeta no puede traer un nombre de rol.
-La referencia Python lo comprueba en los tres órdenes (caso 8).
+`effort:`). El resultado es el mismo en cualquier orden sólo mientras un alias no pueda crear ni
+destruir el literal, y esto no es cierto en general: un alias válido `docs` sobre una forma
+`forge/plans/` produciría `docs/plans/`. Hoy no ocurre en los once textos, y T1 añadió una
+comprobación de inventario (`segment_problems` en `tests/plans_ref.py`) que falla si aparece una forma
+`<segmento>/plans/` distinta de `docs/plans/`. Por eso el orden alias, planes, nivel queda fijado
+(opción B), y la conmutación del caso 8 (los tres órdenes, en la referencia Python) vale sólo mientras
+esa comprobación pase. La carpeta no puede traer un nombre de rol (alfabeto cerrado L2 y validación).
 
 **Cómo se inserta sin tocar `# Nivel:`.** Bloque nuevo en `install.ps1`, después del bucle que llena
 `$aliasBytes` y **antes** del comentario `# Nivel:`, con el marcador `# Planes:` (no empieza por
@@ -427,7 +432,7 @@ Casos:
 | 5 | Referencia: límite izquierdo | `` `docs/plans/x` `` y `(docs/plans/x` se reemplazan; `mydocs/plans/`, `x/docs/plans/`, `.docs/plans/`, `-docs/plans/` y `docs/plans` sin barra final no | T1 |
 | 6 | Referencia: una sola pasada | Con `docs/plans-v2` y con `x/docs/plans` como carpeta, el resultado no se vuelve a reemplazar y la autocomprobación pasa | T1 |
 | 7 | Referencia sobre el repositorio real | Con `docs/planes`: cambian exactamente tres líneas en tres archivos; los otros nueve, bytes idénticos; frontmatter de `atlas` idéntico; LF y salto final | T1 |
-| 8 | Referencia: orden | Para nueve alias, niveles 1 a 5 y una carpeta: alias→planes→nivel = planes→alias→nivel = nivel→alias→planes, byte a byte, en los once textos | T1 |
+| 8 | Referencia: orden | Para nueve alias, niveles 1 a 5 y una carpeta: alias→planes→nivel = planes→alias→nivel = nivel→alias→planes, byte a byte, en los once textos. Vale sólo mientras `segment_problems` (inventario) no halle una forma `<segmento>/plans/` distinta de `docs/plans/` (3.1.4) | T1 |
 | 9 | Nombres de dispositivo | La lista de L4 de la referencia es la de `$AllowedPattern` de `install.ps1` (leída del script) | T1 |
 | 10 | Sin `plans_dir`, y `"plans_dir": "docs/plans"` | Destino, estado, stdout y stderr idénticos byte a byte a la corrida sin esa clave; sin línea `Planes:` | T2 |
 | 11 | Tipo inválido: `null`, número, `true`, lista, lista de una cadena, objeto | Exit 1 en `-DryRun` y real; nada escrito; motivo `plans_dir debe ser texto` | T2 |
@@ -738,7 +743,7 @@ y se recalcula con la misma fórmula.
 |---|---|
 | El valor de `plans_dir` inyecta texto en el prompt de `atlas` o en las reglas | Alfabeto cerrado L2, tope L3; el mensaje nunca imprime un valor inválido; casos 4, 12; foco de `shield` |
 | La carpeta trae un nombre de rol y la transformación de alias lo cambia o falla | L5; casos 4, 8 y 26 |
-| El orden alias, planes, nivel altera el resultado | Zonas que no se pisan; la referencia compara los tres órdenes (caso 8); el instalador se compara con la referencia (casos 25, 26) |
+| El orden alias, planes, nivel altera el resultado | Zonas que no se pisan; la referencia compara los tres órdenes (caso 8) y el inventario falla ante una forma `<segmento>/plans/` nueva (`segment_problems`, 3.1.4); el instalador se compara con la referencia (casos 25, 26) |
 | El bloque `# Planes:` rompe un ancla o una aserción estática de las Fases 3 o 4 (la prueba exige `ConvertTo-LevelBytes $aliasBytes[$rel]` en `# Nivel:`) | El bloque reescribe `$aliasBytes` en su sitio y no edita `# Nivel:` (3.1.4); anclas enumeradas; la suite existente no se modifica (caso 30) |
 | `$aliasBytes` pasa a significar «alias y carpeta» y confunde a quien lea el script | Comentarios en el bloque y nota en `CLAUDE.md` (T8) |
 | Alguien añade un `docs/plans` nuevo a un archivo gestionado y se transforma sin querer (o queda sin transformar por su forma) | Inventario fijado (casos 2, 3); regla para `scribe` en T7 y T8; aviso en `CLAUDE.md` |
