@@ -9,8 +9,8 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1663 pruebas, 342 saltadas (320 de `install.ps1` contra pwsh, que no está instalado, 19 de la clase pwsh de `plans_dir` y 3 de
-la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
+`__pycache__`. La suite: 1695 pruebas, 357 saltadas (355 contra pwsh, que no está instalado, y 2 de
+la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), más de una hora (unos 70 minutos). No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
 
@@ -302,8 +302,8 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     `tests/test_aliases.py` (`INVENTORY`) falla si aparece una forma nueva o cambia un conteo: actualízalo en el
     mismo cambio. `README.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` no se instalan ni se transforman.
 - Carpeta de planes (Fase 5, plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`; en curso, T1
-  y T2 hechas): `install.ps1` define `$PlansDirDefault`, `$PlansDirPattern` y `$PlansDirMaxLength` junto a
-  `$AliasRoles`, sin uso. La referencia es `tests/plans_ref.py` (contrato: `script_constants` lee esas tres
+  a T3 hechas): `install.ps1` define `$PlansDirDefault`, `$PlansDirPattern` y `$PlansDirMaxLength` junto a
+  `$AliasRoles`. La referencia es `tests/plans_ref.py` (contrato: `script_constants` lee esas tres
   constantes de `install.ps1`) y las pruebas `tests/test_plans.py` (casos 1 a 9 y 31, sin PowerShell). El
   inventario falla si aparece una forma `<segmento>/plans/` distinta de `docs/plans/` (un alias válido podría
   crear o destruir el literal; de eso depende el orden alias, planes, nivel).
@@ -311,14 +311,28 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     (`$script:ConfigPlansPair`, con `Get-PropRaw`: tipo estricto) y la valida con `Get-PlansDirProblem` (L1 a L5;
     función pura, motivo fijo, nunca el valor) después de la tabla de alias y antes del Paso 3: exit 1 también con
     `-DryRun`, antes de escribir. Carpeta efectiva = valor válido distinto de `docs/plans`; sólo entonces imprime
-    `Planes: <valor>` (tras `Nivel:` y `Alias:`; no casa con `LINE`). GUARDA TEMPORAL: con carpeta efectiva, tras
-    imprimir `Planes:`, sale con exit 1 y `error: la carpeta de planes aun no se puede aplicar en esta version. No se
-    escribio nada.` (también en `-DryRun`); T3 la retira junto con su prueba, no la quites antes. Sin la clave o con
+    `Planes: <valor>` (tras `Nivel:` y `Alias:`; no casa con `LINE`). Sin la clave o con
     `docs/plans`, la salida es idéntica a la base byte a byte. Medido en 5.1: con `plans_dir` repetido gana la
     última, sin aviso; cualquier `__type`, también dentro de un valor, da `clave desconocida: __type` (por eso
-    `docs/a__type` se rechaza). Pruebas: 3 estáticas y 19 `test_f5t2_*` en `tests/test_install.py` (la clase contra
-    pwsh suma 19 saltadas). Abiertos a propósito (Low): el eco de `Planes:` no pasa por `Format-Safe` (el valor ya
-    validó la regex) y la clave repetida no avisa. La transformación de textos aún no existe.
+    `docs/a__type` se rechaza). Pruebas: 3 estáticas y 19 `test_f5t2_*` en `tests/test_install.py`. Abierto a
+    propósito (Low): la clave repetida no avisa.
+  - T3 (hecha): la carpeta se APLICA (la guarda temporal de T2 ya no existe). Funciones puras con autocomprobación
+    `Get-PlansMatchIndexes` (recorrido manual con `IndexOf` ordinal), `ConvertTo-PlansText` y `ConvertTo-PlansBytes`
+    (`$Bytes`, `$Kind` `agent` o `text`, `$PlansDir`): cambian el literal `docs/plans/` por `<carpeta>/` si no lo
+    precede un carácter de `[A-Za-z0-9_./-]`, en una sola pasada. En un agente, un literal dentro del frontmatter
+    lanza `referencia a la carpeta de planes en el frontmatter`; la función revalida la carpeta por su cuenta con el
+    motivo fijo `la carpeta de planes no es valida`. Un error sale como exit 1 antes de escribir (también en
+    `-DryRun`): `error: no se puede aplicar la carpeta de planes a <rol>: <motivo>. No se escribio nada.` El bloque
+    `# Planes:` va entre el bucle que calcula `$aliasBytes` y `# Nivel:` (el ancla es una sola línea; `# Nivel:` no
+    se edita), reescribe `$aliasBytes[$rel]` en su sitio y recorre los nueve agentes y `rules/agentes.md` y
+    `docs/agentes.md`. Orden: alias, planes, nivel. Sin carpeta efectiva (sin clave o `docs/plans`) no se llama a la
+    transformación y bytes y salida son idénticos a la base. El hook no se transforma; frontmatter y `hooks:`
+    quedan intactos. Hash, clasificación y `written` del estado van sobre el texto transformado; los bytes con
+    carpeta no los cubre el hash del manifiesto: se verifican contra `$outHash`. `$verifyWhat` con carpeta efectiva
+    dice `lo esperado para el nivel N y la carpeta de planes` (con alias, `... N, los alias y la carpeta de planes`).
+    El eco `Planes:` pasa por `Format-Safe`. El estado no guarda la carpeta: no hay «carpeta anterior» en la
+    salida. Con carpeta efectiva la copia inversa `~/.claude` -> repo no vale. Pruebas: 37 `test_f5t3_*`. El efecto
+    en Claude Code real (que `atlas` use la carpeta) NO está verificado (G1): no lo documentes como probado.
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
   cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
@@ -369,7 +383,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (320 más 19 de la clase pwsh de `plans_dir` en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (355 en la última corrida; las otras 2 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

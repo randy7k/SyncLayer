@@ -6,7 +6,7 @@
 
 Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
 con los valores por defecto de P1 a P14; rama `feat/configuraciones-dinamicas`. 9 unidades (T1 a T8 y el
-cierre), 2 cerradas (T1 y T2, ver más abajo); la carpeta de planes se lee y se valida, pero aún no se aplica.
+cierre), 3 cerradas (T1 a T3, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar.
 
 - Candidatas que entran: carpeta de planes configurable (clave `plans_dir` de `synclayer-config.json`,
   aplicada al instalar; sin la clave, bytes y salida idénticos a los de hoy); idioma del reporte de uso
@@ -21,6 +21,32 @@ cierre), 2 cerradas (T1 y T2, ver más abajo); la carpeta de planes se lee y se 
   editarla a mano o un agente de proyecto. (e) estrictez de la guarda: exige transformar el bloque `hooks:`,
   hoy prohibido, y un modo sin guarda contradice la falla cerrada; no se ofrece nada.
 - Pendiente del propietario, fuera del conteo: G1 de la Fase 5 (no bloquea), V1 y V2.
+
+### Añadido (Fase 5, T3)
+
+- `plans_dir` se APLICA al instalar. Funciones puras con autocomprobación `Get-PlansMatchIndexes`,
+  `ConvertTo-PlansText` y `ConvertTo-PlansBytes` reemplazan el literal `docs/plans/` por `<carpeta>/` en
+  `agents/atlas.md`, `rules/agentes.md` y `docs/agentes.md`: límite izquierdo (no lo precede ninguno de
+  `A-Za-z0-9_./-`) y una sola pasada. Un literal en el frontmatter de un agente da exit 1 (`... referencia a la
+  carpeta de planes en el frontmatter. No se escribio nada.`); la función revalida la carpeta con el motivo fijo
+  `la carpeta de planes no es valida`.
+- Bloque `# Planes:` entre el bucle de `$aliasBytes` y `# Nivel:` (`# Nivel:` sin editar). Orden: alias, planes,
+  nivel. Sin carpeta efectiva (sin la clave o `docs/plans`) no se llama a la transformación y bytes y salida son
+  idénticos a los de antes. El hook no se transforma; frontmatter y `hooks:` intactos.
+- Guarda temporal de T2 retirada. `$verifyWhat` con carpeta efectiva: `lo esperado para el nivel N y la carpeta de
+  planes` (con alias, `... N, los alias y la carpeta de planes`). Hash, clasificación y `written` del estado van
+  sobre el texto transformado.
+- El eco `Planes:` pasa por `Format-Safe` (cierra el Low abierto en T2).
+- Límites anotados en «Límites del instalador» del README: reemplazo textual sólo en los tres textos; no mueve ni
+  crea carpetas ni toca planes ya escritos ni el `CLAUDE.md` del usuario; la carpeta es por `-Target`; con carpeta
+  efectiva la copia inversa `~/.claude` a repo no vale; los bytes con carpeta no los cubre el hash del manifiesto;
+  no hay «carpeta anterior» en la salida; un defecto del origen da exit 1 sólo con carpeta efectiva, también en
+  `-DryRun`.
+- Efecto en un Claude Code real (que `atlas` use la carpeta): NO verificado (G1 del propietario).
+- `auditor` y `shield`: sin Critical ni Important de código; Lows y Minors corregidos (comentarios y 4 bordes del
+  límite izquierdo en el fixture).
+- Pruebas: 37 `test_f5t3_*`. Suite: 1695 pruebas, 357 saltadas (355 contra pwsh y 2 de la rama POSIX del reporte
+  de uso).
 
 ### Añadido (Fase 5, T2)
 

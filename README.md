@@ -451,6 +451,18 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
 - Con una clave `plans_dir` repetida gana la última, sin aviso (medido en 5.1). `__type` en cualquier parte
   del archivo da `clave desconocida: __type`, también dentro de un valor: por eso `docs/a__type` se rechaza
   como carpeta de planes.
+- Carpeta de planes (`plans_dir`): el reemplazo es textual y sólo en los tres textos gestionados. No mueve ni
+  crea carpetas, ni toca planes ya escritos ni el `CLAUDE.md` del usuario; un `CLAUDE.md` de proyecto que nombre
+  otra carpeta manda en ese proyecto.
+- La carpeta es por `-Target`. Con carpeta efectiva la copia inversa `~/.claude` a repo no vale (los textos ya
+  no son los del repositorio). Los bytes con carpeta no los cubre el hash del manifiesto: se verifican contra lo
+  esperado.
+- No hay «carpeta anterior» en la salida: el estado no guarda la carpeta.
+- Con carpeta efectiva, un defecto del origen (un agente sin cierre de frontmatter o el literal dentro del
+  frontmatter) da exit 1, también con `-DryRun`; sin carpeta efectiva no.
+- El valor de la carpeta es texto de un alfabeto cerrado (`a-z0-9_/-`) que no sale del code span; puede formar
+  palabras unidas por guiones. Quien puede editar la configuración ya puede editar los agentes. Que `atlas`
+  use la carpeta en un Claude Code real no está verificado.
 - Entre la comprobación de enlaces y la apertura del archivo queda una carrera residual; para
   aprovecharla hay que poder escribir en `-Target`.
 - Los mensajes de error nombran las claves con `Format-Safe`, que no escapa la barra invertida.
@@ -828,8 +840,9 @@ un alias no se sobrescribe sin `-Force`.
 
 ## Carpeta de planes (`plans_dir`)
 
-Estado: la clave se lee y se valida, pero **aún no se aplica** (Fase 5, T2). El instalador no reemplaza
-todavía `docs/plans/` en los textos instalados; eso llega en una tarea posterior de la fase.
+Estado: la clave se lee, se valida y **se aplica al instalar** (Fase 5, T3). El instalador reemplaza el
+literal `docs/plans/` por `<carpeta>/` en tres textos gestionados: `agents/atlas.md`, `rules/agentes.md` y
+`docs/agentes.md`. El efecto en un Claude Code real (que `atlas` use la carpeta) no está verificado.
 
 La clave `plans_dir` de `<Target>/synclayer-config.json` (el mismo archivo del nivel y de los alias;
 opcional, a mano, el instalador sólo lo lee, en la misma lectura única) es una cadena con la carpeta donde los
@@ -855,10 +868,18 @@ agentes dejarán los planes:
   sale con exit 1, también con `-DryRun`. El mensaje es
   `error: synclayer-config.json no es valido: <motivo>. No se escribio nada.` con un motivo fijo; nunca
   imprime el valor.
-- Con una carpeta válida y distinta de `docs/plans` el plan imprime `Planes: <valor>` tras las líneas
-  `Nivel:` y `Alias:`, y a continuación **termina con exit 1** y el mensaje `error: la carpeta de planes aun no
-  se puede aplicar en esta version. No se escribio nada.` (también con `-DryRun`). Es una guarda temporal que
-  evita aceptar una carpeta que no se aplica; la retira la tarea que activa la transformación.
+- Con una carpeta válida y distinta de `docs/plans` (carpeta efectiva) el instalador imprime `Planes: <valor>`
+  tras las líneas `Nivel:` y `Alias:` (el valor pasa por `Format-Safe`) y aplica la transformación. Sin carpeta
+  efectiva no se llama a la transformación y los bytes y la salida son idénticos a los de antes.
+- Cómo se reemplaza: funciones puras con autocomprobación (`Get-PlansMatchIndexes`, `ConvertTo-PlansText`,
+  `ConvertTo-PlansBytes`). El literal `docs/plans/` se cambia sólo si no lo precede ninguno de `A-Za-z0-9_./-`,
+  en una sola pasada. Un literal dentro del frontmatter de un agente da exit 1 con `error: no se puede aplicar la
+  carpeta de planes a <ruta>: ... referencia a la carpeta de planes en el frontmatter. No se escribio nada.` El
+  orden de las transformaciones es alias, planes, nivel; el hook no se transforma y el frontmatter y los bloques
+  `hooks:` quedan intactos.
+- Verificación: los bytes con carpeta no los cubre el hash del manifiesto. Se verifican contra lo esperado
+  (`$outHash`): los mensajes dicen `lo esperado para el nivel N y la carpeta de planes` (con alias, `... N, los
+  alias y la carpeta de planes`). El estado `written` y la clasificación usan el texto ya transformado.
 - Nombres parecidos (`plansDir`, `Plans_dir`, `plans`) siguen siendo clave desconocida (exit 1).
 
 ## Reporte de uso
@@ -1015,7 +1036,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1663 pruebas, 342 saltadas: 320 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`), 19 de la clase contra pwsh de la clave `plans_dir` y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1695 pruebas, 357 saltadas: 355 contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 2 de la rama POSIX del reporte de uso, que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda más de una hora en este equipo (unos 70 minutos): no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 
@@ -1049,20 +1070,20 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-24** (T2 de la Fase 5 cerrada: 2 de 9 unidades).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-24** (T3 de la Fase 5 cerrada: 3 de 9 unidades).
 
 ### Avance global
 
-**El proyecto completo va en 84%.** Cuenta las cinco fases con el mismo peso: (4 fases al 100 % + la fase 5 al 22,2 %) = (4 × 100 + 100 × 2 ÷ 9) ÷ 5 = 422,2 ÷ 5 = 84,4 % → 84 % (8 cuadros: 8,4). La fase 5 ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md)) cuenta 2 de 9 unidades (T1, T2) = 22,2 % → 22 % (2 cuadros: 2,22 redondea a 2). Con k unidades cerradas el global es 80 + 20 × k ÷ 9 (con k = 2: 80 + 4,4 = 84,4); sólo llega a 100 % al cerrar las nueve. Siguen pendientes del propietario, fuera del conteo, G1/V1 de las fases 3 y 4 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
+**El proyecto completo va en 87%.** Cuenta las cinco fases con el mismo peso: (4 fases al 100 % + la fase 5 al 33,3 %) = (4 × 100 + 100 × 3 ÷ 9) ÷ 5 = 433,3 ÷ 5 = 86,7 % → 87 % (9 cuadros: 8,67 redondea a 9). La fase 5 ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md)) cuenta 3 de 9 unidades (T1, T2, T3) = 33,3 % → 33 % (3 cuadros: 3,33 redondea a 3). Con k unidades cerradas el global es 80 + 20 × k ÷ 9 (con k = 3: 80 + 6,7 = 86,7); sólo llega a 100 % al cerrar las nueve. Siguen pendientes del propietario, fuera del conteo, G1/V1 de las fases 3 y 4 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **84%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | **87%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
 | **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Plan aprobado, cerrada en la rama `feat/esfuerzo-configurable` (T1 a T7 y cierre); la compuerta G1 del propietario sigue pendiente (verificación en Claude Code real; no bloquea) ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
 | **4. Nombres de agentes configurables** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Plan aprobado, cerrada en la rama `feat/nombres-configurables` (T1 a T8 y cierre); la compuerta G1/V1 del propietario no resta pero sí condiciona aplicar alias a su `~/.claude` real (V2): el efecto de los alias en Claude Code real no está verificado ([plan](docs/plans/2026-11-22-fase4-nombres-configurables.md), [exploración](docs/plans/2026-11-22-fase4-nombres-exploracion.md)) |
-| **5. Otras configuraciones dinámicas** | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | **22%** | 2 de 9 | Plan aprobado (2026-11-24, con los valores por defecto de P1 a P14), T1 y T2 cerradas, en la rama `feat/configuraciones-dinamicas`; la compuerta G1 del propietario no bloquea ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md), [backlog](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) |
+| **5. Otras configuraciones dinámicas** | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **33%** | 3 de 9 | Plan aprobado (2026-11-24, con los valores por defecto de P1 a P14), T1 a T3 cerradas, en la rama `feat/configuraciones-dinamicas`; la compuerta G1 del propietario no bloquea ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md), [backlog](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) |
 
 Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unidades planeadas. «Cerrada» = commiteada en la rama de la fase con su suite verde y la revisión de `auditor` sin hallazgos Critical ni Important; la integración a `main` se hace al cerrar la fase. Lo que falta probar en un entorno real (la instalación sobre el `~/.claude` verdadero) se lista aparte y no resta.
 
@@ -1140,14 +1161,15 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 
 | Frente | Avance | % | Unidades |
 |:--|:--|--:|:--|
-| Carpeta de planes | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **50%** | 2 de 4 (T1, T2, T3, T4) |
+| Carpeta de planes | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **75%** | 3 de 4 (T1, T2, T3, T4) |
 | Idioma del reporte de uso | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 2 (T5, T6) |
 | Documentación y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 3 (T7, T8, cierre) |
 
 - **Carpeta de planes**
   - ✅ Hecho: T1 tres constantes sin uso en `install.ps1` (`$PlansDirDefault`, `$PlansDirPattern`, `$PlansDirMaxLength`), referencia independiente en Python (`tests/plans_ref.py`, que lee esas constantes del script) y 43 pruebas (`tests/test_plans.py`: casos 1 a 9 y 31, sin PowerShell), con una comprobación de inventario que falla si aparece una forma `<segmento>/plans/` distinta de `docs/plans/`. Nada se aplica todavía: el instalador se comporta igual que antes (10 escenarios comparados byte a byte con la base). Revisada por `auditor` sin Critical.
-  - ✅ Hecho también: T2 clave `plans_dir` de `synclayer-config.json` (lectura en la lectura única, validación `Get-PlansDirProblem` L1 a L5 después de la tabla de alias y antes del Paso 3, exit 1 también con `-DryRun`, mensajes sin el valor, línea `Planes:` sólo con una carpeta válida distinta de `docs/plans`) y guarda temporal: una carpeta efectiva da exit 1 («la carpeta de planes aun no se puede aplicar en esta version») hasta que T3 la retire. Sin la clave o con `docs/plans` la salida es idéntica a la de antes byte a byte. 22 pruebas nuevas (3 estáticas y 19 `test_f5t2_*`; la suite pasa a 1663 pruebas, 342 saltadas). Revisada por `auditor` y `shield` sin Critical ni Important. Medido en 5.1: con `plans_dir` repetido gana la última y cualquier `__type` da `clave desconocida` (ver «Límites del instalador»).
-  - ⬜ Falta: T3 transformación y activación; T4 carpeta con alias y niveles, repositorio real y cambios.
+  - ✅ Hecho también: T2 clave `plans_dir` de `synclayer-config.json` (lectura en la lectura única, validación `Get-PlansDirProblem` L1 a L5 después de la tabla de alias y antes del Paso 3, exit 1 también con `-DryRun`, mensajes sin el valor, línea `Planes:` sólo con una carpeta válida distinta de `docs/plans`) y guarda temporal: una carpeta efectiva da exit 1 («la carpeta de planes aun no se puede aplicar en esta version») hasta que T3 la retire. Sin la clave o con `docs/plans` la salida es idéntica a la de antes byte a byte. 22 pruebas nuevas (3 estáticas y 19 `test_f5t2_*`; la suite pasó a 1663 pruebas, 342 saltadas). Revisada por `auditor` y `shield` sin Critical ni Important. Medido en 5.1: con `plans_dir` repetido gana la última y cualquier `__type` da `clave desconocida` (ver «Límites del instalador»).
+  - ✅ Hecho también: T3 transformación y activación de la carpeta de planes (`Get-PlansMatchIndexes`, `ConvertTo-PlansText`, `ConvertTo-PlansBytes`: reemplazan `docs/plans/` por `<carpeta>/` en `agents/atlas.md`, `rules/agentes.md` y `docs/agentes.md`, con límite izquierdo y una sola pasada; un literal en el frontmatter da exit 1), bloque `# Planes:` entre los alias y el nivel (orden alias, planes, nivel), guarda temporal retirada, textos de verificación con la carpeta, eco `Planes:` por `Format-Safe`. Sin carpeta efectiva la salida y los bytes son idénticos a los de antes. 37 pruebas `test_f5t3_*`; la suite pasa a 1695 pruebas, 357 saltadas. Revisada por `auditor` y `shield` sin Critical ni Important de código. El efecto en Claude Code real (que `atlas` use la carpeta) no está verificado (G1).
+  - ⬜ Falta: T4 carpeta con alias y niveles, repositorio real y cambios.
 - **Idioma del reporte de uso**
   - ✅ Hecho: nada.
   - ⬜ Falta: T5 catálogo de textos con el español sin cambios; T6 idioma `en` y parámetro `--lang`.
@@ -1201,8 +1223,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-24 | Fase 5 desglosada y aprobada (9 unidades): carpeta de planes, idioma del reporte de uso y perfiles por proyecto (sólo documentación); rama `feat/configuraciones-dinamicas` | ✅ |
 | 2026-11-24 | T1 de la Fase 5: constantes de la carpeta de planes sin uso en `install.ps1`, referencia independiente en Python e inventario (casos 1 a 9 y 31; 43 pruebas); el instalador se comporta igual que antes; revisada por `auditor` | ✅ |
 | 2026-11-24 | T2 de la Fase 5: clave `plans_dir` (lectura, validación L1 a L5, línea `Planes:`) con guarda temporal que impide aplicarla; sin la clave la salida es idéntica a la de antes; revisada por `auditor` y `shield` | ✅ |
-| **Ahora** | **T3 de la Fase 5** (transformación de textos y activación de la carpeta de planes; retira la guarda temporal). **Del propietario:** G1/V1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`, caso P10), V2 (aplicar los alias a su `~/.claude`), G1 de la fase 5 y las comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) | 🔄 |
-| Luego | T4 a T8 y cierre de la Fase 5; tarea aparte de `Get-Prop` (P11) | ⬜ |
+| 2026-11-24 | T3 de la Fase 5: transformación de textos y activación de la carpeta de planes (`plans_dir` se aplica al instalar; guarda temporal retirada; sin la clave la salida es idéntica a la de antes); revisada por `auditor` y `shield`; efecto en Claude Code real sin verificar | ✅ |
+| **Ahora** | **T4 de la Fase 5** (carpeta de planes con alias y niveles, repositorio real y cambios). **Del propietario:** G1/V1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`, caso P10), V2 (aplicar los alias a su `~/.claude`), G1 de la fase 5 y las comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) | 🔄 |
+| Luego | T5 a T8 y cierre de la Fase 5; tarea aparte de `Get-Prop` (P11) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
 
