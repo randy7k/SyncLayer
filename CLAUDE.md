@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1569 pruebas, 319 saltadas (316 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1579 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -203,8 +203,8 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
-- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, T1 a T8
-  hechas; falta el cierre): `install.ps1` lee y valida la clave `aliases` de `synclayer-config.json` (lectura única;
+- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; Fase 4 cerrada
+  en la rama, T1 a T8 y cierre; G1/V1 y V2 del propietario pendientes): `install.ps1` lee y valida la clave `aliases` de `synclayer-config.json` (lectura única;
   `Get-AliasTableProblem`, V1 a V8, tabla entera antes de escribir; líneas `Alias:`) y, desde T5, la APLICA de
   punta a punta (la guardia temporal de T2 se retiró). Con alias reales el efecto en Claude Code real NO está
   verificado (G1/V1 del propietario: renombrar un agente, `effort:`, caso P10): no lo documentes como probado.
@@ -351,7 +351,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (316 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (320 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

@@ -5,8 +5,9 @@
 ### Añadido (alias, Fase 4)
 
 Resumen de la Fase 4 (plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`); el detalle por task sigue
-en las entradas T1 a T7 de abajo. Con la T8 (documentación) la fase queda a falta del cierre (`sentinel`,
-`shield` y `auditor` sobre el cambio completo).
+en las entradas T1 a T7 de abajo. Fase cerrada en la rama `feat/nombres-configurables` (T1 a T8 y cierre; ver
+la entrada del cierre más abajo). Siguen pendientes del propietario G1/V1 (efecto de los alias en Claude Code
+real, caso P10) y V2 (aplicar los alias a su `~/.claude`).
 
 - Cada uno de los nueve agentes puede llevar un alias en la clave `aliases` de
   `<Target>/synclayer-config.json`. Al reinstalar, el instalador escribe el agente en `agents/<alias>.md` con
@@ -33,7 +34,30 @@ en las entradas T1 a T7 de abajo. Con la T8 (documentación) la fase queda a fal
 - No verificado: con alias reales el efecto en Claude Code real (que se invoque por el alias, `_` y `-` en
   `name:`, el caso de dos archivos con el mismo `name:`, la recarga en caliente) lo comprueba el propietario
   en G1/V1. Ningún documento lo da por probado.
-- Pruebas: 1569 pruebas, 319 saltadas (316 de `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de
+- Pruebas: 1579 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de
+  uso).
+
+### Corregido
+
+- Prueba frágil `test_no_object_reprs_in_any_output` (reporte de uso): buscaba `0x` suelto y fallaba al azar
+  cuando la carpeta temporal contenía `0x`. Ahora busca el patrón de un repr de objeto; se añaden 2 pruebas
+  deterministas.
+- `com0` y `lpt0` pasan a ser nombres de dispositivo reservados: `$AllowedPattern` de `install.ps1` y `ALLOWED`
+  de `tools/build_manifest.py` usan `com[0-9]` y `lpt[0-9]`. Un alias `com0` o `lpt0` da exit 1, y un
+  manifiesto con `agents/com0.md` también.
+
+### Añadido (Fase 4, cierre)
+
+- `sentinel`: suite de 1571 pruebas en verde y los 61 casos de la sección 3.11 del plan cubiertos; 4 pruebas
+  `test_f4c1_*` nuevas, comprobadas con mutaciones.
+- `shield` sobre el cambio completo: sin hallazgos Critical, High ni Medium; 3 Low.
+- `auditor` sobre el cambio completo: sin Critical; el Important de los conteos de pruebas, corregido.
+- Documentación: el límite del estado (integridad, no autenticidad) cubre también `dest`; las referencias por
+  nombre que escribe el usuario incluyen las instrucciones en texto libre; la fila de la tabla de situaciones
+  «volver a un nombre anterior» se generaliza.
+- No verificado: G1/V1 (efecto de los alias en Claude Code real, caso P10) y V2 (aplicar los alias al
+  `~/.claude` del propietario) siguen pendientes.
+- Pruebas: 1579 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de
   uso).
 
 ### Añadido (Fase 4, T7: huérfanos por cambio de nombre y frase extra del exit 3)

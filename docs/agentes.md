@@ -123,8 +123,9 @@ repositorio conserva los nombres originales.
 - **Reiniciá las sesiones abiertas.** Renombrar con sesiones abiertas no está documentado.
 - **Qué no cambia.** El hook `agent_guard.py` no se transforma, y el bloque `hooks:` de los agentes
   que lo usan queda igual. Tus referencias propias por nombre (`Agent(<nombre>)` en `tools:`,
-  `permissions.deny`, matchers de hooks, `--agent`, un `.claude/agents/<nombre>.md` de proyecto)
-  siguen apuntando al nombre anterior y no se actualizan solas.
+  `permissions.deny`, matchers de hooks, `--agent`, un `.claude/agents/<nombre>.md` de proyecto, y las
+  instrucciones en texto libre que nombren un agente: un `CLAUDE.md` propio, la memoria, reglas)
+  siguen apuntando al nombre anterior y no se actualizan solas; el instalador no las toca.
 - **Un agente tuyo con el mismo `name:`.** Si otro archivo de `~/.claude/agents/` declara el mismo
   `name:` que un alias, no está documentado cuál de los dos gana, y el agente renombrado podría
   quedar sin su guarda. El instalador no lo detecta; elegí un alias que no uses.
