@@ -2,6 +2,29 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 4, T6: alias con niveles, repositorio real y `-DryRun`)
+
+- Pruebas de los alias con los niveles, del repositorio real con nueve alias y de `-DryRun` (casos 41 a 46,
+  `test_f4t6_*`). Con alias, `model:` y `effort:` salen de la celda del rol, no del destino, y `Ajuste:` lleva la
+  ruta de destino.
+- Repositorio real con nueve alias en los niveles 5 y 3: 13 archivos (12 gestionados + estado) y ningún nombre de
+  rol en los once textos salvo `escribe`, `escriben`, `describe`, `reescribe` y `sobrescribe`. `-DryRun` con alias
+  no escribe nada. El hook sale con el hash del manifiesto y los `hooks:` de `sentinel`, `auditor`, `shield` y
+  `debugger` quedan intactos. Una verificación posterior alterada da exit 4.
+- Caso 46: regresión de la salida del nivel 5 sin alias, idéntica byte a byte a la de antes de la fase (golden
+  embebido `F4T6_GOLDEN`, calculado con el instalador anterior a la fase; normaliza las rutas temporales también
+  en su forma escapada no ASCII).
+- Único cambio de código: `$verifyWhat` con tabla efectiva no vacía dice `lo esperado para el nivel N y los alias`
+  (también en el nivel 5: `lo esperado para el nivel 5 y los alias`). Sin tabla efectiva (vacía o alias igual al
+  rol) los textos no cambian. Cierra el pendiente de T5.
+- Revisiones: `auditor` sin Critical ni Important (Minor y Low corregidos); `shield` sin hallazgos de ninguna
+  severidad. Sin alias, la salida es idéntica a la base en 14 a 15 escenarios por revisor.
+- No verificado: con alias reales el efecto en Claude Code real lo comprueba el propietario en G1/V1.
+- Pendiente: la nota de huérfanos sigue diciendo «ya no están en el manifiesto» para un huérfano por cambio de
+  nombre, y la frase extra del exit 3 (T7); documentación final y límites de alias y frontmatter (T8).
+- Pruebas: la suite pasa a 1531 pruebas, 300 saltadas (297 de `install.ps1` contra pwsh y 3 de la rama POSIX del
+  reporte de uso).
+
 ### Añadido (Fase 4, T5: transformación de textos y activación de los alias)
 
 - `install.ps1` aplica los alias de punta a punta. Funciones puras nuevas con autocomprobación: `New-AliasRegex`,
@@ -21,7 +44,7 @@
   (Low de frontmatter corregido; Low de `$verifyWhat` queda para T6).
 - No verificado: con alias reales activos el efecto en Claude Code real (renombrar un agente, `effort:`, caso
   P10) lo comprueba el propietario en G1/V1.
-- Pendiente: `$verifyWhat` dice «el manifiesto» con alias en nivel 5 (T6); frase extra del exit 3 y aviso de
+- Pendiente (`$verifyWhat` lo cerró T6): `$verifyWhat` dice «el manifiesto» con alias en nivel 5; frase extra del exit 3 y aviso de
   huérfano por cambio de nombre (T7); frontmatter y límites de alias documentados en T8. Límite aceptado: con
   clave repetida en la tabla gana la última, sin aviso (heredado de T2).
 - Pruebas: casos 32 a 40 y 56 del plan (`test_f4t5_*`). La suite pasa a 1512 pruebas, 291 saltadas (288 de

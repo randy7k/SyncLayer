@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1512 pruebas, 291 saltadas (288 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1531 pruebas, 300 saltadas (297 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -201,7 +201,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
-- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, T1 a T5
+- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; en curso, T1 a T6
   hechas): `install.ps1` lee y valida la clave `aliases` de `synclayer-config.json` (lectura única;
   `Get-AliasTableProblem`, V1 a V8, tabla entera antes de escribir; líneas `Alias:`) y, desde T5, la APLICA de
   punta a punta (la guardia temporal de T2 se retiró). Con alias reales el efecto en Claude Code real NO está
@@ -240,10 +240,20 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     nada, y el mensaje nombra el rol; con alias se exige ASCII imprimible en todo el frontmatter y que la línea
     tras `name:` sea `---` o `clave:`. La transformación recorre los nueve agentes aunque sólo uno tenga alias:
     un defecto en uno sin alias también detiene. Un agente sin cuerpo y sin LF final se instala. Pruebas:
-    casos 32 a 40 y 56 del plan (`test_f4t5_*` en `tests/test_install.py`). Pendiente: `$verifyWhat` dice «el
-    manifiesto» con alias en nivel 5 (T6); frase extra del exit 3 y aviso de huérfano por cambio de nombre (T7);
-    frontmatter y límites de alias en la documentación (T8). Límite aceptado: con clave repetida en la tabla
-    gana la última, sin aviso (heredado de T2).
+    casos 32 a 40 y 56 del plan (`test_f4t5_*` en `tests/test_install.py`). Pendiente: frase extra del exit 3
+    y aviso de huérfano por cambio de nombre (T7; la nota de huérfanos sigue diciendo «ya no están en el
+    manifiesto» también para un cambio de nombre); frontmatter y límites de alias en la documentación (T8).
+    Límite aceptado: con clave repetida en la tabla gana la última, sin aviso (heredado de T2).
+  - Niveles y verificación con alias (T6): con alias, `model:` y `effort:` salen de la celda del ROL (no del
+    destino) y `Ajuste:` lleva la ruta de destino. `$verifyWhat` con tabla efectiva no vacía dice `lo esperado
+    para el nivel N y los alias` (también en el nivel 5); sin tabla efectiva (vacía o alias igual al rol)
+    conserva los textos de siempre. Caso 46: regresión de la salida del nivel 5 sin alias, idéntica byte a byte a
+    la de antes de la fase (golden embebido `F4T6_GOLDEN`, calculado con el instalador anterior a la fase;
+    normaliza las rutas temporales también en su forma escapada no ASCII). Casos 41 a 45: repositorio real con
+    nueve alias en los niveles 5 y 3 (13 archivos: 12 gestionados + estado; ningún nombre de rol en los once
+    textos salvo `escribe`, `escriben`, `describe`, `reescribe` y `sobrescribe`), `-DryRun` con alias sin
+    escribir nada, el hook con el hash del manifiesto, `hooks:` de `sentinel`, `auditor`, `shield` y
+    `debugger` intactos y verificación posterior alterada con exit 4 (`test_f4t6_*` en `tests/test_install.py`).
   - Límite conocido: `Get-Prop` desenrolla listas de un elemento, así que `path`, `sha256`, `written`,
     `level`, `schema`, `algorithm` y `eol` del estado y del manifiesto aceptan `[valor]` (laxitud heredada de
     las Fases 1 y 3, no es un hueco; P11 del plan decide cuándo corregirla).
@@ -297,7 +307,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (288 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (297 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

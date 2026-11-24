@@ -1402,10 +1402,13 @@ try {
     # debugger, el hook, las reglas, la guia) queda en los bytes del origen. Un error de renderizado es un
     # defecto del origen que el manifiesto no detecta: exit 1 antes de escribir, tambien en -DryRun.
     # $outHash (hash de $outBytes) es lo que clasifica, verifica y se guarda en el estado como written.
-    # Con el nivel 5 los mensajes de verificacion dicen lo de siempre (el manifiesto): quien no configura
-    # nada ve la misma salida que antes, salvo la linea Nivel:. Con el nivel 1 a 4 el hash esperado ya no es el del manifiesto.
+    # Sin tabla efectiva de alias, con el nivel 5 los mensajes de verificacion dicen lo de siempre (el manifiesto):
+    # quien no configura nada ve la misma salida que antes, salvo la linea Nivel:. Con alias se anade "y los alias".
+    # Con el nivel 1 a 4 el hash esperado ya no es el del manifiesto.
     $verifyWhat = 'el manifiesto'
     if ($level -ne 5) { $verifyWhat = 'lo esperado para el nivel ' + $level }
+    # Con alias (tabla efectiva no vacia) el hash esperado tampoco es el del manifiesto: los bytes llevan los alias.
+    if ($aliasForms.Count -gt 0) { $verifyWhat = 'lo esperado para el nivel ' + $level + ' y los alias' }
     $outBytes = @{}
     $outHash = @{}
     $adjustLines = New-Object System.Collections.Generic.List[string]
