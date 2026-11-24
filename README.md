@@ -58,6 +58,8 @@ SyncLayer/
 │   └── plans/         Planes de implementación y backlog
 └── tests/
     ├── test_agent_guard.py
+    ├── test_aliases.py    Listas cerradas, inventario de nombres en los once textos y referencia de los alias
+    ├── aliases_ref.py     Referencia independiente en Python de los alias (auxiliar de las pruebas)
     ├── test_brand_agents.py
     ├── test_ico.py
     ├── test_install.py
@@ -102,7 +104,7 @@ Settings > Social preview.
 los nueve `agents/*.md`, `rules/agentes.md`, `hooks/agent_guard.py` y `docs/agentes.md`.
 No instala `docs/brand/`, `assets/`, `tests/` ni `tools/` (tampoco `tools/usage_report.py`:
 el reporte de uso se ejecuta desde el clon). Sólo escribe esos doce
-destinos, sus temporales, el archivo de estado y el respaldo; no borra nada y no toca
+destinos (con alias, `agents/<alias>.md` en lugar de `agents/<rol>.md`), sus temporales, el archivo de estado y el respaldo; no borra nada y no toca
 archivos ajenos (`hooks/caveman-statusline.ps1`, `settings.json`, `CLAUDE.md`...). El
 instalador no crea, lee ni borra `synclayer-usage.md`.
 Escribe los archivos con finales de línea LF, vengan del árbol de trabajo con CRLF o con LF.
@@ -143,6 +145,7 @@ Qué hace, en orden (los pasos 1 a 5 no escriben nada):
    debe coincidir con el manifiesto.
 3. Lee el estado previo `<Target>/synclayer-manifest.json`. Si no se puede leer o no es
    válido, lo trata como ausente, avisa por stderr y no lo respalda (se reescribe sin respaldo).
+   Con alias (ver «Alias»), el estado dice a qué ruta de destino escribió cada archivo.
 4. Clasifica cada archivo por el hash del destino. El plan muestra una línea `ESTADO  ruta`
    por archivo y un resumen:
 
@@ -154,6 +157,12 @@ Qué hace, en orden (los pasos 1 a 5 no escriben nada):
    | `MODIFICADO` | Distinto, y sin estado previo o con un hash que no es el de la ejecución anterior | Sin `-Force`: aborta con exit 3 y no escribe nada. Con `-Force`: respalda y copia |
    | `HUERFANO` | Estaba en el estado previo y ya no está en el manifiesto, o ya no es el destino actual de su rol (cambio de nombre con alias) | Sólo informa; no lo borra. Si es un cambio de nombre y el archivo existe, avisa por `stderr` con el destino nuevo |
 
+   Con alias, el plan imprime tras `Nivel:` (y `Nivel anterior:`) una línea
+   `Alias: <rol> -> <alias> (agents/<alias>.md)` por alias efectivo, y las filas, `Ajuste:`, `Respaldado:` y
+   `Copiado:` llevan la ruta de destino. La nota por stdout «ya no están en el manifiesto» sale sólo si hay
+   un huérfano clásico (un archivo cuyo rol ya no está en el manifiesto); el de un cambio de nombre lleva
+   en cambio el aviso por `stderr`.
+
 5. Con `-DryRun` termina aquí: sale con 0, o con el 1, 2 o 3 que habría dado la ejecución real.
 6. Respalda en `-BackupDir`, con la misma ruta relativa, lo que va a sobrescribir (y el
    estado previo si lo va a reescribir y era válido), y verifica cada copia del respaldo. Un
@@ -164,7 +173,8 @@ Qué hace, en orden (los pasos 1 a 5 no escriben nada):
 8. Verifica el hash de lo escrito (con el nivel 5, contra el manifiesto; con 1 a 4, contra lo
    esperado para el nivel).
 9. Escribe `<Target>/synclayer-manifest.json`, el estado con esquema 2 (por archivo: el hash del
-   origen, el de lo escrito y el nivel; lee también el esquema 1 de las
+   origen, el de lo escrito y el nivel; con algún alias efectivo, esquema 3, que añade la ruta de
+   destino de cada archivo; lee también el esquema 1 de las
    instalaciones anteriores y lo migra), sólo si todo lo anterior salió bien. Sin él, el instalador no distingue una versión anterior de
    SyncLayer de una edición a mano, y todo archivo distinto sale `MODIFICADO`.
 10. Imprime los conteos, la ruta del respaldo y los recordatorios (reiniciar sesiones,
@@ -180,9 +190,9 @@ Códigos de salida:
 | Código | Significado | ¿Se escribió algo? |
 |---|---|---|
 | 0 | Correcto, incluido «nada que hacer» y `-DryRun` sin problemas | Sólo en ejecución real |
-| 1 | Uso o entorno: manifiesto ausente o inválido, `synclayer-config.json` inválido o ilegible, frontmatter de un agente que no se puede renderizar para el nivel (también con `-DryRun`), ruta no permitida, punto de reanálisis o archivo bloqueado detectados antes de escribir, respaldo que ya existe, `-Target` que es un archivo o una raíz de unidad sin `-BackupDir`, error no previsto | No (salvo fallo de E/S al crear el respaldo) |
+| 1 | Uso o entorno: manifiesto ausente o inválido, `synclayer-config.json` inválido o ilegible, tabla `aliases` inválida o un agente o texto al que no se pueden aplicar los alias (también con `-DryRun`; ver «Alias»), frontmatter de un agente que no se puede renderizar para el nivel (también con `-DryRun`), ruta no permitida, punto de reanálisis o archivo bloqueado detectados antes de escribir, respaldo que ya existe, `-Target` que es un archivo o una raíz de unidad sin `-BackupDir`, error no previsto | No (salvo fallo de E/S al crear el respaldo) |
 | 2 | El origen no coincide con el manifiesto | No |
-| 3 | Hay `MODIFICADO` y falta `-Force` | No |
+| 3 | Hay `MODIFICADO` y falta `-Force`. Si alguno está en una ruta con alias, el mensaje añade «Si el archivo es un agente tuyo con el mismo nombre que un alias, elige otro alias.» | No |
 | 4 | Falló la copia, la verificación posterior o la escritura del estado | Sí, parcial; el respaldo queda y no hay rollback |
 
 Tras un exit 4, corrige la causa y repite: reinstalar es seguro. Si el exit 4 ocurrió después
@@ -194,19 +204,22 @@ Qué no hace: no sincroniza automáticamente, no borra nada, no toca `settings.j
 borra `synclayer-config.json`. El único entorno verificado es Windows PowerShell 5.1.
 
 **Estado del instalador (esquema 2).** `<Target>/synclayer-manifest.json` ya no es una copia del
-manifiesto. Lleva `schema` 2, `algorithm` `sha256`, `eol` `lf` y, por archivo y en el orden del
+manifiesto. Lleva `schema` 2 (o 3, ver abajo), `algorithm` `sha256`, `eol` `lf` y, por archivo y en el orden del
 manifiesto, `path`, `sha256` (hash canónico del origen), `written` (hash canónico de lo escrito) y
-`level` (el nivel leído de la configuración). El formato es siempre el esquema 2, también con
-el nivel 5; con el nivel 5 `written` es igual a `sha256`, y con 1 a 4 es distinto para los seis agentes cuya celda cambia el archivo. Es ASCII, con LF y un salto final, y reinstalar sin cambios no lo
+`level` (el nivel leído de la configuración). El formato es el esquema 2 (también con
+el nivel 5) mientras no haya alias efectivo; con alguno, es el esquema 3: la misma entrada más `dest`, la
+ruta real de destino, en todas las entradas (ver «Alias»). Con el nivel 5 `written` es igual a `sha256`, y con 1 a 4 es distinto para los seis agentes cuya celda cambia el archivo. Es ASCII, con LF y un salto final, y reinstalar sin cambios no lo
 reescribe. La clasificación compara el destino con `written`, no con el origen de la ejecución
 anterior. Un estado de esquema 1 (el de la Fase 1) es válido: se migra a esquema 2 en la primera
 reinstalación y el viejo va al respaldo, así que esa reinstalación crea una carpeta de respaldo
-aunque todos los archivos salgan `IGUAL`. Un estado de otro esquema, ilegible o inválido se trata
+aunque todos los archivos salgan `IGUAL`. Al activar el primer alias el estado pasa de 2 a 3 y al
+quitar el último vuelve a 2; el anterior va al respaldo. Un estado de otro esquema, ilegible o inválido se trata
 como ausente (con aviso por `stderr`, sin respaldo) y nunca produce `ACTUALIZAR`.
 
 **Configuración y avisos.** Tras verificar el origen (pasos 1 y 2) y antes de leer el estado
 previo, el instalador lee `<Target>/synclayer-config.json` y, con un nivel de 1 a 4, avisa por
-`stderr` si el entorno define `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`. Con un
+`stderr` si el entorno define `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`. La
+misma lectura única deja la clave `aliases`, que se valida entera en ese punto (ver «Alias»). Con un
 nivel de 1 a 4 escribe después el `model:` y el `effort:` de seis agentes. Ver «Niveles» (qué se
 acepta, qué avisos salen y qué falta).
 
@@ -245,6 +258,11 @@ git status   # revisa el diff antes de commitear
 
 Tras copiar un archivo gestionado al repositorio, regenera el manifiesto (ver
 «Mantenimiento»). Ojo con `tests/`, `tools/` y `install.ps1`: sólo existen en el repositorio.
+
+Con alias (o con un nivel distinto de 5) los archivos de `~/.claude` no son los del repositorio: el
+agente renombrado vive en `agents/<alias>.md`, que `git ls-files` no lista, y las reglas y la guía llevan
+los alias. Esta copia inversa no vale para un agente, las reglas ni la guía: el cambio se hace en el
+repositorio y se reinstala.
 
 ## Uso
 
@@ -479,6 +497,64 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
   el instalador sólo escribe valores de lista cerrada (alias `opus`, `sonnet`, `haiku` y los cinco
   esfuerzos oficiales).
 
+**Alias**
+
+- **Reemplazo textual, no semántico.** En `rules/agentes.md` y `docs/agentes.md` una palabra igual a un
+  rol (en sus tres formas) se reemplaza donde esté: también dentro de código en línea, de un bloque
+  cercado o de un enlace. Una prueba de inventario (`tests/test_aliases.py`) falla si aparece una forma
+  nueva, y el texto nuevo de la guía usa `<rol>` y `<alias>` en lugar de un nombre de rol.
+- **Límites del límite de palabra.** `×` y `÷` cuentan como letra: un rol pegado a ellos no se
+  reemplaza. Las letras de fuera de U+00C0 a U+00FF (`ő`, griego, cirílico) y las marcas combinantes
+  (texto en NFD) son límite: un rol pegado a ellas sí se reemplazaría. Otras grafías (`sCribe`) no se
+  tocan. Hoy los once textos no tienen ninguna de esas formas y una prueba lo vigila.
+- **La lista de nombres reservados es cerrada** (nueve) y puede quedarse atrás frente a integrados nuevos
+  de Claude Code: comprueba con `/agents` que el nombre no exista antes de elegir un alias.
+  `output-style-setup` se reserva por prudencia, sin haber verificado que exista o haya existido.
+- **Un agente propio con el mismo `name:` que un alias.** Si otro archivo tuyo de `<Target>/agents/`
+  (con otro nombre de archivo) declara `name: <alias>`, el instalador no lo ve ni avisa (V8 sólo ve las
+  rutas del manifiesto). No está documentado cuál de los dos gana; si ganara el tuyo, el rol renombrado
+  podría quedar sin su guarda (`hooks:`) sin ningún aviso. Sin verificar en Claude Code real (caso P10 de
+  G1: dos archivos del mismo ámbito con el mismo `name:`). Si hay un `agents/<alias>.md` tuyo, en cambio, sale
+  `MODIFICADO`.
+- **Colisiones que el instalador no ve.** Un agente de proyecto, de `--agents` o gestionado con el mismo
+  nombre que el alias gana por prioridad; un `.claude/agents/<rol>.md` de proyecto deja de reemplazar al
+  global renombrado. Las referencias por nombre que escribas tú (`Agent(<nombre>)` en `tools:`,
+  `permissions.deny`, matchers de `SubagentStart` y `SubagentStop`, `--agent`, la clave `agent` de
+  `settings.json`) siguen apuntando al nombre anterior. En un sistema de archivos que no distingue
+  mayúsculas, un `agents/Amigo-QA.md` ajeno ocupa la ruta del alias y sale `MODIFICADO`. Un integrado de
+  Claude Code que no esté en la lista de reservados no se rechaza y el agente con alias lo sobrescribiría.
+- **Un agente nuevo del repositorio con el nombre de un alias ya instalado.** La configuración se
+  rechaza (exit 1, V8) y, tras cambiar el alias, el estado se trata como ausente (el destino previo es
+  ahora un archivo del manifiesto): lo que cambió sale `MODIFICADO` y hace falta `-Force`; el aviso lo
+  dice. No se pierde nada (hay respaldo), pero no hay camino automático.
+- **El estado admite un `dest` de 74 caracteres como mucho** (`agents/` + 64 + `.md`), atado por una
+  prueba a la regex del alias. Un `dest` mayor, repetido, que salga de `agents/`, que coincida con el
+  `path` de otra entrada o con una ruta del manifiesto invalida el estado: se trata como ausente, con aviso
+  por `stderr`.
+- **Laxitud heredada (Fases 1 y 3).** Varios campos del estado (`path`, `sha256`, `written`, `level`,
+  `schema`, `algorithm`, `eol`) y del manifiesto (`schema`, `path`, `sha256`, `algorithm`) aceptan una
+  lista de un elemento en lugar del valor (`Get-Prop` la desenrolla). No es un hueco conocido (el valor
+  interno se valida igual y se lee siempre con la misma función), pero contradice «tipos estrictos»; `dest`
+  sí es estricto. Se corregirá en una tarea aparte tras la Fase 4.
+- Los bytes con alias no los cubre el hash del manifiesto (parten de bytes verificados contra él, pero
+  `install.ps1`, que los transforma, no está en el manifiesto): lo escrito se verifica contra
+  `lo esperado para el nivel N y los alias`.
+- Un instalador anterior a la Fase 4 no sabe leer un estado de esquema 3: lo trata como ausente, así
+  que sus archivos salen `MODIFICADO` (exit 3) y nunca se sobrescriben sin `-Force`.
+- Un frontmatter que el instalador no entiende detiene la instalación con alias (exit 1 antes de
+  escribir, también con `-DryRun`): exige exactamente una línea `name: <rol>`, una `description:` de una
+  sola línea, sólo ASCII imprimible en todo el frontmatter, que la línea siguiente a `name:` y a
+  `description:` sea `---` o una línea `clave:` (sin continuación), que el valor de `description:` no empiece
+  por un indicador YAML, y que ninguna otra línea (`tools:`, `model:`,
+  `hooks:` y su bloque...) nombre un rol con alias. La transformación recorre los nueve agentes aunque
+  sólo uno tenga alias: un defecto en uno sin alias también detiene.
+- Con una clave repetida dentro de `aliases` gana la última, sin aviso. `__type` en cualquier parte del
+  archivo se rechaza (un alias que lo contenga da el mensaje de clave desconocida).
+- Las comparaciones de claves, valores y rutas de los alias y del estado son ordinales: no dependen
+  de la cultura ni ignoran las mayúsculas.
+- Renombrar con sesiones abiertas no está documentado: reinicia las sesiones. El efecto de los alias
+  en Claude Code real no se comprobó (G1/V1 del propietario pendiente).
+
 **No verificado**
 
 - pwsh 7 (no está instalado en el equipo de pruebas), volúmenes de red y OneDrive, un enlace
@@ -517,7 +593,7 @@ hook). La tabla es un orden razonado, no una medición: no promete ahorro de tok
 
 El archivo es `<Target>/synclayer-config.json` (por defecto `~/.claude/synclayer-config.json`), junto
 al estado del instalador. Es opcional y lo escribes tú a mano; el instalador sólo lo lee, una vez, y
-nunca lo crea, edita, respalda ni borra. Un solo campo:
+nunca lo crea, edita, respalda ni borra. El campo del nivel (la clave `aliases` está en «Alias»):
 
 ```json
 { "level": 5 }
@@ -535,7 +611,7 @@ Reglas del archivo:
 |---|---|
 | Sin archivo, o `{}` | Nivel 5 |
 | `level` entero de 1 a 5 | Ese nivel. `"3"`, `3.0`, `true`, 0, 6 y los negativos dan exit 1 |
-| Otra clave (incluida `Level`, en mayúsculas) | Exit 1. El mensaje dice que el instalador puede ser anterior al archivo. Con `level` y `Level` a la vez, el error es `JSON invalido` |
+| Otra clave distinta de `level` y `aliases` (incluida `Level`, en mayúsculas) | Exit 1. El mensaje dice que el instalador puede ser anterior al archivo. Con `level` y `Level` a la vez, el error es `JSON invalido` |
 | JSON roto, vacío, raíz que no es un objeto, más de 65 536 bytes | Exit 1 |
 | Carpeta, enlace simbólico o junction con ese nombre, archivo bloqueado o ilegible | Exit 1: un nivel que no se puede leer no se sustituye en silencio por el 5 |
 
@@ -629,7 +705,116 @@ el mismo nivel ni con niveles mezclados (que este instalador nunca escribe).
 El mensaje del exit 3 termina con la línea `Si cambiaste model: o effort: a mano, usa
 synclayer-config.json.` Se añade siempre que hay exit 3; ver sus límites en «Límites del instalador».
 
-La documentación de la Fase 3 (T7) sigue abierta hasta el cierre de la fase.
+## Alias
+
+Cualquiera de los nueve agentes puede llevar un nombre propio (alias) en la copia instalada. El
+repositorio conserva los nombres originales: el nombre original es el rol, el id estable interno; el alias
+sólo existe en lo que el instalador escribe en `~/.claude/`. Los alias no cambian el comportamiento de los
+agentes ni prometen ahorro, calidad ni costo.
+
+> **Estado de la Fase 4: los alias se aplican; su efecto en un Claude Code real no está verificado
+> (G1/V1 del propietario).** El instalador escribe lo que describe esta sección, y eso está probado.
+> Lo que Claude Code hace con un agente renombrado (que se invoque por el alias, que acepte `_` y `-` en
+> `name:`, qué pasa con dos archivos que declaran el mismo `name:`, si hace falta reiniciar la sesión) sólo
+> se conoce por su documentación o por suposición: no lo des por probado. No apliques alias a tu
+> `~/.claude` real hasta comprobarlo.
+
+### Formato
+
+La clave `aliases` de `<Target>/synclayer-config.json` (el mismo archivo del nivel; opcional, a mano, el
+instalador sólo lo lee) es un objeto de rol a alias. `level` y `aliases` son opcionales:
+
+```json
+{ "level": 3, "aliases": { "sentinel": "amigo-qa", "forge": "dev" } }
+```
+
+- Las claves de `aliases` son sólo los nueve roles: `atlas`, `auditor`, `debugger`, `forge`, `oracle`,
+  `scout`, `scribe`, `sentinel` y `shield`, en minúsculas. Otra clave, incluida `Forge`, da exit 1.
+- Cada valor es una cadena. `null`, un número, un booleano, una lista o un objeto dan exit 1.
+- `aliases` ausente o `{}` equivale a no tener alias: los bytes y la salida son los de siempre. Un alias
+  igual a su propio rol (`"forge": "forge"`) es válido y equivale a no ponerlo.
+- Otra clave en la raíz (incluida `agents` o `Aliases`) da exit 1, como siempre.
+
+### Reglas del alias
+
+El instalador valida la tabla entera antes de leer el estado y de escribir nada: ante el primer problema
+sale con exit 1, también con `-DryRun`. El alias debe cumplir todo esto (V1 a V8):
+
+1. Sólo minúsculas, dígitos, `_` y `-`, empieza por una letra y mide hasta 64 caracteres. Sin
+   espacios, mayúsculas, puntos ni acentos («el amigo QA» se escribe `amigo-qa`).
+2. No es una palabra que YAML no lee como texto: `true`, `false`, `null`, `yes`, `no`, `on`, `off`, `y`, `n`.
+3. No es un nombre de dispositivo de Windows (`con`, `prn`, `aux`, `nul`, `com1` a `com9`, `lpt1` a `lpt9`).
+4. No es el nombre de un agente integrado de Claude Code. Son nueve nombres reservados, una lista
+   cerrada: `explore`, `plan`, `general-purpose`, `claude`, `statusline-setup`, `claude-code-guide`,
+   `web-fetch`, `fork` y `output-style-setup`.
+5. No es el nombre de otro agente de SyncLayer (los nueve roles), lo que descarta también los ciclos.
+6. Ningún alias se repite entre dos roles.
+7. No contiene el nombre de un rol como palabra delimitada por `-` o por los extremos (`dev-sentinel` y
+   `forge-2` se rechazan).
+8. `agents/<alias>.md` no coincide con ninguna ruta del manifiesto ni con el destino de otro rol, esté o no
+   en el manifiesto el archivo del rol de origen. Sólo se compara con el manifiesto: los archivos que ya
+   tengas en `<Target>/agents/` no se ven aquí (ver «Límites del instalador»).
+
+Los mensajes de error son `error: synclayer-config.json no es valido: <motivo>. No se escribio nada.` y el
+motivo nombra el rol (nunca el valor del alias) y un texto fijo, por ejemplo `el alias de <rol> es el
+nombre de un agente integrado de Claude Code`. Una clave desconocida se nombra recortada a 40 caracteres.
+
+### Qué se renombra y qué no
+
+Con al menos un alias efectivo (distinto de su rol), el instalador:
+
+- Escribe el agente en `agents/<alias>.md`, con `name: <alias>`.
+- Reemplaza el nombre del rol por el alias en las líneas `description:` y en el cuerpo de los nueve
+  agentes, y en todo el texto de `rules/agentes.md` y `docs/agentes.md`. Los agentes sin alias propio
+  conservan su `name:`, pero sus textos sí nombran a los demás con el alias.
+- Reemplaza cuatro formas: minúscula (`<rol>`), Capitalizada (`<Rol>`), MAYÚSCULAS (`<ROL>`) y
+  `@agent-<rol>` (sale de la forma minúscula). Una sola pasada, con límite de palabra.
+- Con niveles de 1 a 4, busca la celda de la tabla por rol, no por alias: el agente renombrado recibe el
+  `model:` y el `effort:` de su rol. Con alias y nivel, el alias se aplica primero y el nivel después.
+
+No cambia: `hooks/agent_guard.py` (nunca se transforma) ni los bloques `hooks:` de los agentes, que quedan
+byte a byte; `README.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` (no se instalan); el manifiesto
+(los alias no entran en él: los doce archivos gestionados siguen siendo los mismos); el reporte de uso (un
+agente con alias sale como `(otro agente)`: ver «Límites del reporte de uso»).
+
+**Límite de palabra.** Una letra es un carácter de `[A-Za-z0-9_]` o una letra latina acentuada del texto
+UTF-8 (U+00C0 a U+00FF: `á`, `é`, `ñ`, `ü` y sus mayúsculas). Todo lo demás es límite, incluidos `-`, `/`,
+`.`, comillas angulares, `¿` `¡`, comillas tipográficas, rayas y el espacio duro: `«SENTINEL sólo…»` se
+reemplaza y `ñforge` no. Por eso «escribe», «escriben», «describe», «reescribe» y «sobrescribe» no se
+tocan aunque `scribe` tenga alias. Es un reemplazo textual, no semántico (ver «Límites del instalador»).
+
+### Probar, aplicar, cambiar y quitar
+
+1. Edita `<Target>/synclayer-config.json`. Para probar sin tocar `~/.claude`, pasa `-Target` a una carpeta
+   temporal y crea el archivo allí.
+2. Ensaya con `-DryRun`: valida la tabla, muestra una línea `Alias: <rol> -> <alias> (agents/<alias>.md)`
+   por alias y las filas con la ruta de destino, y no escribe nada.
+3. Reinstala. Cambiar o quitar un alias es editar el archivo y reinstalar.
+4. **Quita a mano el archivo con el nombre anterior.** El instalador nunca borra: el destino anterior
+   sale como `HUERFANO` y, si el archivo existe, un aviso por `stderr` dice que sigue en el destino, que
+   mientras exista hay dos agentes activos con descripciones casi iguales y que lo quites a mano. El
+   huérfano se informa en la corrida que lo deja huérfano y en sus `-DryRun` previos; una vez reescrito el
+   estado, deja de informarse.
+5. Reinicia las sesiones abiertas: no ven agentes nuevos o renombrados. Renombrar en caliente no está
+   documentado.
+
+Qué pasa en cada situación (cada fila tiene prueba salvo la última):
+
+| Situación | Resultado |
+|---|---|
+| Alias nuevo sobre una instalación intacta sin alias | `agents/<alias>.md` `NUEVO`; `agents/<rol>.md` `HUERFANO` con aviso; los archivos que nombran al rol, `ACTUALIZAR`; el resto `IGUAL`; el estado pasa a esquema 3 y el anterior va al respaldo |
+| Alias nuevo y ya existe un `agents/<alias>.md` ajeno | `MODIFICADO`, exit 3, nada escrito; el mensaje añade «elige otro alias». Con `-Force`, respaldo y sobrescritura |
+| Alias cambiado | El destino nuevo `NUEVO`, el anterior `HUERFANO` con aviso, los textos `ACTUALIZAR` |
+| Alias quitado, sin el archivo viejo en disco | `agents/<rol>.md` `NUEVO`; el alias anterior `HUERFANO` con aviso; el estado vuelve a esquema 2 |
+| Alias quitado, con el `agents/<rol>.md` viejo en disco | `IGUAL` si sus bytes son los que se escribirían; si no, `MODIFICADO` (exit 3) |
+| Cambio de nivel con el alias ya instalado | `ACTUALIZAR` en lo que cambia, con el `model:` y el `effort:` del rol |
+| Edición a mano del archivo del alias | `MODIFICADO`, exit 3. Con `-Force`, respaldo en `<respaldo>/agents/<alias>.md` |
+| Estado ausente o ilegible con alias ya instalados | Lo que coincide con lo esperado, `IGUAL`; lo que difiere, `MODIFICADO`; ningún huérfano (no hay de dónde saberlo) |
+| Reinstalar sin cambios, con alias | Todo `IGUAL`; sin respaldo, sin estado nuevo y sin aviso |
+| Un instalador de la Fase 3 lee un estado de esquema 3 | Lo trata como ausente: `IGUAL` o `MODIFICADO`. Sólo documentado, sin prueba |
+
+El archivo anterior nunca se abre para escribir, se respalda ni se borra, y un archivo ajeno en la ruta de
+un alias no se sobrescribe sin `-Force`.
 
 ## Reporte de uso
 
@@ -772,6 +957,9 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
   15,1 s (promedio de tres corridas alternadas, 19,7 % menos). Con datos reales no se midió la
   proporción: antes de optimizar, el `global --all` del propietario tardó unos 3 minutos con unas
   2 800 transcripciones (dato real de C4), y el objetivo de 60 s puede no cumplirse.
+- **Agentes con alias.** El reporte reconoce a los agentes de SyncLayer por su nombre original. Un
+  agente instalado con alias (ver «Alias») sale como `(otro agente)` y deja de atribuirse a SyncLayer. El
+  reporte no lee la tabla de alias.
 - **Hardlinks** de Claude Code (`nlink > 1`) se aceptan y se cuentan aparte; un proceso del mismo
   usuario que plantara uno hacia otro archivo es un riesgo bajo, mitigado porque el lector sólo
   toma claves numéricas, nombres de lista cerrada y exige la firma estructural.
@@ -782,7 +970,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1531 pruebas, 300 saltadas: 297 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1569 pruebas, 319 saltadas: 316 de `install.ps1` contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO), que en Windows no corren. Sólo biblioteca estándar, Python 3.12. La suite tarda unos 4 minutos: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 
@@ -794,6 +982,8 @@ Resumen; la guía completa está en [`docs/agentes.md`](docs/agentes.md).
   el nivel de `synclayer-config.json`, que se aplica al reinstalar (ver «Niveles»). Editar a mano
   `model:` o `effort:` sale `MODIFICADO` (exit 3) y pide `-Force`. `auditor`, `shield` y `debugger`
   no cambian con el nivel.
+- **Cambiar el nombre de un agente:** la clave `aliases` de `synclayer-config.json`, que se aplica al
+  reinstalar (ver «Alias»). El archivo con el nombre anterior no se borra: quítalo a mano.
 - **Cambiar herramientas:** línea `tools:`. Sin ella, el agente hereda todas, incluidos
   los conectores MCP.
 - **Adaptar a un proyecto:** `.claude/agents/<nombre>.md` dentro del repo del proyecto
@@ -814,19 +1004,19 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-24** (T7 de la Fase 4 cerrada: huérfanos por cambio de nombre y frase extra del exit 3).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-24** (T8 de la Fase 4 cerrada: documentación de alias, frontmatter y límites).
 
 ### Avance global
 
-**El proyecto completo va en 76%.** Cuenta las cinco fases con el mismo peso (3 fases al 100 % + la fase 4 al 78 % = 378 ÷ 5 = 75,6 %; con la fase 4 sin redondear, 7 ÷ 9 = 77,8 %, el global es 60 + 20 × 7 ÷ 9 = 75,6 %); la fase 5 es backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 4 está en curso (7 de 9 unidades), así que el número cambia cuando se desglose la fase 5 en sub-fases.
+**El proyecto completo va en 78%.** Cuenta las cinco fases con el mismo peso (3 fases al 100 % + la fase 4 al 89 % = 389 ÷ 5 = 77,8 %; con la fase 4 sin redondear, 8 ÷ 9 = 88,9 %, el global es 60 + 20 × 8 ÷ 9 = 77,8 %); la fase 5 es backlog sin desglosar ([plan](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) y la fase 4 está en curso (8 de 9 unidades), así que el número cambia cuando se desglose la fase 5 en sub-fases.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **76%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **78%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
 | **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Plan aprobado, cerrada en la rama `feat/esfuerzo-configurable` (T1 a T7 y cierre); la compuerta G1 del propietario sigue pendiente (verificación en Claude Code real; no bloquea) ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
-| **4. Nombres de agentes configurables** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **78%** | 7 de 9 | Plan aprobado, en curso (T1 a T7 cerradas); la compuerta G1 del propietario no bloquea las tasks pero sí aplicar alias a su `~/.claude` real (el efecto de los alias en Claude Code real no está verificado) ([plan](docs/plans/2026-11-22-fase4-nombres-configurables.md), [exploración](docs/plans/2026-11-22-fase4-nombres-exploracion.md)) |
+| **4. Nombres de agentes configurables** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | **89%** | 8 de 9 | Plan aprobado, en curso (T1 a T8 cerradas; falta el cierre); la compuerta G1 del propietario no bloquea las tasks pero sí aplicar alias a su `~/.claude` real (el efecto de los alias en Claude Code real no está verificado) ([plan](docs/plans/2026-11-22-fase4-nombres-configurables.md), [exploración](docs/plans/2026-11-22-fase4-nombres-exploracion.md)) |
 | **5. Otras configuraciones dinámicas** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | sin desglosar | Backlog |
 
 Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unidades planeadas. «Cerrada» = commiteada en la rama de la fase con su suite verde y la revisión de `auditor` sin hallazgos Critical ni Important; la integración a `main` se hace al cerrar la fase. Lo que falta probar en un entorno real (la instalación sobre el `~/.claude` verdadero) se lista aparte y no resta.
@@ -881,7 +1071,7 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | Datos y configuración | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T1, T2) |
 | Rol y ruta | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T3, T4) |
 | Transformación | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 3 de 3 (T5, T6, T7) |
-| Documentación y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 2 (T8, cierre) |
+| Documentación y cierre | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **50%** | 1 de 2 (T8, cierre) |
 
 - **Datos y configuración**
   - ✅ Hecho: T1 listas cerradas del alias (`$AliasRoles`, `$ReservedAliases`, `$YamlWords`) en `install.ps1`, sin uso todavía, y la referencia independiente en Python (`tests/aliases_ref.py`, `tests/test_aliases.py`) con la regla de límite de palabra enmendada (E1).
@@ -897,8 +1087,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
   - ✅ Hecho también: T7 huérfanos por cambio de nombre y frase extra del exit 3 (casos 50 a 53): cada fila `HUERFANO` lleva `RenamedTo` (el destino actual del rol si el rol de la entrada previa sigue en el manifiesto; si no, es un huérfano clásico); un huérfano por cambio de nombre da un aviso por `stderr`, uno por archivo, sólo si el archivo existe (nunca se abre, respalda ni borra), también en `-DryRun` y sin cambiar el exit code; la nota por `stdout` «ya no están en el manifiesto» sale sólo si hay un huérfano clásico; el exit 3 añade «Si el archivo es un agente tuyo con el mismo nombre que un alias, elige otro alias.» sólo si algún `MODIFICADO` está en una ruta con alias, antes de la frase final de `model:`/`effort:`. Sin alias la salida es idéntica a la de antes (14 escenarios comparados byte a byte); `synclayer-config.json` nunca se escribe ni se respalda. Con alias reales el efecto en Claude Code real no está verificado (compuerta G1 del propietario).
   - ⬜ Falta: nada.
 - **Documentación y cierre**
-  - ✅ Hecho: nada.
-  - ⬜ Falta: T8 documentación; cierre con `sentinel`, `shield` y `auditor`.
+  - ✅ Hecho: T8 documentación completa de los alias (README: sección «Alias», instalación, límites del instalador y del reporte de uso, estructura y pruebas; `CLAUDE.md`; `HISTORY.md`; `docs/agentes.md`: «Cambiar el nombre de un agente» sin nombres de rol como ejemplo; estado de la Fase 4 y tarea pendiente de `Get-Prop` en el backlog). Sin promesas de ahorro, calidad ni costo; con alias reales el efecto en Claude Code real no está verificado (compuerta G1 del propietario).
+  - ⬜ Falta: cierre con `sentinel`, `shield` y `auditor` sobre el cambio completo.
 
 ### Línea de tiempo
 
@@ -940,8 +1130,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-23 | T5 de la Fase 4: transformación de textos y activación de los alias de punta a punta (nueve agentes, `rules/agentes.md` y `docs/agentes.md`; guardia temporal retirada); revisada por `auditor` y `shield`; efecto en Claude Code real sin verificar | ✅ |
 | 2026-11-23 | T6 de la Fase 4: alias con niveles, repositorio real con nueve alias en los niveles 5 y 3 y `-DryRun` (casos 41 a 46; regresión byte a byte del nivel 5 sin alias); revisada por `auditor` y `shield`; efecto en Claude Code real sin verificar | ✅ |
 | 2026-11-24 | T7 de la Fase 4: huérfanos por cambio de nombre (`RenamedTo`, aviso por `stderr`) y frase extra del exit 3 con alias (casos 50 a 53; sin alias la salida es idéntica a la de antes); efecto en Claude Code real sin verificar | ✅ |
-| **Ahora** | **T8 de la Fase 4** (documentación de alias, frontmatter y límites) y, del propietario, la compuerta G1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`), comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
-| Luego | Cierre de la Fase 4, y desglosar la fase 5 (backlog) | ⬜ |
+| 2026-11-24 | T8 de la Fase 4: documentación de los alias (sección «Alias» del README, límites del instalador y del reporte de uso, `CLAUDE.md`, `HISTORY.md`, `docs/agentes.md`, backlog); efecto en Claude Code real sin verificar | ✅ |
+| **Ahora** | **Cierre de la Fase 4** (`sentinel`, `shield` y `auditor` sobre el cambio completo) y, del propietario, la compuerta G1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`, caso P10), comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) y push | 🔄 |
+| Luego | Tarea aparte de `Get-Prop` (P11), y desglosar la fase 5 (backlog) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
 

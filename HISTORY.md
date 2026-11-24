@@ -2,6 +2,40 @@
 
 ## [Sin publicar]
 
+### Añadido (alias, Fase 4)
+
+Resumen de la Fase 4 (plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`); el detalle por task sigue
+en las entradas T1 a T7 de abajo. Con la T8 (documentación) la fase queda a falta del cierre (`sentinel`,
+`shield` y `auditor` sobre el cambio completo).
+
+- Cada uno de los nueve agentes puede llevar un alias en la clave `aliases` de
+  `<Target>/synclayer-config.json`. Al reinstalar, el instalador escribe el agente en `agents/<alias>.md` con
+  `name: <alias>` y reemplaza el nombre del rol por el alias (minúscula, Capitalizada, MAYÚSCULAS y
+  `@agent-<rol>`, con límite de palabra) en `description:` y cuerpo de los nueve agentes y en
+  `rules/agentes.md` y `docs/agentes.md`. El hook no se transforma y los bloques `hooks:` quedan byte a byte.
+  El repositorio conserva los nombres originales. Sin alias, los bytes y la salida son los de siempre.
+- La tabla se valida entera antes de escribir (V1 a V8; exit 1, también con `-DryRun`): minúsculas, letra
+  inicial, `[a-z0-9_-]` y hasta 64 caracteres; ni palabras de YAML, ni nombres de dispositivo de Windows, ni
+  los nueve nombres reservados (los siete integrados, `fork` y `output-style-setup`: lista cerrada), ni el
+  rol de otro agente, ni repetidos, ni un rol como palabra, ni una ruta del manifiesto.
+- El instalador separa el rol de la ruta de destino; el estado pasa a esquema 3 (`dest` en todas las
+  entradas, hasta 74 caracteres) sólo si algún destino difiere del rol, y vuelve a esquema 2 sin alias. El
+  archivo con el nombre anterior no se borra: sale `HUERFANO` con un aviso por stderr, una vez.
+- Documentación (T8): `README.md` gana la sección «Alias» (formato, reglas, qué se renombra, probar y
+  cambiar, tabla de situaciones, qué no está verificado) y actualiza «Instalación» (línea `Alias:`, estado
+  `HUERFANO`, esquema 3, exit 1 y frase del exit 3), «Límites del instalador» (reemplazo textual, límite de
+  palabra, reservados cerrados, agente propio con el mismo `name:` en el caso P10, colisiones, `dest` de 74,
+  laxitud de `Get-Prop` según P11), «Límites del reporte de uso» (un agente con alias sale como
+  `(otro agente)`), «Dos copias», «Estructura» y «Pruebas». `CLAUDE.md` suma el contrato con las pruebas y los
+  puntos no obvios. `docs/agentes.md` gana «Cambiar el nombre de un agente» sin nombres de rol como ejemplo (se
+  transformaría al instalar). El backlog anota el estado de la Fase 4 y la tarea de `Get-Prop` (P11) para
+  después de la fase.
+- No verificado: con alias reales el efecto en Claude Code real (que se invoque por el alias, `_` y `-` en
+  `name:`, el caso de dos archivos con el mismo `name:`, la recarga en caliente) lo comprueba el propietario
+  en G1/V1. Ningún documento lo da por probado.
+- Pruebas: 1569 pruebas, 319 saltadas (316 de `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de
+  uso).
+
 ### Añadido (Fase 4, T7: huérfanos por cambio de nombre y frase extra del exit 3)
 
 - Cada fila `HUERFANO` lleva `RenamedTo`: el destino actual del rol si el rol de la entrada previa sigue en el
@@ -17,7 +51,7 @@
   nunca se escribe ni se respalda.
 - Pruebas: 19 `test_f4t7_*` (S1 a S12, casos 50 a 53) y aserciones nuevas en el caso 20 de T3.
 - No verificado: con alias reales el efecto en Claude Code real lo comprueba el propietario en G1/V1.
-- Pendiente: documentación final y límites de alias y frontmatter (T8).
+- Pendiente (lo cerró T8): documentación final y límites de alias y frontmatter.
 - Pruebas: la suite pasa a 1569 pruebas, 319 saltadas (316 de `install.ps1` contra pwsh y 3 de la rama POSIX del
   reporte de uso).
 

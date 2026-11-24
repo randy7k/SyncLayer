@@ -94,6 +94,22 @@ pase de `claude-fable-5-2` a `opus` al bajar el esfuerzo.
   sigan funcionando (el manifiesto hoy fija las rutas).
 - Qué pasa con un proyecto que tenga `.claude/agents/<nombre>.md` del nombre viejo.
 
+**Estado (2026-11-24).** Desglosada y en curso: plan
+`docs/plans/2026-11-22-fase4-nombres-configurables.md` (9 unidades). T1 a T8 hechas (la T8 es la
+documentación: README, `CLAUDE.md`, `HISTORY.md` y `docs/agentes.md`); falta el cierre (`sentinel`,
+`shield` y `auditor` sobre el cambio completo). Los alias se aplican, pero su efecto en un Claude Code
+real no está verificado: es la compuerta G1 del propietario (incluido el caso P10, dos archivos del mismo
+ámbito con el mismo `name:`).
+
+**Tarea pendiente para después de la Fase 4 (decisión P11, 2026-11-23).** `Get-Prop` desenrolla las
+listas de un elemento, así que `path`, `sha256`, `written`, `level`, `schema`, `algorithm` y `eol` del
+estado, y `schema`, `path`, `sha256` y `algorithm` de `install-manifest.json`, aceptan `[valor]` en lugar
+de `valor` (defecto heredado de las Fases 1 y 3; no es un hueco conocido, pero contradice «tipos
+estrictos»). Corregirlo en una tarea aparte: usar `Get-PropRaw(...).Value` en `Get-ManifestEntries`,
+`Read-Manifest` y `Read-State`, con la prueba roja primero (un estado y un manifiesto con cada campo como
+lista de un elemento deben rechazarse). Mientras tanto está documentado como límite en el `README.md`
+(«Límites del instalador») y en `CLAUDE.md`. No cambia las 9 unidades de la Fase 4.
+
 ## Fase 5: otras configuraciones dinámicas
 
 **Pedido.** Buscar qué más se puede configurar sin complicar el proyecto.
