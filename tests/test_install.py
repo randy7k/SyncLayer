@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aliases_ref as ar  # noqa: E402
 import build_manifest as bm  # noqa: E402
 import levels_ref as lr  # noqa: E402
+import plans_ref as pr  # noqa: E402
 
 SCRIPT = os.path.join(ROOT, "install.ps1")
 POWERSHELL = shutil.which("powershell")
@@ -430,6 +431,74 @@ class StaticChecks(unittest.TestCase):
         nivel = text[text.index("    # Nivel:"):text.index("    # Paso 3:")]
         self.assertIn("ConvertTo-LevelBytes $aliasBytes[$rel]", nivel)
         self.assertIn("Get-LevelCell $level $agentMatch.Groups[1].Value", nivel)
+
+    def test_f5t2_plans_dir_is_read_once_validated_after_the_alias_table_and_never_used_as_a_path(self):
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        # una sola funcion de validacion y una sola lectura de la clave (dentro de la lectura unica de la configuracion)
+        self.assertEqual(len(re.findall(r"^function Get-PlansDirProblem\b", text, re.M)), 1)
+        self.assertEqual(text.count("Get-PropRaw $m 'plans_dir'"), 1)
+        read_body = text[text.index("function Read-LevelConfig"):text.index("function Find-AliasPair")]
+        self.assertIn("Get-PropRaw $m 'plans_dir'", read_body)
+        self.assertEqual(len(re.findall(r"\[System\.IO\.File\]::(Open|Read|OpenRead)\w*\(", read_body)), 1)
+        # la validacion de la carpeta va despues de la de la tabla de alias, y las dos antes del estado y de escribir
+        self.assertLess(text.index("$aliasProblem = Get-AliasTableProblem"), text.index("$plansProblem = Get-PlansDirProblem"))
+        self.assertLess(text.index("$plansProblem = Get-PlansDirProblem"), text.index("# Paso 3:"))
+        # pura: sin E/S ni rutas
+        body = text[text.index("function Get-PlansDirProblem"):text.index("# Bytes del estado con esquema 2")]
+        self.assertNotRegex(body, r"\[System\.IO\.|Get-Content|Set-Content|Out-File|Join-Path|Test-Path|Write-Out|Write-Err")
+        self.assertIn("$PlansDirMaxLength", body)
+        self.assertIn("$PlansDirPattern", body)
+        self.assertIn("$AllowedPattern", body)
+        self.assertIn("$AliasRoles", body)
+        self.assertNotIn("IgnoreCase", body)
+        # los motivos del script son los de la referencia
+        for message in (pr.MSG_TYPE, pr.MSG_SHAPE, pr.MSG_DEVICE, pr.MSG_ROLE):
+            self.assertIn("'" + message + "'", text)
+        # el valor es texto: ninguna linea que lo toque lo usa para construir o abrir una ruta ni lo mete en un error
+        touching = [l.strip() for l in text.split("\n") if "ConfigPlansPair" in l or "plansEffective" in l]
+        self.assertTrue(touching)
+        for line in touching:
+            self.assertNotRegex(line, r"Join-Path|ConvertTo-LocalPath|Find-Reparse|\[System\.IO\.|Get-Content|Set-Content",
+                                line)
+        stops = [l.strip() for l in text.split("\n") if "Stop-Install" in l and "plans" in l.lower()]
+        for line in stops:
+            self.assertNotIn("ConfigPlansPair", line)
+            self.assertNotIn("plansEffective", line)
+        self.assertEqual([l for l in text.split("\n") if l.strip().startswith("Write-Out ('Planes: '")],
+                         ["        Write-Out ('Planes: ' + $plansEffective)"])
+        # anclas intactas: una sola `# Alias:`, diez `# Paso N:`, la lectura de siempre y ningun marcador nuevo `# Paso`
+        lines = [l.strip() for l in text.split("\n")]
+        self.assertEqual(len([l for l in lines if l.startswith("# Alias:")]), 1)
+        self.assertEqual(len([l for l in lines if l.startswith("# Configuracion:")]), 1)
+        self.assertEqual(len([l for l in lines if l.startswith("# Nivel:")]), 1)
+        self.assertEqual(len([l for l in lines if re.match(r"# Paso \d+:", l)]), 10)
+        self.assertEqual(len([l for l in lines if l.startswith("# Paso")]), 10)
+        self.assertEqual(text.count("$level = [int](Read-LevelConfig $configPath)"), 1)
+
+    def test_f5t2_temporary_guard_is_one_stop_and_has_no_other_effect(self):
+        # Guarda temporal de T2: un solo Stop-Install con su texto, dentro del bloque que imprime `Planes:`. T3 la retira
+        # junto con esta prueba.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        guard = "error: la carpeta de planes aun no se puede aplicar en esta version. No se escribio nada."
+        self.assertEqual(text.count(guard), 1)
+        self.assertEqual(text.count("Stop-Install 1 '" + guard + "'"), 1)
+        block = ("    if ($null -ne $plansEffective) {\n        Write-Out ('Planes: ' + $plansEffective)\n"
+                 "        Stop-Install 1 '" + guard + "'\n    }\n")
+        self.assertEqual(text.count(block), 1)
+        self.assertLess(text.index(block), text.index("# Paso 6:"))
+        self.assertGreater(text.index(block), text.index("# Paso 5:"))
+
+    def test_f5t2_the_config_documentation_in_the_script_lists_the_three_keys(self):
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        head = text[:text.index(".PARAMETER Target")]
+        for key in ("level", "aliases", "plans_dir"):
+            self.assertIn(key, head)
+        self.assertIn("tres campos", head)
+        self.assertNotIn("dos campos", head)
+        reader = text[text.index("# Lee y valida <Target>/synclayer-config.json"):text.index("function Read-LevelConfig")]
+        self.assertIn("plans_dir", reader)
+        self.assertIn("ConfigPlansPair", reader)
+        self.assertIn("level, aliases y plans_dir", text)
 
 
 class InstallCases:
@@ -6982,6 +7051,349 @@ class InstallCases:
         self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
         self.assertEqual(snapshot(self.target), before)
         self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "otro.md")))
+
+    # --- Fase 5, T2: clave plans_dir de synclayer-config.json (lectura unica, validacion L1 a L5 y linea Planes:; casos
+    # 10 a 17 del plan). Aun NO se aplica: una carpeta efectiva valida termina con la guarda temporal (T3 la retira junto
+    # con test_f5t2_temporary_guard_*). El valor de plans_dir es entrada no confiable: nunca sale en un mensaje. ---
+
+    F5_GUARD = "error: la carpeta de planes aun no se puede aplicar en esta version. No se escribio nada."
+    F5_BAD_SET = ["a/b/c/d/e", "..", ".", "docs/../x", "/docs", "docs/", "docs//x", "Docs", "docs/Plans", "docs/plans.v2",
+                  "docs plans", "a" * 32 + "/" + "b" * 32, "a" * 33, "nul", "docs/com1", "docs/lpt0", "docs/forge",
+                  "atlas-planes", "docs/x-shield-y", "", "a\nb", "docs/`x`", "d\u00f3cs", "docs\\x", "docs:x",
+                  "docs/plans\n", "docs/'x'", "-docs", "_docs", "docs/-x", "docs/a b", "docs/<x>", "docs/a|b", "docs/#x",
+                  "\u202edocs", "x" * 65, "docs/plans/../..", "~/docs", "c:/docs"]
+    F5_GOOD_SET = ["planes", "docs/planes", "a/b/c/d", "forge_x", "forges", "docs/plans-v2", "x" * 32, "a1/b2_c/d-e",
+                   "docs/x/y", "com10", "docs/lpt10", "nulo", "docs/plans2"]
+
+    def f5_config(self, plans_dir, level=None, aliases=None):
+        obj = {}
+        if level is not None:
+            obj["level"] = level
+        if aliases is not None:
+            obj["aliases"] = aliases
+        obj["plans_dir"] = plans_dir
+        return json.dumps(obj).encode("ascii")
+
+    def f5_prepare(self, config):
+        self.make_source()
+        self.write_config(config)
+        return snapshot(self.target), sorted(os.listdir(self.tmp))
+
+    def f5_expect_valid_guard(self, value, modes=(["-DryRun"], []), level=None):
+        """Valor valido y efectivo: la linea Planes: y despues la guarda temporal, sin escribir nada."""
+        before, listing = self.f5_prepare(self.f5_config(value, level=level))
+        for mode in modes:
+            with self.subTest(plans_dir=value[:40], mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assert_quiet_failure(code, out, err, before, listing)
+                self.assertEqual(err.strip(), self.F5_GUARD)
+                self.assertIn("Planes: " + value, out.splitlines())
+                self.assertEqual(len([l for l in out.splitlines() if l.startswith("Planes:")]), 1)
+
+    def f5_expect_invalid(self, value, modes=(["-DryRun"],)):
+        expected = pr.validate_plans_dir(value)
+        self.assertIsNotNone(expected, repr(value))
+        before, listing = self.f5_prepare(self.f5_config(value))
+        for mode in modes:
+            with self.subTest(plans_dir=repr(value)[:40], mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assert_quiet_failure(code, out, err, before, listing)
+                self.assertEqual(err.strip(), self.CONFIG_ERR + expected + ". No se escribio nada.")
+                self.assertNotIn("Planes:", out)
+                self.assertNotIn("Nivel:", out)
+
+    def test_f5t2_case10_without_plans_dir_or_with_the_default_is_identical(self):
+        # Caso 10: sin la clave y con "plans_dir": "docs/plans" dan stdout, stderr, destino y estado identicos byte a
+        # byte; ninguna linea Planes: (la carpeta por defecto no es una carpeta efectiva).
+        configs = (("base", b'{"level": 3}'), ("explicita", b'{"level": 3, "plans_dir": "docs/plans"}'),
+                   ("sin nivel", b'{"plans_dir": "docs/plans"}'))
+        for mode in (["-DryRun"], []):
+            results = {}
+            for name, cfg in configs:
+                with self.subTest(case=name, mode=mode):
+                    self.make_source()
+                    self.write_config(cfg)
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 0, out + err)
+                    self.assertNotIn("Planes:", out)
+                    tree = self.tree(self.target)
+                    tree.pop(self.CONFIG)
+                    results[name] = (code, out, err, tree)
+                    shutil.rmtree(self.target)
+            self.assertEqual(results["explicita"], results["base"])
+            self.assertEqual(results["sin nivel"][0], 0)
+        # con alias y nivel a la vez
+        for mode in (["-DryRun"], []):
+            results = []
+            for cfg in (b'{"level": 2, "aliases": {"forge": "dev"}}',
+                        b'{"level": 2, "aliases": {"forge": "dev"}, "plans_dir": "docs/plans"}'):
+                self.make_source()
+                self.write_config(cfg)
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 0, out + err)
+                tree = self.tree(self.target)
+                tree.pop(self.CONFIG)
+                results.append((code, out, err, tree))
+                shutil.rmtree(self.target)
+            self.assertEqual(results[0], results[1])
+            self.assertNotIn("Planes:", results[1][1])
+
+    def test_f5t2_case11_plans_dir_of_an_invalid_type_exit1_in_both_modes(self):
+        variants = [("null", b"null"), ("entero", b"3"), ("cero", b"0"), ("decimal", b"1.5"), ("true", b"true"),
+                    ("false", b"false"), ("lista vacia", b"[]"), ("lista", b'["docs", "planes"]'),
+                    ("lista de una cadena", b'["docs/planes"]'), ("lista de listas", b"[[]]"), ("objeto", b'{"a": "b"}'),
+                    ("objeto vacio", b"{}")]
+        for name, value in variants:
+            with self.subTest(case=name):
+                self.assert_config_rejected(b'{"plans_dir": ' + value + b"}", "plans_dir debe ser texto")
+                shutil.rmtree(self.target)
+        before, listing = self.f5_prepare(b'{"plans_dir": ["docs/planes"]}')
+        code, out, err = self.run_install()
+        self.assert_quiet_failure(code, out, err, before, listing)
+        self.assertEqual(err.strip(), self.CONFIG_ERR + pr.MSG_TYPE + ". No se escribio nada.")
+
+    def test_f5t2_case12_invalid_values_match_the_reference_and_never_write(self):
+        for value in self.F5_BAD_SET:
+            self.f5_expect_invalid(value)
+            shutil.rmtree(self.target)
+
+    def test_f5t2_case12_invalid_values_exit1_in_the_real_mode_too(self):
+        for value in ("Docs", "docs/forge", "nul", "", "a\nb", "docs/`x`", "d\u00f3cs", "a/b/c/d/e"):
+            self.f5_expect_invalid(value, modes=([],))
+            shutil.rmtree(self.target)
+
+    def test_f5t2_case12_each_reason_is_reported_with_its_fixed_text(self):
+        for value, motivo in (("Docs", pr.MSG_SHAPE), ("a/b/c/d/e", pr.MSG_SHAPE), ("x" * 65, pr.MSG_SHAPE),
+                              ("a" * 32 + "/" + "b" * 32, pr.MSG_SHAPE), ("nul", pr.MSG_DEVICE),
+                              ("docs/com1", pr.MSG_DEVICE), ("docs/forge", pr.MSG_ROLE), ("atlas-planes", pr.MSG_ROLE)):
+            with self.subTest(value=value[:20]):
+                self.assert_config_rejected(self.f5_config(value), motivo, modes=(["-DryRun"],))
+                shutil.rmtree(self.target)
+        self.assertEqual(pr.MSG_TYPE, "plans_dir debe ser texto")
+
+    def test_f5t2_case12_valid_values_match_the_reference(self):
+        for value in self.F5_GOOD_SET:
+            self.assertIsNone(pr.validate_plans_dir(value), value)
+            self.f5_expect_valid_guard(value, modes=(["-DryRun"],))
+            shutil.rmtree(self.target)
+
+    def test_f5t2_case12_a_hostile_value_never_reaches_stdout_or_stderr(self):
+        values = ["SECRETO-PLANES-123", "secreto-planes!", "secreto/forge", "secreto/nul", "secreto/a/b/c/d",
+                  "secreto\nsecreto", "secreto`x`", "SECRETO" + "x" * 60000, "secreto\u001b[31m", "\u202esecreto",
+                  "secreto/" + "y" * 40, "secreto:x", "secreto\\x"]
+        for value in values:
+            with self.subTest(value=value[:25]):
+                before, listing = self.f5_prepare(self.f5_config(value))
+                code, out, err = self.run_install("-DryRun")
+                self.assert_quiet_failure(code, out, err, before, listing)
+                self.assertIn(self.CONFIG_ERR + "plans_dir ", err)
+                for needle in ("secreto", "SECRETO", "y" * 20, "x" * 40):
+                    self.assertNotIn(needle, out + err)
+                self.assertLess(len(err), 500)
+                shutil.rmtree(self.target)
+
+    def test_f5t2_case13_similar_keys_are_still_unknown_keys(self):
+        for key in ("plansDir", "Plans_dir", "plans", "PLANS_DIR", "plans_dir ", "plans-dir", "planes_dir"):
+            with self.subTest(key=key):
+                self.assert_config_rejected(json.dumps({key: "docs/planes"}).encode("ascii"),
+                                            "clave desconocida: " + key + " (el instalador puede ser anterior al archivo)")
+                shutil.rmtree(self.target)
+        # la clave correcta junto a una parecida: sigue siendo desconocida la parecida
+        self.assert_config_rejected(b'{"plans_dir": "docs/planes", "plansDir": "x"}', "clave desconocida: plansDir")
+
+    def test_f5t2_case14_plans_dir_level_and_aliases_lines_come_in_order(self):
+        files = dict(SAMPLE)
+        files["agents/sentinel.md"] = agent_md("sentinel", "sonnet")
+        self.make_source(files)
+        self.write_config(self.f5_config("docs/planes", level=3, aliases={"sentinel": "amigo-qa", "forge": "dev"}))
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assert_quiet_failure(code, out, err, before, listing)
+                lines = out.splitlines()
+                self.assertTrue(lines[0].startswith("Destino: "), lines)
+                self.assertEqual(lines[1:5], ["Nivel: 3 (synclayer-config.json)",
+                                              "Alias: forge -> dev (agents/dev.md)",
+                                              "Alias: sentinel -> amigo-qa (agents/amigo-qa.md)",
+                                              "Planes: docs/planes"])
+                self.assertEqual(len(lines), 5, lines)
+                self.assertEqual(err.strip(), self.F5_GUARD)
+        # `Planes:` no se confunde con una fila del plan (la expresion LINE de las pruebas)
+        self.assertIsNone(LINE.match("Planes: docs/planes"))
+        self.assertIsNone(LINE.match("Planes: docs/plans"))
+
+    def test_f5t2_case14_the_planes_line_follows_the_previous_level_line(self):
+        self.make_source()
+        self.install_ok()
+        self.write_config(self.f5_config("docs/planes", level=2))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(out.splitlines()[1:4], ["Nivel: 2 (synclayer-config.json)", "Nivel anterior: 5",
+                                                 "Planes: docs/planes"])
+
+    def test_f5t2_temporary_guard_valid_effective_values_end_with_exit1_and_write_nothing(self):
+        # Guarda temporal de la Fase 5 (T2): se retira en T3 junto con esta prueba.
+        for value in ("docs/planes", "planes", "a/b/c/d", "docs/plans-v2", "x" * 32):
+            self.f5_expect_valid_guard(value)
+            shutil.rmtree(self.target)
+        self.f5_expect_valid_guard("docs/planes", level=3)
+        shutil.rmtree(self.target)
+        # con -Force y un destino editado a mano tampoco se escribe ni se respalda
+        self.make_source()
+        self.install_ok()
+        write(self.target, "agents/alfa.md", b"editado a mano\n")
+        self.write_config(self.f5_config("docs/planes"))
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in (["-Force"], ["-Force", "-DryRun"]):
+            code, out, err = self.run_install(*mode)
+            self.assert_quiet_failure(code, out, err, before, listing)
+            self.assertEqual(err.strip(), self.F5_GUARD)
+            self.assertFalse([n for n in os.listdir(self.tmp) if "backup" in n or "respaldo" in n])
+
+    def test_f5t2_temporary_guard_does_not_apply_to_the_default_folder(self):
+        for mode in (["-DryRun"], []):
+            self.make_source()
+            self.write_config(b'{"plans_dir": "docs/plans"}')
+            code, out, err = self.run_install(*mode)
+            self.assertEqual(code, 0, out + err)
+            self.assertNotIn("error", err)
+            self.assertNotIn("Planes:", out)
+            shutil.rmtree(self.target)
+
+    def test_f5t2_case15_an_invalid_plans_dir_writes_and_backs_up_nothing_with_a_valid_state(self):
+        self.make_source()
+        self.install_ok()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        write(self.target, "agents/beta.md", b"editado a mano\n")
+        self.write_config(self.f5_config("Docs/Forge"))
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in (["-DryRun"], [], ["-Force"]):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assert_quiet_failure(code, out, err, before, listing)
+                self.assertEqual(err.strip(), self.CONFIG_ERR + pr.MSG_SHAPE + ". No se escribio nada.")
+                self.assertNotIn("Respaldo", out)
+                self.assertFalse([n for n in os.listdir(self.tmp) if "backup" in n or "respaldo" in n])
+
+    def test_f5t2_case15_alias_and_plans_errors_at_once_give_a_single_error_the_alias_one(self):
+        cfg = json.dumps({"aliases": {"forge": "Dev"}, "plans_dir": "Docs/Forge"}).encode("ascii")
+        before, listing = self.f5_prepare(cfg)
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode)
+            self.assert_quiet_failure(code, out, err, before, listing)
+            self.assertEqual(err.strip(), self.CONFIG_ERR + "el alias de forge solo admite a-z, 0-9, _ y -, empieza por "
+                                          "letra y tiene hasta 64 caracteres. No se escribio nada.")
+            self.assertEqual(len([l for l in err.splitlines() if l.strip()]), 1, err)
+            self.assertNotIn("plans_dir", err)
+        # alias valido y carpeta invalida: el error es el de la carpeta y no sale ninguna linea Alias:
+        cfg = json.dumps({"aliases": {"forge": "dev"}, "plans_dir": "Docs"}).encode("ascii")
+        self.write_config(cfg)
+        before = snapshot(self.target)
+        code, out, err = self.run_install("-DryRun")
+        self.assert_quiet_failure(code, out, err, before, listing)
+        self.assertEqual(err.strip(), self.CONFIG_ERR + pr.MSG_SHAPE + ". No se escribio nada.")
+        self.assertNotIn("Alias:", out)
+        # alias invalido y carpeta valida y efectiva: el error es el del alias, no la guarda
+        cfg = json.dumps({"aliases": {"forge": "Dev"}, "plans_dir": "docs/planes"}).encode("ascii")
+        self.write_config(cfg)
+        before = snapshot(self.target)
+        code, out, err = self.run_install("-DryRun")
+        self.assert_quiet_failure(code, out, err, before, listing)
+        self.assertIn("el alias de forge", err)
+        self.assertNotIn("carpeta de planes", err)
+
+    def test_f5t2_case16_a_repeated_plans_dir_key_in_windows_powershell_5_1_last_one_wins(self):
+        # Comportamiento medido de ConvertFrom-Json de 5.1 (como con level y aliases): sin error; gana la ultima
+        # aparicion. Un valor invalido anterior queda descartado; uno invalido posterior manda.
+        for data, expect in ((b'{"plans_dir": "docs/uno", "plans_dir": "docs/dos"}', "Planes: docs/dos"),
+                             (b'{"plans_dir": "docs/dos", "plans_dir": "docs/uno"}', "Planes: docs/uno"),
+                             (b'{"plans_dir": "Docs", "plans_dir": "docs/uno"}', "Planes: docs/uno"),
+                             (b'{"plans_dir": 3, "plans_dir": "docs/uno"}', "Planes: docs/uno")):
+            with self.subTest(data=data):
+                self.make_source()
+                self.write_config(data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, out + err)
+                self.assertEqual(err.strip(), self.F5_GUARD)
+                self.assertEqual([l for l in out.splitlines() if l.startswith("Planes:")], [expect])
+                shutil.rmtree(self.target)
+        # ultimo valido igual a docs/plans: sin carpeta efectiva
+        self.make_source()
+        self.write_config(b'{"plans_dir": "docs/uno", "plans_dir": "docs/plans"}')
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("Planes:", out)
+        # ultimo invalido: manda
+        self.write_config(b'{"plans_dir": "docs/uno", "plans_dir": "Docs"}')
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(err.strip(), self.CONFIG_ERR + pr.MSG_SHAPE + ". No se escribio nada.")
+
+    def test_f5t2_case16_the_type_key_is_rejected_anywhere_even_in_a_value_that_would_be_valid(self):
+        # 5.1 descarta __type en silencio: el instalador lo rechaza antes. "a__type" pasaria L2, pero contiene __type:
+        # limite documentado (la clave desconocida nombra __type, nunca el valor).
+        for data in (b'{"plans_dir": {"__type": "x"}}', b'{"__type": "x", "plans_dir": "docs/planes"}',
+                     b'{"plans_dir": "docs/a__type"}', b'{"plans_dir": "docs/a\\u005f\\u005ftype"}',
+                     b'{"plans_dir": "docs/planes", "__t\\u0079pe": "x"}'):
+            with self.subTest(data=data):
+                self.assert_config_rejected(data, "clave desconocida: __type")
+                shutil.rmtree(self.target)
+        self.assertIsNone(pr.validate_plans_dir("docs/a__type"))
+
+    def test_f5t2_second_read_of_the_config_is_detected_by_behaviour(self):
+        # Lectura unica: tras la lectura se reescribe la configuracion; el resultado debe reflejar la PRIMERA lectura.
+        path = None
+        for later, why in (('{"plans_dir": "Docs"}', "invalida"), ('{}', "sin clave"), ('{"plans_dir": "docs/otra"}', "otra"),
+                           ('{"plans_dir": "docs/plans"}', "la de por defecto")):
+            with self.subTest(later=why):
+                self.make_source()
+                shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+                path = self.write_config(self.f5_config("docs/planes"))
+                self.patch_script("$level = [int](Read-LevelConfig $configPath)",
+                                  "[System.IO.File]::WriteAllText('%s', '%s')" % (path.replace("'", "''"), later))
+                self.write_config(self.f5_config("docs/planes"))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, out + err)
+                self.assertEqual([l for l in out.splitlines() if l.startswith("Planes:")], ["Planes: docs/planes"])
+                self.assertEqual(err.strip(), self.F5_GUARD)
+                shutil.rmtree(self.target)
+
+    def test_f5t2_case17_the_config_is_never_written_backed_up_or_listed(self):
+        # Bytes y mtime de synclayer-config.json iguales tras -DryRun, instalacion y -Force, con carpeta por defecto,
+        # efectiva (guarda) e invalida; no aparece en el respaldo. T4 repetira el caso con la carpeta aplicada.
+        for value in ("docs/plans", "docs/planes", "Docs"):
+            with self.subTest(plans_dir=value):
+                self.make_source()
+                self.install_ok()
+                write(self.target, "agents/alfa.md", b"editado a mano\n")
+                path = self.write_config(self.f5_config(value))
+                old = os.stat(path).st_mtime_ns - 5_000_000_000
+                os.utime(path, ns=(old, old))
+                before = snapshot(self.target)[self.CONFIG]
+                backup = os.path.join(self.tmp, "respaldo-f5")
+                for mode in (["-DryRun"], ["-BackupDir", backup], ["-Force", "-BackupDir", backup]):
+                    self.run_install(*mode)
+                    self.assertEqual(snapshot(self.target)[self.CONFIG], before)
+                found = []
+                for dirpath, _dirs, files in os.walk(backup):
+                    found += [f for f in files if f == self.CONFIG]
+                self.assertEqual(found, [])
+                shutil.rmtree(self.target)
+                shutil.rmtree(backup, ignore_errors=True)
+
+    def test_f5t2_config_size_limit_with_plans_dir(self):
+        head = b'{"plans_dir": "docs/plans"}'
+        limit = 65536
+        self.make_source()
+        self.write_config(head + b" " * (limit - len(head)))
+        out, err = self.install_ok("-DryRun")
+        self.assertNotIn("Planes:", out)
+        shutil.rmtree(self.target)
+        self.assert_config_rejected(head + b" " * (limit + 1 - len(head)), "supera 65536 bytes")
 
 
 def f4t6_normalize_paths(text, pairs):

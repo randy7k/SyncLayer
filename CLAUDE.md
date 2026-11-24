@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1622 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1663 pruebas, 342 saltadas (320 de `install.ps1` contra pwsh, que no está instalado, 19 de la clase pwsh de `plans_dir` y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -85,7 +85,7 @@ Cuatro piezas, de la más abstracta a la más concreta (la cuarta, el instalador
 
 4. El instalador: `install.ps1` (Windows PowerShell 5.1), `install-manifest.json` (los doce
    archivos gestionados con su hash canónico) y `tools/build_manifest.py` (lo genera y lo
-   comprueba). Lee además `<Target>/synclayer-config.json` (opcional, a mano, sólo `level` y `aliases`; ver «Niveles
+   comprueba). Lee además `<Target>/synclayer-config.json` (opcional, a mano, sólo `level`, `aliases` y `plans_dir`; ver «Niveles
    de esfuerzo» y «Alias de agentes» en «Comportamientos no obvios»). En el destino deja el estado `<Target>/synclayer-manifest.json`, con esquema 2 (por
    archivo: hash del origen `sha256`, hash de lo escrito `written` y `level`; con algún alias efectivo, esquema 3, que
    añade `dest`, la ruta real de destino; lee también el esquema 1 y lo migra). Con alias, el agente se escribe en
@@ -302,11 +302,23 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     `tests/test_aliases.py` (`INVENTORY`) falla si aparece una forma nueva o cambia un conteo: actualízalo en el
     mismo cambio. `README.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` no se instalan ni se transforman.
 - Carpeta de planes (Fase 5, plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`; en curso, T1
-  hecha): `install.ps1` define `$PlansDirDefault`, `$PlansDirPattern` y `$PlansDirMaxLength` junto a
+  y T2 hechas): `install.ps1` define `$PlansDirDefault`, `$PlansDirPattern` y `$PlansDirMaxLength` junto a
   `$AliasRoles`, sin uso. La referencia es `tests/plans_ref.py` (contrato: `script_constants` lee esas tres
   constantes de `install.ps1`) y las pruebas `tests/test_plans.py` (casos 1 a 9 y 31, sin PowerShell). El
   inventario falla si aparece una forma `<segmento>/plans/` distinta de `docs/plans/` (un alias válido podría
-  crear o destruir el literal; de eso depende el orden alias, planes, nivel). Nada se aplica todavía.
+  crear o destruir el literal; de eso depende el orden alias, planes, nivel).
+  - T2 (hecha): `install.ps1` lee `plans_dir` en la lectura única de la configuración
+    (`$script:ConfigPlansPair`, con `Get-PropRaw`: tipo estricto) y la valida con `Get-PlansDirProblem` (L1 a L5;
+    función pura, motivo fijo, nunca el valor) después de la tabla de alias y antes del Paso 3: exit 1 también con
+    `-DryRun`, antes de escribir. Carpeta efectiva = valor válido distinto de `docs/plans`; sólo entonces imprime
+    `Planes: <valor>` (tras `Nivel:` y `Alias:`; no casa con `LINE`). GUARDA TEMPORAL: con carpeta efectiva, tras
+    imprimir `Planes:`, sale con exit 1 y `error: la carpeta de planes aun no se puede aplicar en esta version. No se
+    escribio nada.` (también en `-DryRun`); T3 la retira junto con su prueba, no la quites antes. Sin la clave o con
+    `docs/plans`, la salida es idéntica a la base byte a byte. Medido en 5.1: con `plans_dir` repetido gana la
+    última, sin aviso; cualquier `__type`, también dentro de un valor, da `clave desconocida: __type` (por eso
+    `docs/a__type` se rechaza). Pruebas: 3 estáticas y 19 `test_f5t2_*` en `tests/test_install.py` (la clase contra
+    pwsh suma 19 saltadas). Abiertos a propósito (Low): el eco de `Planes:` no pasa por `Format-Safe` (el valor ya
+    validó la regex) y la clave repetida no avisa. La transformación de textos aún no existe.
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
   cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
@@ -357,7 +369,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (320 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (320 más 19 de la clase pwsh de `plans_dir` en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

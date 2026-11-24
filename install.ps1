@@ -8,11 +8,13 @@ archivo y muestra el plan. Sin -DryRun respalda lo que va a sobrescribir (verifi
 el hook primero (temporal en la misma carpeta + movimiento), verifica el destino y escribe el
 estado <Target>/synclayer-manifest.json. Nunca borra. No hace rollback: si falla, informa.
 
-Configuracion: <Target>/synclayer-config.json es opcional y tiene dos campos, ambos opcionales: level (entero
-de 1 a 5; sin archivo, o con un objeto vacio, el nivel es 5) y aliases (Fase 4: objeto rol a alias; se lee, se
+Configuracion: <Target>/synclayer-config.json es opcional y tiene tres campos, todos opcionales: level (entero
+de 1 a 5; sin archivo, o con un objeto vacio, el nivel es 5), aliases (Fase 4: objeto rol a alias; se lee, se
 valida entera, se muestra con una linea Alias: por alias y se aplica: el agente se instala en agents/<alias>.md con
 name: <alias> y los textos gestionados cambian el nombre del rol por el alias; sin aliases o con aliases vacio no
-cambia nada). Un archivo invalido, o una carpeta o un enlace con ese
+cambia nada) y plans_dir (Fase 5, en curso: carpeta de planes, de 1 a 4 carpetas en minusculas separadas por /; se
+lee, se valida y se muestra con una linea Planes:, pero AUN NO SE APLICA: una carpeta distinta de docs/plans termina
+con exit 1 antes de escribir; sin la clave, o igual a docs/plans, no cambia nada). Un archivo invalido, o una carpeta o un enlace con ese
 nombre, detiene la instalacion con exit 1 antes de escribir nada (tambien con -DryRun). Con el nivel 1 a 4, el
 instalador reescribe model: y effort: del frontmatter de los seis agentes modificables (atlas, forge, sentinel,
 scribe, scout, oracle) con los valores de la tabla de niveles; auditor, shield, debugger y el resto quedan como
@@ -87,7 +89,8 @@ $AliasRoles = @('atlas', 'auditor', 'debugger', 'forge', 'oracle', 'scout', 'scr
 $ReservedAliases = @('explore', 'plan', 'general-purpose', 'claude', 'statusline-setup', 'claude-code-guide', 'web-fetch', 'fork', 'output-style-setup')
 $YamlWords = @('true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n')
 
-# Datos de la carpeta de planes (Fase 5, clave plans_dir). Aun sin uso: una definicion por linea. Contrato con
+# Datos de la carpeta de planes (Fase 5, clave plans_dir). Los usa Get-PlansDirProblem (validacion; T2 aun no los
+# aplica a ningun texto): una definicion por linea. Contrato con
 # tests/test_plans.py y tests/plans_ref.py: son los mismos que los de la referencia. $PlansDirPattern: de una a cuatro
 # carpetas separadas por /, en minusculas; el valor no puede inyectar Markdown ni instrucciones en un prompt. En .NET
 # la expresion usa \z (con \Z y $ un salto de linea final pasaria).
@@ -623,13 +626,16 @@ function Format-SafeShort([string]$Text) {
 # Lee y valida <Target>/synclayer-config.json (entrada no confiable) y devuelve el nivel (entero de 1 a 5;
 # un objeto vacio es el nivel 5). Lectura unica: se abre una vez (solo lectura) y se leen como maximo
 # $ConfigMaxBytes mas uno, asi el tope vale sobre lo leido y no sobre una medida previa. UTF-8 estricto, con
-# o sin BOM. Raiz: un objeto. Claves: lista cerrada (level y aliases, las dos opcionales), comparadas de forma
-# ordinal. level: entero de 1 a 5 (ni texto, ni decimal, ni bool, ni null). aliases (Fase 4): un objeto; la
+# o sin BOM. Raiz: un objeto. Claves: lista cerrada (level, aliases y plans_dir, las tres opcionales), comparadas
+# de forma ordinal. level: entero de 1 a 5 (ni texto, ni decimal, ni bool, ni null). aliases (Fase 4): un objeto; la
 # misma lectura deja sus pares clave/valor, sin validar, en $script:ConfigAliasPairs (el archivo no se abre otra
-# vez) y Get-AliasTableProblem los valida. Lanza un motivo fijo y escapado: nunca el contenido del archivo ni
+# vez) y Get-AliasTableProblem los valida. plans_dir (Fase 5): la misma lectura deja el valor crudo, sin validar, en
+# $script:ConfigPlansPair (hashtable con la clave Value; $null si la clave no esta) y Get-PlansDirProblem lo valida.
+# Lanza un motivo fijo y escapado: nunca el contenido del archivo ni
 # el texto de .NET. El llamador comprueba antes que no sea carpeta ni punto de reanalisis.
 function Read-LevelConfig([string]$FilePath) {
     $script:ConfigAliasPairs = New-Object System.Collections.Generic.List[object]
+    $script:ConfigPlansPair = $null
     try {
         $fs = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
     }
@@ -664,7 +670,7 @@ function Read-LevelConfig([string]$FilePath) {
     if ([string]::IsNullOrWhiteSpace($text)) { throw 'JSON invalido (archivo vacio)' }
     # El ConvertFrom-Json de 5.1 (JavaScriptSerializer) descarta en silencio la clave __type, tambien escrita
     # con escapes de la forma backslash-u y cuatro hex, antes de que se pueda comprobar la lista cerrada de
-    # claves. Un archivo valido solo tiene las claves level y aliases: cualquier aparicion de __type (comparacion ordinal,
+    # claves. Un archivo valido solo tiene las claves level, aliases y plans_dir: cualquier aparicion de __type (comparacion ordinal,
     # con esos escapes ya resueltos) se rechaza.
     if (Test-TextHasTypeKey $text) {
         throw 'clave desconocida: __type (el instalador puede ser anterior al archivo)'
@@ -680,7 +686,7 @@ function Read-LevelConfig([string]$FilePath) {
         throw 'debe ser un objeto'
     }
     foreach ($p in $m.PSObject.Properties) {
-        if (-not ((Test-OrdinalEqual $p.Name 'level') -or (Test-OrdinalEqual $p.Name 'aliases'))) {
+        if (-not ((Test-OrdinalEqual $p.Name 'level') -or (Test-OrdinalEqual $p.Name 'aliases') -or (Test-OrdinalEqual $p.Name 'plans_dir'))) {
             throw ('clave desconocida: ' + (Format-SafeShort $p.Name) + ' (el instalador puede ser anterior al archivo)')
         }
     }
@@ -700,6 +706,12 @@ function Read-LevelConfig([string]$FilePath) {
         foreach ($ap in $av.PSObject.Properties) {
             $script:ConfigAliasPairs.Add(@{ Key = [string]$ap.Name; Value = $ap.Value })
         }
+    }
+    # plans_dir (Fase 5): solo se guarda el valor crudo (Get-PropRaw, tipo estricto: una lista de un elemento no es una
+    # cadena); Get-PlansDirProblem decide si vale. Con la clave repetida gana la ultima (comportamiento de 5.1).
+    $plansProp = Get-PropRaw $m 'plans_dir'
+    if ($null -ne $plansProp) {
+        $script:ConfigPlansPair = @{ Value = $plansProp.Value }
     }
     return $levelResult
 }
@@ -807,6 +819,32 @@ function Get-DestRelProblem($DestRel, $ManifestPaths) {
         elseif (-not $same) { return ($who + ' cambia en un archivo fijo') }
         if (-not $seen.Add($d)) { return ($who + ' repite la de otro rol') }
         if (-not $same -and $manifestSet.Contains($d)) { return ($who + ' coincide con un archivo del manifiesto') }
+    }
+    return $null
+}
+
+# Carpeta de planes (Fase 5, T2). Funcion pura, sin E/S: devuelve el motivo del primer problema de plans_dir (texto
+# fijo, nunca el valor) o $null si es valido. L1 es una cadena; L2 y L3 la forma (de una a cuatro carpetas en
+# minuscula, hasta 64 caracteres; $PlansDirPattern ya excluye ".." y "\", ":", espacios, comillas y no ASCII); L4 ningun
+# segmento es un nombre de dispositivo de Windows (la misma regex que el alias: $AllowedPattern); L5 ningun trozo de
+# un segmento, partido por guion, es un nombre de $AliasRoles. Comparaciones ordinales, sin IgnoreCase. El valor es
+# texto que se mostrara y se insertara en textos (T3): el instalador no lo usa como ruta.
+function Get-PlansDirProblem($Value) {
+    if (-not ($Value -is [string])) { return 'plans_dir debe ser texto' }
+    $opts = [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+    if ($Value.Length -gt $PlansDirMaxLength -or -not [regex]::IsMatch($Value, $PlansDirPattern, $opts)) {
+        return 'plans_dir solo admite de 1 a 4 carpetas separadas por /, en minusculas (a-z, 0-9, _ y -; cada una empieza por letra o digito y tiene hasta 32 caracteres) y hasta 64 caracteres en total'
+    }
+    $segments = $Value.Split('/')
+    foreach ($segment in $segments) {
+        if (-not [regex]::IsMatch('agents/' + $segment + '.md', $AllowedPattern, $opts)) {
+            return 'plans_dir contiene un nombre reservado de Windows'
+        }
+    }
+    foreach ($segment in $segments) {
+        foreach ($token in $segment.Split('-')) {
+            if (Test-OrdinalIn $AliasRoles $token) { return 'plans_dir contiene el nombre de un agente de SyncLayer' }
+        }
     }
     return $null
 }
@@ -1310,6 +1348,8 @@ try {
     $level = 5
     $levelFromFile = $false
     $script:ConfigAliasPairs = New-Object System.Collections.Generic.List[object]
+    $script:ConfigPlansPair = $null
+    $plansEffective = $null
     $badLink = Find-Reparse $TargetFull $ConfigName
     if ($null -ne $badLink) { Stop-Install 1 ((Get-ReparseMessage $badLink) + ' No se escribio nada.') }
     if ([System.IO.Directory]::Exists($configPath)) {
@@ -1330,6 +1370,18 @@ try {
         $aliasProblem = Get-AliasTableProblem $script:ConfigAliasPairs $manifest.Order
         if ($null -ne $aliasProblem) {
             Stop-Install 1 ('error: ' + $ConfigName + ' no es valido: ' + $aliasProblem + '. No se escribio nada.')
+        }
+        # La carpeta de planes (clave plans_dir, Fase 5) se valida despues de la tabla de alias y antes de leer el
+        # estado y de escribir: exit 1 tambien con -DryRun. El mensaje lleva un motivo fijo, nunca el valor. Carpeta
+        # efectiva = un valor valido distinto de docs/plans; es texto que se muestra, nunca una ruta.
+        if ($null -ne $script:ConfigPlansPair) {
+            $plansProblem = Get-PlansDirProblem $script:ConfigPlansPair.Value
+            if ($null -ne $plansProblem) {
+                Stop-Install 1 ('error: ' + $ConfigName + ' no es valido: ' + $plansProblem + '. No se escribio nada.')
+            }
+            if (-not (Test-OrdinalEqual $script:ConfigPlansPair.Value $PlansDirDefault)) {
+                $plansEffective = [string]$script:ConfigPlansPair.Value
+            }
         }
     }
     # Avisos de entorno (T6): con el nivel 1 a 4, dos variables anulan el model: y el effort: de los agentes
@@ -1586,6 +1638,13 @@ try {
     }
     foreach ($aliasItem in $aliasEffective) {
         Write-Out ('Alias: ' + $aliasItem.Role + ' -> ' + $aliasItem.Alias + ' (agents/' + $aliasItem.Alias + '.md)')
+    }
+    # Carpeta de planes (Fase 5, T2): el valor ya paso la validacion (alfabeto cerrado, 64 caracteres como mucho). Se
+    # lee, se valida y se muestra, pero aun no se aplica: la guarda temporal detiene la instalacion antes de escribir
+    # nada (tambien con -DryRun), asi ningun commit acepta una carpeta que no aplica. T3 la retira junto con su prueba.
+    if ($null -ne $plansEffective) {
+        Write-Out ('Planes: ' + $plansEffective)
+        Stop-Install 1 'error: la carpeta de planes aun no se puede aplicar en esta version. No se escribio nada.'
     }
     if ($backupItems.Count -gt 0) { Write-Out ('Respaldo: ' + (Format-Safe $BackupFull)) }
     if ($DryRun) { Write-Out 'Modo: -DryRun (no se escribe nada)' }

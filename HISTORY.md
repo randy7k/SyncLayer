@@ -6,7 +6,7 @@
 
 Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
 con los valores por defecto de P1 a P14; rama `feat/configuraciones-dinamicas`. 9 unidades (T1 a T8 y el
-cierre), 1 cerrada (T1, ver más abajo); la carpeta de planes aún no se aplica.
+cierre), 2 cerradas (T1 y T2, ver más abajo); la carpeta de planes se lee y se valida, pero aún no se aplica.
 
 - Candidatas que entran: carpeta de planes configurable (clave `plans_dir` de `synclayer-config.json`,
   aplicada al instalar; sin la clave, bytes y salida idénticos a los de hoy); idioma del reporte de uso
@@ -21,6 +21,27 @@ cierre), 1 cerrada (T1, ver más abajo); la carpeta de planes aún no se aplica.
   editarla a mano o un agente de proyecto. (e) estrictez de la guarda: exige transformar el bloque `hooks:`,
   hoy prohibido, y un modo sin guarda contradice la falla cerrada; no se ofrece nada.
 - Pendiente del propietario, fuera del conteo: G1 de la Fase 5 (no bloquea), V1 y V2.
+
+### Añadido (Fase 5, T2)
+
+- `install.ps1` lee la clave `plans_dir` de `<Target>/synclayer-config.json` en la lectura única de la
+  configuración (la lista cerrada de claves de la raíz pasa a `level`, `aliases` y `plans_dir`) y la valida con
+  `Get-PlansDirProblem` (L1 a L5: cadena; de una a cuatro carpetas en minúsculas separadas por `/`; hasta 64
+  caracteres; sin nombres de dispositivo de Windows; sin nombres de rol). La validación va después de la tabla
+  de alias y antes de leer el estado y de escribir: exit 1 también con `-DryRun`. Los mensajes llevan un motivo
+  fijo, nunca el valor.
+- Línea `Planes: <valor>` sólo si la carpeta efectiva (válida y distinta de `docs/plans`) existe.
+- Guarda temporal: con carpeta efectiva, tras `Planes:` sale con exit 1 y `error: la carpeta de planes aun no se
+  puede aplicar en esta version. No se escribio nada.` (también en `-DryRun`). La retira T3.
+- Sin la clave, o con `docs/plans`, la salida es idéntica a la de antes byte a byte.
+- Medido en Windows PowerShell 5.1: con `plans_dir` repetido gana la última, sin aviso; cualquier `__type`,
+  también dentro de un valor, da `clave desconocida: __type` (por eso `docs/a__type` se rechaza). Anotado en
+  «Límites del instalador» del README, que además gana la sección «Carpeta de planes (`plans_dir`)».
+- `auditor` y `shield`: sin Critical ni Important. Abiertos a propósito (Low/Minor): el eco de `Planes:` sin
+  `Format-Safe` (el valor ya pasó la regex), la clave repetida sin aviso y dos pruebas que podrían comparar más
+  (caso 10, variante sin nivel; caso 17, sin comprobar el exit).
+- Pruebas: 22 nuevas (3 estáticas y 19 `test_f5t2_*`). Suite: 1663 pruebas, 342 saltadas (320 de `install.ps1`
+  contra pwsh, 19 de la clase contra pwsh de T2 y 3 de la rama POSIX del reporte de uso).
 
 ### Añadido (Fase 5, T1)
 

@@ -2,7 +2,8 @@
 
 Fecha: 2026-11-24. Estado: **aprobado por el propietario el 2026-11-24, con los valores por defecto
 de P1 a P14**. Rama: `feat/configuraciones-dinamicas`. Avance: T1 cerrada (2026-11-24): tres constantes sin uso en `install.ps1`, `tests/plans_ref.py` y `tests/test_plans.py`
-(43 pruebas, casos 1 a 9 y 31).
+(43 pruebas, casos 1 a 9 y 31). T2 cerrada (2026-11-24): clave `plans_dir` leída y validada (`Get-PlansDirProblem`,
+L1 a L5) con guarda temporal que impide aplicarla; 22 pruebas nuevas (3 estáticas y 19 `test_f5t2_*`), suite de 1663 pruebas.
 
 Fuentes: [`2026-11-19-backlog-configuracion-y-reportes.md`](2026-11-19-backlog-configuracion-y-reportes.md)
 (Fase 5 y «Restricción de diseño: simple»),
