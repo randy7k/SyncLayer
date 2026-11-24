@@ -2,6 +2,26 @@
 
 ## [Sin publicar]
 
+### Planificado (Fase 5)
+
+Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
+con los valores por defecto de P1 a P14; rama `feat/configuraciones-dinamicas`. 9 unidades (T1 a T8 y el
+cierre), 0 cerradas. Todavía no hay código.
+
+- Candidatas que entran: carpeta de planes configurable (clave `plans_dir` de `synclayer-config.json`,
+  aplicada al instalar; sin la clave, bytes y salida idénticos a los de hoy); idioma del reporte de uso
+  (`es` por defecto, `en`, con el parámetro `--lang`); perfiles por proyecto, sólo documentación
+  (`.claude/agents/` y `permissions.deny` con `Agent(<nombre>)`; lo no documentado por Claude Code se
+  escribe como no verificado).
+- Convención de commits: descartada de la carpeta de planes, porque nada del repositorio la lee ni la hace
+  cumplir (sería una opción sin efecto); queda en el `CLAUDE.md` de cada proyecto.
+- Candidatas descartadas: (a) activar o desactivar agentes por usuario: las pruebas fijan nueve agentes y
+  doce archivos, y habría que redefinir manifiesto, catálogos y flujos; se ofrece `permissions.deny`. (b)
+  `tools:` por agente: el mínimo seguro depende del rol y no hay transformación de esa línea; se ofrece
+  editarla a mano o un agente de proyecto. (e) estrictez de la guarda: exige transformar el bloque `hooks:`,
+  hoy prohibido, y un modo sin guarda contradice la falla cerrada; no se ofrece nada.
+- Pendiente del propietario, fuera del conteo: G1 de la Fase 5 (no bloquea), V1 y V2.
+
 ### Añadido (alias, Fase 4)
 
 Resumen de la Fase 4 (plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`); el detalle por task sigue

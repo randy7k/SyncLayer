@@ -1,8 +1,9 @@
 # Backlog: reportes de uso y configuración de SyncLayer
 
-> Estado: **backlog, sin desglosar**. Las cuatro fases de abajo son intención del propietario
-> (2026-11-19), no un diseño. Cada una empieza con una exploración cuyo resultado se le propone
-> al propietario antes de implementar nada. Las ideas marcadas «hipótesis» no están verificadas.
+> Estado (2026-11-24): **las fases 2 a 5 están desglosadas**; la Fase 5 está desglosada y aprobada, en curso
+> (ver su sección). Las fases de abajo nacieron como intención del propietario (2026-11-19), no como un
+> diseño; cada una empezó con una exploración cuyo resultado se le propuso al propietario antes de
+> implementar nada. Las ideas marcadas «hipótesis» no están verificadas.
 > Al desglosar una fase en tasks, se actualiza la sección «Línea de tiempo y avance» del README.
 
 Punto de partida: el instalador (`docs/plans/2026-11-19-instalador.md`) está en curso y es la
@@ -111,6 +112,13 @@ lista de un elemento deben rechazarse). Mientras tanto está documentado como l�
 («Límites del instalador») y en `CLAUDE.md`. No cambia las 9 unidades de la Fase 4.
 
 ## Fase 5: otras configuraciones dinámicas
+
+**Estado (2026-11-24).** Desglosada y aprobada; en curso: plan
+[`2026-11-24-fase5-configuraciones-dinamicas.md`](2026-11-24-fase5-configuraciones-dinamicas.md) (9
+unidades), rama `feat/configuraciones-dinamicas`, aprobado por el propietario con los valores por
+defecto de P1 a P14. Entran carpeta de planes, idioma del reporte de uso y perfiles por proyecto (sólo
+documentación); el resto de las candidatas de abajo se descarta con motivo en el plan (sección 1.2). El
+texto que sigue es el pedido original.
 
 **Pedido.** Buscar qué más se puede configurar sin complicar el proyecto.
 
