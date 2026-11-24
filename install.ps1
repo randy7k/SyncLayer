@@ -1519,7 +1519,10 @@ try {
     }
     # Huerfano: destino del estado previo que ya no es destino actual de ningun rol del manifiesto (con los esquemas
     # 1 y 2 y sin alias, ruta del estado que no esta en el manifiesto). Solo se informa (nunca se abre, respalda ni
-    # borra): no tiene rol (Path = $null) y Dest es la ruta del archivo.
+    # borra): no tiene rol (Path = $null) y Dest es la ruta del archivo. Es huerfano por cambio de nombre
+    # (RenamedTo = destino actual del rol) si el rol de la entrada previa sigue en el manifiesto: su archivo no dejo
+    # de existir en el manifiesto, solo cambio de ruta (alias nuevo, cambiado o quitado). Si no, es un huerfano
+    # clasico.
     if ($null -ne $prev) {
         $currentDests = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
         foreach ($rel in $manifest.Order) { [void]$currentDests.Add($destRel[$rel]) }
@@ -1527,7 +1530,9 @@ try {
             $prevDest = $prev.Dest[$rel]
             if (-not $currentDests.Contains($prevDest)) {
                 $counts['HUERFANO']++
-                $rows.Add(@{ State = 'HUERFANO'; Path = $null; Dest = $prevDest })
+                $renamedTo = $null
+                if ($destRel.ContainsKey($rel)) { $renamedTo = $destRel[$rel] }
+                $rows.Add(@{ State = 'HUERFANO'; Path = $null; Dest = $prevDest; RenamedTo = $renamedTo })
             }
         }
     }
@@ -1583,15 +1588,39 @@ try {
         ' ACTUALIZAR=' + $counts['ACTUALIZAR'] + ' MODIFICADO=' + $counts['MODIFICADO'] +
         ' HUERFANO=' + $counts['HUERFANO'])
     foreach ($adjustLine in $adjustLines) { Write-Out $adjustLine }
-    if ($counts['HUERFANO'] -gt 0) {
+    # La nota habla de archivos que ya no estan en el manifiesto: solo vale para un huerfano clasico. Uno por cambio de
+    # nombre (RenamedTo) tiene su aviso por stderr; con solo de esos la nota seria falsa y no se imprime.
+    $classicOrphans = 0
+    foreach ($row in $rows) {
+        if ($row.State -ceq 'HUERFANO' -and $null -eq $row.RenamedTo) { $classicOrphans++ }
+    }
+    if ($classicOrphans -gt 0) {
         Write-Out 'nota: los HUERFANO los instalo una version anterior y ya no estan en el manifiesto. No se borran.'
+    }
+    # Aviso del huerfano por cambio de nombre (uno por archivo que sigue en el destino): solo se comprueba que exista,
+    # nunca se abre, respalda ni borra. No cambia el codigo de salida. Mismo texto en -DryRun y en la corrida real.
+    foreach ($row in $rows) {
+        if ($row.State -ceq 'HUERFANO' -and $null -ne $row.RenamedTo) {
+            if ([System.IO.File]::Exists((ConvertTo-LocalPath $TargetFull $row.Dest))) {
+                Write-Err ('aviso: ' + (Format-Safe $row.Dest) + ' es el nombre anterior de ' + (Format-Safe $row.RenamedTo) +
+                    ' y sigue en el destino: no se borra. Mientras exista hay dos agentes activos con descripciones casi' +
+                    ' iguales y la delegacion puede elegir cualquiera. Quitalo a mano si ya no lo usas.')
+            }
+        }
     }
 
     if ($counts['MODIFICADO'] -gt 0 -and -not $Force) {
         $mod = @($rows | Where-Object { $_.State -eq 'MODIFICADO' } | ForEach-Object { $_.Dest })
+        # Un MODIFICADO en una ruta con alias (destino distinto del rol) puede ser un agente del usuario con ese nombre.
+        $aliasHint = ''
+        foreach ($row in $rows) {
+            if ($row.State -ceq 'MODIFICADO' -and $row.Dest -cne $row.Path) {
+                $aliasHint = "`nSi el archivo es un agente tuyo con el mismo nombre que un alias, elige otro alias."
+            }
+        }
         Stop-Install 3 ("error: hay cambios locales en el destino (MODIFICADO):`n  " + ($mod -join "`n  ") +
             "`nNo se escribio nada. Opciones: lleva el cambio al repositorio (regla de copia inversa del README)" +
-            " o repite con -Force (se respalda lo que se sobrescribe)." +
+            " o repite con -Force (se respalda lo que se sobrescribe)." + $aliasHint +
             "`nSi cambiaste model: o effort: a mano, usa synclayer-config.json.")
     }
 

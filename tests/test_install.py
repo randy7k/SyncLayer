@@ -4609,9 +4609,13 @@ class InstallCases:
                 self.assertEqual(ar.state3_orphans(prev, sorted(SAMPLE)), ["agents/viejo-alfa.md"])
                 self.assertNotIn("agents/alfa.md", ar.prev_by_dest(prev))
                 self.assertIn("HUERFANO=1", out)
-                # Contrato de T3: clasificacion, HUERFANO informado y archivo intacto. No se afirma la nota de stdout
-                # ni stderr vacio: este huerfano es por cambio de nombre (su rol sigue en el manifiesto) y T7 define su
-                # aviso propio (3.7 del plan); la nota actual habla de archivos que ya no estan en el manifiesto.
+                # T7: ahora si se afirma lo que T3 dejo abierto. El huerfano es por cambio de nombre (el rol alfa sigue en
+                # el manifiesto): sin la nota de stdout y con el aviso de stderr (el archivo existe).
+                self.assertNotIn("ya no estan en el manifiesto", out)
+                self.assertNotIn("nota:", out)
+                self.assertEqual([l for l in err.splitlines() if "es el nombre anterior de" in l],
+                                 [self.f4t7_aviso("agents/viejo-alfa.md", "agents/alfa.md")])
+                # Contrato de T3: clasificacion, HUERFANO informado y archivo intacto.
                 self.assertEqual(snapshot(self.target), before)
                 backup = os.path.join(self.tmp, "respaldo")
                 shutil.rmtree(backup, ignore_errors=True)
@@ -6398,6 +6402,518 @@ class InstallCases:
             self.assertIn(needle, text)
         self.assertNotIn("Alias:", text)
         self.assertNotIn("y los alias", text)
+
+    # --- Fase 4, T7: cambios de alias, ediciones a mano, -Force y huerfanos (casos 47 a 53 del plan) ---
+
+    F4T7_NOTE = "ya no estan en el manifiesto"
+    F4T7_MODEL_HINT = "Si cambiaste model: o effort: a mano, usa synclayer-config.json."
+    F4T7_ALIAS_HINT = "Si el archivo es un agente tuyo con el mismo nombre que un alias, elige otro alias."
+
+    def f4t7_aviso(self, old, new):
+        return ("aviso: %s es el nombre anterior de %s y sigue en el destino: no se borra. Mientras exista hay dos "
+                "agentes activos con descripciones casi iguales y la delegacion puede elegir cualquiera. Quitalo a "
+                "mano si ya no lo usas." % (old, new))
+
+    def f4t7_avisos(self, err):
+        return [l for l in err.splitlines() if "es el nombre anterior de" in l]
+
+    def f4t7_config(self, aliases=None, level=None):
+        obj = {}
+        if level is not None:
+            obj["level"] = level
+        if aliases is not None:
+            obj["aliases"] = aliases
+        self.write_config(json.dumps(obj).encode("ascii"))
+
+    def f4t7_start(self, aliases=None, level=None, files=None):
+        """Origen de ALIAS_SAMPLE e instalacion real con esa configuracion."""
+        files = self.f4t5_source(files)
+        self.f4t7_config(aliases, level)
+        self.install_ok()
+        return files
+
+    def f4t7_file(self, rel):
+        """(bytes, mtime en ns) de un archivo del destino."""
+        p = os.path.join(self.target, *rel.split("/"))
+        with open(p, "rb") as f:
+            data = f.read()
+        return data, os.stat(p).st_mtime_ns
+
+    def f4t7_changed(self, files, old_table, new_table, level=5, old_level=None):
+        """Destinos que no cambian de ruta y cuyos bytes cambian de una tabla a otra, segun la referencia."""
+        old = alias_expected(files, old_table, level if old_level is None else old_level)
+        new = alias_expected(files, new_table, level)
+        return {new[r][0] for r in files if old[r][0] == new[r][0] and old[r][1] != new[r][1]}
+
+    def f4t7_by_state(self, out, state):
+        return sorted(k for k, v in self.states(out).items() if v == state)
+
+    def f4t7_assert_installed(self, files, level, aliases):
+        """Como assert_alias_installed, sin exigir que falte agents/<rol>.md: en T7 el archivo anterior queda en disco
+        (huerfano) y se comprueba aparte. Cada destino = referencia; estado = referencia (esquema 3 o 2)."""
+        expected = alias_expected(files, aliases, level)
+        hashes, dests = {}, {}
+        for rel, (dest, data) in expected.items():
+            self.assertEqual(read(self.target, dest), data, rel)
+            hashes[rel] = bm.canonical_sha256(data)
+            dests[rel] = dest
+        manifest = read(self.src, "install-manifest.json")
+        if any(d != r for r, d in dests.items()):
+            want = ar.state_for3(manifest, hashes, level, dests)
+        else:
+            want = lr.state_for(manifest, hashes, level)
+        self.assertEqual(read(self.target, self.STATE), want)
+
+    def f4t7_assert_one_rename_orphan(self, out, err, old, new, exists=True):
+        """Un solo huerfano, por cambio de nombre: sin la nota de stdout y con el aviso de stderr si el archivo existe."""
+        self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), [old], out)
+        self.assertIn("HUERFANO=1", out)
+        self.assertNotIn(self.F4T7_NOTE, out)
+        self.assertNotIn("nota:", out)
+        self.assertEqual(self.f4t7_avisos(err), [self.f4t7_aviso(old, new)] if exists else [], err)
+
+    def test_f4t7_case47_s1_new_alias_over_an_intact_install_without_aliases(self):
+        files = self.f4t7_start()
+        old_tree = self.f4_tree(self.target)
+        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        prev_state = read(self.target, self.STATE)
+        self.assertIn(b'"schema": 2', prev_state)
+        self.f4t7_config(ALIAS_ONE)
+        changed = self.f4t7_changed(files, {}, ALIAS_ONE)
+        self.assertTrue({"agents/atlas.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        for dry in (True, False):
+            with self.subTest(dry_run=dry):
+                if dry:
+                    code, out, err = self.run_install("-DryRun")
+                    self.assertEqual(code, 0, out + err)
+                    self.assertEqual(snapshot(self.target), before)
+                    self.assertFalse(os.path.exists(backup))
+                else:
+                    out, err = self.install_ok("-BackupDir", backup)
+                st = self.states(out)
+                self.assertEqual(st["agents/amigo-qa.md"], "NUEVO")
+                self.assertEqual(st["agents/sentinel.md"], "HUERFANO")
+                self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
+                self.assertEqual(self.f4t7_by_state(out, "NUEVO"), ["agents/amigo-qa.md"])
+                self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+                self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md")
+        # corrida real: el archivo anterior intacto (bytes y mtime), estado a esquema 3, el anterior al respaldo
+        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+        self.f4t7_assert_installed(files, 5, ALIAS_ONE)
+        self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+        tree = self.f4_tree(backup)
+        self.assertEqual(set(tree), set(changed) | {self.STATE})
+        for rel in changed:
+            self.assertEqual(tree[rel], old_tree[rel], rel)
+        self.assertEqual(tree[self.STATE], prev_state)
+
+    def test_f4t7_case47_s2_new_alias_over_a_foreign_file_is_modificado_and_force_backs_it_up(self):
+        files = self.f4t7_start()
+        self.f4t7_config(ALIAS_ONE)
+        write(self.target, "agents/amigo-qa.md", b"agente ajeno del usuario\n")
+        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        before = snapshot(self.target)
+        for flags in ([], ["-DryRun"]):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 3, out + err)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md"])
+                self.assertNotIn("Copiado", out)
+                self.assertIn(self.F4T7_ALIAS_HINT, err)
+                self.assertTrue(err.rstrip().endswith(self.F4T7_MODEL_HINT), err)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md"])
+        self.assertEqual(read(backup, "agents/amigo-qa.md"), b"agente ajeno del usuario\n")
+        self.f4t7_assert_installed(files, 5, ALIAS_ONE)
+        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+        self.assertNotIn("agents/sentinel.md", self.f4_tree(backup))
+
+    def test_f4t7_case47_s3_changed_alias_orphans_the_previous_alias_file_only(self):
+        # Se parte de S1: instalacion sin alias y luego ALIAS_ONE; agents/sentinel.md queda en disco.
+        files = self.f4t7_start()
+        self.f4t7_config(ALIAS_ONE)
+        self.install_ok()
+        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        old_amigo = self.f4t7_file("agents/amigo-qa.md")
+        prev_state = read(self.target, self.STATE)
+        table = {"sentinel": "tester"}
+        self.f4t7_config(table)
+        changed = self.f4t7_changed(files, ALIAS_ONE, table)
+        self.assertTrue({"agents/atlas.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/tester.md"], "NUEVO")
+        self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
+        self.assertNotIn("agents/sentinel.md", st)
+        self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", "agents/tester.md")
+        # el archivo del rol (de la instalacion sin alias) sigue en disco, no es destino ni destino previo: ni fila
+        # HUERFANO ni aviso
+        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+        self.assertNotIn("agents/sentinel.md", self.f4t7_by_state(out, "HUERFANO"))
+        self.assertFalse([l for l in err.splitlines() if "agents/sentinel.md" in l], err)
+        self.assertEqual(self.f4t7_file("agents/amigo-qa.md"), old_amigo)
+        self.f4t7_assert_installed(files, 5, table)
+        tree = self.f4_tree(backup)
+        self.assertEqual(set(tree), set(changed) | {self.STATE})
+        self.assertEqual(tree[self.STATE], prev_state)
+
+    def test_f4t7_case47_s4_removed_alias_without_the_old_role_file_is_nuevo_and_state_goes_back_to_schema2(self):
+        files = self.f4t7_start(ALIAS_ONE)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "sentinel.md")))
+        old_amigo = self.f4t7_file("agents/amigo-qa.md")
+        prev_state = read(self.target, self.STATE)
+        self.assertIn(b'"schema": 3', prev_state)
+        self.f4t7_config(None)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/sentinel.md"], "NUEVO")
+        self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", "agents/sentinel.md")
+        self.assertEqual(self.f4t7_file("agents/amigo-qa.md"), old_amigo)
+        self.f4t7_assert_installed(files, 5, {})
+        self.assertNotIn(b'"dest"', read(self.target, self.STATE))
+        self.assertEqual(self.f4_tree(backup)[self.STATE], prev_state)
+        self.assertNotIn("agents/amigo-qa.md", self.f4_tree(backup))
+
+    def test_f4t7_case47_s5_removed_alias_with_the_old_role_file_on_disk(self):
+        # (a) los bytes son los que se escribirian: IGUAL. (b) distintos: no esta en prevByDest, MODIFICADO y exit 3.
+        for edited in (False, True):
+            with self.subTest(edited=edited):
+                shutil.rmtree(self.target, ignore_errors=True)
+                files = self.f4t7_start()
+                self.f4t7_config(ALIAS_ONE)
+                self.install_ok()
+                if edited:
+                    with open(os.path.join(self.target, "agents", "sentinel.md"), "ab") as f:
+                        f.write(b"editado a mano\n")
+                self.f4t7_config(None)
+                old_amigo = self.f4t7_file("agents/amigo-qa.md")
+                before = snapshot(self.target)
+                code, out, err = self.run_install()
+                if not edited:
+                    self.assertEqual(code, 0, out + err)
+                    self.assertEqual(self.states(out)["agents/sentinel.md"], "IGUAL")
+                    self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", "agents/sentinel.md")
+                    self.f4t7_assert_installed(files, 5, {})
+                else:
+                    self.assertEqual(code, 3, out + err)
+                    self.assertEqual(self.states(out)["agents/sentinel.md"], "MODIFICADO")
+                    self.assertEqual(snapshot(self.target), before)
+                    self.assertNotIn(self.F4T7_ALIAS_HINT, err)
+                    self.assertTrue(err.rstrip().endswith(self.F4T7_MODEL_HINT), err)
+                self.assertEqual(self.f4t7_file("agents/amigo-qa.md"), old_amigo)
+
+    def test_f4t7_case48_s6_level_change_with_the_alias_already_installed(self):
+        files = self.f4t7_start(ALIAS_ONE)
+        e5 = alias_expected(files, ALIAS_ONE, 5)["agents/sentinel.md"][1]
+        e1 = alias_expected(files, ALIAS_ONE, 1)["agents/sentinel.md"][1]
+        self.assertNotEqual(e5, e1)
+        self.f4t7_config(ALIAS_ONE, level=1)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/amigo-qa.md"], "ACTUALIZAR")
+        self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+        self.assertFalse(self.f4t7_by_state(out, "HUERFANO"))
+        self.assertIn("HUERFANO=0", out)
+        self.assertEqual(self.f4t7_avisos(err), [])
+        self.assertIn("Nivel anterior: 5", out)
+        model, effort = lr.read_script_table()[(1, "sentinel")]
+        self.assertIn("Ajuste: agents/amigo-qa.md  model: %s  effort: %s" % (model, effort), out.splitlines())
+        self.assertEqual(read(self.target, "agents/amigo-qa.md"), e1)
+        self.assertEqual(read(backup, "agents/amigo-qa.md"), e5)
+        self.f4t7_assert_installed(files, 1, ALIAS_ONE)
+
+    def test_f4t7_case48_s7_new_alias_and_level_change_at_once(self):
+        files = self.f4t7_start()
+        old_tree = self.f4_tree(self.target)
+        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        prev_state = read(self.target, self.STATE)
+        self.assertIn(b'"schema": 2', prev_state)
+        self.f4t7_config(ALIAS_ONE, level=1)
+        changed = self.f4t7_changed(files, {}, ALIAS_ONE, level=1, old_level=5)
+        self.assertTrue({"agents/atlas.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/amigo-qa.md"], "NUEVO")
+        self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
+        self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+        self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md")
+        self.assertIn("Nivel anterior: 5", out)
+        model, effort = lr.read_script_table()[(1, "sentinel")]
+        self.assertIn("Ajuste: agents/amigo-qa.md  model: %s  effort: %s" % (model, effort), out.splitlines())
+        self.assertEqual(read(self.target, "agents/amigo-qa.md"), alias_expected(files, ALIAS_ONE, 1)["agents/sentinel.md"][1])
+        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+        self.f4t7_assert_installed(files, 1, ALIAS_ONE)
+        self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+        tree = self.f4_tree(backup)
+        self.assertEqual(set(tree), set(changed) | {self.STATE})
+        for rel in changed:
+            self.assertEqual(tree[rel], old_tree[rel], rel)
+        self.assertEqual(tree[self.STATE], prev_state)
+
+    def test_f4t7_case49_s8_hand_edit_of_the_alias_file_is_modificado_and_force_backs_it_up(self):
+        files = self.f4t7_start(ALIAS_ONE)
+        path = os.path.join(self.target, "agents", "amigo-qa.md")
+        with open(path, "ab") as f:
+            f.write(b"editado a mano\n")
+        edited = read(self.target, "agents/amigo-qa.md")
+        before = snapshot(self.target)
+        for flags in ([], ["-DryRun"]):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 3, out + err)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md"])
+                self.assertIn(self.F4T7_ALIAS_HINT, err)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(read(backup, "agents/amigo-qa.md"), edited)
+        self.f4t7_assert_installed(files, 5, ALIAS_ONE)
+        self.assertEqual(set(self.f4_tree(backup)), {"agents/amigo-qa.md"})
+
+    def test_f4t7_case49_s9_reassignment_between_two_roles(self):
+        files = self.f4t7_start(ALIAS_ONE)
+        old_amigo = self.f4t7_file("agents/amigo-qa.md")
+        old_forge = self.f4t7_file("agents/forge.md")
+        table = {"sentinel": "tester", "forge": "amigo-qa"}
+        self.f4t7_config(table)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/amigo-qa.md"], "ACTUALIZAR")
+        self.assertEqual(st["agents/tester.md"], "NUEVO")
+        self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+        self.f4t7_assert_one_rename_orphan(out, err, "agents/forge.md", "agents/amigo-qa.md")
+        self.assertEqual(self.f4t7_file("agents/forge.md"), old_forge)
+        self.assertEqual(read(backup, "agents/amigo-qa.md"), old_amigo[0])
+        self.assertNotIn("agents/forge.md", self.f4_tree(backup))
+        self.f4t7_assert_installed(files, 5, table)
+
+    def test_f4t7_case49_s10_missing_or_unreadable_state_with_aliases_already_installed(self):
+        for variant in ("ausente", "ilegible"):
+            for edited in (False, True):
+                with self.subTest(state=variant, edited=edited):
+                    shutil.rmtree(self.target, ignore_errors=True)
+                    files = self.f4t7_start()
+                    self.f4t7_config(ALIAS_ONE)
+                    self.install_ok()
+                    if edited:
+                        with open(os.path.join(self.target, "agents", "amigo-qa.md"), "ab") as f:
+                            f.write(b"editado a mano\n")
+                    state = os.path.join(self.target, self.STATE)
+                    if variant == "ausente":
+                        os.remove(state)
+                    else:
+                        with open(state, "wb") as f:
+                            f.write(b"{no es json")
+                    old_sentinel = self.f4t7_file("agents/sentinel.md")
+                    code, out, err = self.run_install()
+                    if edited:
+                        self.assertEqual(code, 3, out + err)
+                        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md"])
+                    else:
+                        self.assertEqual(code, 0, out + err)
+                        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+                    self.assertFalse(self.f4t7_by_state(out, "HUERFANO"))
+                    self.assertNotIn(self.F4T7_NOTE, out)
+                    self.assertEqual(self.f4t7_avisos(err), [])
+                    self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+
+    def test_f4t7_case49_s11_state_of_schema_1_or_2_and_a_new_alias_behaves_like_s1(self):
+        for schema in (1, 2):
+            with self.subTest(schema=schema):
+                shutil.rmtree(self.target, ignore_errors=True)
+                files = self.f4t5_source()
+                for rel, data in files.items():
+                    write(self.target, rel, data)
+                self.write_state(files, schema=schema)
+                self.f4t7_config(ALIAS_ONE)
+                changed = self.f4t7_changed(files, {}, ALIAS_ONE)
+                out, err = self.install_ok()
+                st = self.states(out)
+                self.assertEqual(st["agents/amigo-qa.md"], "NUEVO")
+                self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
+                self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+                self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md")
+                self.f4t7_assert_installed(files, 5, ALIAS_ONE)
+                self.assertEqual(read(self.target, "agents/sentinel.md"), files["agents/sentinel.md"])
+
+    def test_f4t7_case49_s12_reinstalling_the_same_aliases_changes_nothing(self):
+        files = self.f4t7_start()
+        self.f4t7_config(ALIAS_FOUR)
+        self.install_ok()
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for flags in (["-DryRun"], []):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 0, out + err)
+                self.assertFalse(self.f4t7_by_state(out, "HUERFANO"))
+                self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+                self.assertNotIn("Respaldo:", out)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(self.f4t7_avisos(err), [])
+                self.assertNotIn("nota:", out)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+        self.f4t7_assert_installed(files, 5, ALIAS_FOUR)
+
+    def test_f4t7_case50_rename_orphan_warns_only_if_the_file_exists_and_is_never_touched(self):
+        for exists in (True, False):
+            for dry in (True, False):
+                with self.subTest(file_exists=exists, dry_run=dry):
+                    shutil.rmtree(self.target, ignore_errors=True)
+                    shutil.rmtree(os.path.join(self.tmp, "respaldo"), ignore_errors=True)
+                    self.f4t7_start()
+                    if not exists:
+                        os.remove(os.path.join(self.target, "agents", "sentinel.md"))
+                    old = self.f4t7_file("agents/sentinel.md") if exists else None
+                    self.f4t7_config(ALIAS_ONE)
+                    backup = os.path.join(self.tmp, "respaldo")
+                    flags = ["-DryRun"] if dry else []
+                    code, out, err = self.run_install(*flags, "-BackupDir", backup)
+                    self.assertEqual(code, 0, out + err)
+                    self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md", exists=exists)
+                    if exists:
+                        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old)
+                    else:
+                        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "sentinel.md")))
+                    if not dry:
+                        self.assertNotIn("agents/sentinel.md", self.f4_tree(backup))
+                    else:
+                        self.assertFalse(os.path.exists(backup))
+
+    def test_f4t7_case50_one_warning_per_file(self):
+        # Dos huerfanos por cambio de nombre a la vez (sentinel y forge pasan a alias): un aviso por archivo.
+        self.f4t7_start()
+        self.f4t7_config({"sentinel": "amigo-qa", "forge": "dev"})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(sorted(self.f4t7_avisos(err)),
+                         sorted([self.f4t7_aviso("agents/sentinel.md", "agents/amigo-qa.md"),
+                                 self.f4t7_aviso("agents/forge.md", "agents/dev.md")]))
+        self.assertIn("HUERFANO=2", out)
+        self.assertNotIn(self.F4T7_NOTE, out)
+
+    def test_f4t7_case51_classic_orphan_keeps_the_note_and_has_no_warning(self):
+        # Sin alias: nota por stdout, ningun aviso de cambio de nombre (la prueba existente fija el resto).
+        self.make_source()
+        old = dict(SAMPLE)
+        old["agents/viejo.md"] = b"de una version anterior\n"
+        self.write_state(old)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("nota: los HUERFANO los instalo una version anterior y ya no estan en el manifiesto. No se borran.",
+                      out.splitlines())
+        self.assertEqual(self.f4t7_avisos(err), [])
+        self.assertEqual(err, "")
+
+    def test_f4t7_case51_mixed_classic_and_rename_orphans_print_the_note_and_the_warning(self):
+        files = self.f4t7_start()
+        extra = dict(files)
+        extra["agents/viejo.md"] = b"de una version anterior\n"
+        self.write_state(extra)
+        write(self.target, "agents/viejo.md", b"de una version anterior\n")
+        self.f4t7_config(ALIAS_ONE)
+        for flags in (["-DryRun"], []):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), ["agents/sentinel.md", "agents/viejo.md"])
+                self.assertIn("HUERFANO=2", out)
+                self.assertEqual(out.count("nota: los HUERFANO los instalo una version anterior"), 1)
+                self.assertEqual(self.f4t7_avisos(err), [self.f4t7_aviso("agents/sentinel.md", "agents/amigo-qa.md")])
+                self.assertEqual(read(self.target, "agents/viejo.md"), b"de una version anterior\n")
+                if not flags:
+                    # el huerfano clasico tampoco se toco; el estado ya no los lista
+                    self.assertNotIn(b"viejo", read(self.target, self.STATE))
+
+    def test_f4t7_case51_classic_orphan_with_aliases_configured_and_unchanged(self):
+        # Alias ya instalados y sin cambios, mas un huerfano clasico en el estado: nota, sin aviso de cambio de nombre.
+        files = self.f4t7_start(ALIAS_ONE)
+        extra = dict(files)
+        extra["agents/viejo.md"] = b"de una version anterior\n"
+        write(self.target, "agents/viejo.md", b"de una version anterior\n")
+        self.write_state(extra, schema=3, dests={"agents/sentinel.md": "agents/amigo-qa.md"})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), ["agents/viejo.md"])
+        self.assertIn("nota: los HUERFANO los instalo una version anterior", out)
+        self.assertEqual(self.f4t7_avisos(err), [])
+
+    def test_f4t7_case52_exit3_adds_the_alias_phrase_only_when_a_modificado_is_in_an_alias_path(self):
+        end = self.F4T7_MODEL_HINT
+        files = self.f4t7_start(ALIAS_ONE)
+        # (a) MODIFICADO en la ruta de un alias: frase de alias y, al final de todo, la del model:
+        with open(os.path.join(self.target, "agents", "amigo-qa.md"), "ab") as f:
+            f.write(b"editado a mano\n")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(err.count(self.F4T7_ALIAS_HINT), 1, err)
+        self.assertEqual(err.count(end), 1, err)
+        self.assertTrue(err.rstrip().endswith(end), err)
+        self.assertLess(err.index(self.F4T7_ALIAS_HINT), err.index(end))
+        # (b) MODIFICADO solo en un archivo sin alias (forge no tiene alias), con alias configurados: sin la frase
+        shutil.rmtree(self.target, ignore_errors=True)
+        self.f4t7_start(ALIAS_ONE)
+        with open(os.path.join(self.target, "agents", "forge.md"), "ab") as f:
+            f.write(b"editado a mano\n")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/forge.md"])
+        self.assertNotIn(self.F4T7_ALIAS_HINT, err)
+        self.assertTrue(err.rstrip().endswith(end), err)
+        # (c) los dos a la vez: una sola vez cada frase
+        with open(os.path.join(self.target, "agents", "amigo-qa.md"), "ab") as f:
+            f.write(b"editado a mano\n")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md", "agents/forge.md"])
+        self.assertEqual(err.count(self.F4T7_ALIAS_HINT), 1, err)
+        self.assertTrue(err.rstrip().endswith(end), err)
+        # (d) sin alias: el mensaje es el de hoy
+        shutil.rmtree(self.target, ignore_errors=True)
+        self.f4t7_start()
+        with open(os.path.join(self.target, "agents", "forge.md"), "ab") as f:
+            f.write(b"editado a mano\n")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 3, out + err)
+        self.assertNotIn(self.F4T7_ALIAS_HINT, err)
+        self.assertTrue(err.rstrip().endswith(end), err)
+
+    def test_f4t7_case53_the_configuration_is_never_touched_nor_backed_up(self):
+        files = self.f4t7_start()
+        self.f4t7_config(ALIAS_ONE)
+        config = os.path.join(self.target, self.CONFIG)
+        raw = read(self.target, self.CONFIG)
+        mtime = os.stat(config).st_mtime_ns
+        backup = os.path.join(self.tmp, "respaldo")
+        steps = (["-DryRun"], ["-BackupDir", backup], ["-Force", "-BackupDir", backup])
+        for flags in steps:
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(read(self.target, self.CONFIG), raw)
+                self.assertEqual(os.stat(config).st_mtime_ns, mtime)
+        self.assertTrue(os.path.isdir(backup))
+        self.assertNotIn(self.CONFIG, self.f4_tree(backup))
+        # con un cambio de alias y -Force, otro respaldo: la configuracion tampoco entra
+        self.f4t7_config({"sentinel": "tester"})
+        raw = read(self.target, self.CONFIG)
+        mtime = os.stat(config).st_mtime_ns
+        backup2 = os.path.join(self.tmp, "respaldo2")
+        self.install_ok("-Force", "-BackupDir", backup2)
+        self.assertEqual(read(self.target, self.CONFIG), raw)
+        self.assertEqual(os.stat(config).st_mtime_ns, mtime)
+        self.assertNotIn(self.CONFIG, self.f4_tree(backup2))
+        self.assertTrue(self.f4_tree(backup2))
 
 
 def f4t6_normalize_paths(text, pairs):

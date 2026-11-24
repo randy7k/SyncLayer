@@ -2,6 +2,25 @@
 
 ## [Sin publicar]
 
+### Añadido (Fase 4, T7: huérfanos por cambio de nombre y frase extra del exit 3)
+
+- Cada fila `HUERFANO` lleva `RenamedTo`: el destino actual del rol si el rol de la entrada previa sigue en el
+  manifiesto; si no, es un huérfano clásico.
+- Un huérfano por cambio de nombre da un aviso por stderr, uno por archivo, sólo si el archivo existe
+  (`File.Exists`; nunca se abre, respalda ni borra), en `-DryRun` y en ejecución real, sin cambiar el exit code.
+- La nota por stdout «ya no están en el manifiesto» sale ahora sólo si hay algún huérfano clásico (texto sin
+  cambio).
+- Exit 3: se añade «Si el archivo es un agente tuyo con el mismo nombre que un alias, elige otro alias.» sólo si
+  algún `MODIFICADO` está en una ruta con alias (destino distinto del `path`), antes de la frase final de
+  `model:`/`effort:`, que sigue siempre al final.
+- Sin alias la salida es idéntica a la base (comparada byte a byte en 14 escenarios). `synclayer-config.json`
+  nunca se escribe ni se respalda.
+- Pruebas: 19 `test_f4t7_*` (S1 a S12, casos 50 a 53) y aserciones nuevas en el caso 20 de T3.
+- No verificado: con alias reales el efecto en Claude Code real lo comprueba el propietario en G1/V1.
+- Pendiente: documentación final y límites de alias y frontmatter (T8).
+- Pruebas: la suite pasa a 1569 pruebas, 319 saltadas (316 de `install.ps1` contra pwsh y 3 de la rama POSIX del
+  reporte de uso).
+
 ### Añadido (Fase 4, T6: alias con niveles, repositorio real y `-DryRun`)
 
 - Pruebas de los alias con los niveles, del repositorio real con nueve alias y de `-DryRun` (casos 41 a 46,
@@ -20,8 +39,8 @@
 - Revisiones: `auditor` sin Critical ni Important (Minor y Low corregidos); `shield` sin hallazgos de ninguna
   severidad. Sin alias, la salida es idéntica a la base en 14 a 15 escenarios por revisor.
 - No verificado: con alias reales el efecto en Claude Code real lo comprueba el propietario en G1/V1.
-- Pendiente: la nota de huérfanos sigue diciendo «ya no están en el manifiesto» para un huérfano por cambio de
-  nombre, y la frase extra del exit 3 (T7); documentación final y límites de alias y frontmatter (T8).
+- Pendiente (la nota de huérfanos y la frase extra del exit 3 las cerró T7): documentación final y límites de
+  alias y frontmatter (T8).
 - Pruebas: la suite pasa a 1531 pruebas, 300 saltadas (297 de `install.ps1` contra pwsh y 3 de la rama POSIX del
   reporte de uso).
 
