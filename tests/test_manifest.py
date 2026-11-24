@@ -40,7 +40,7 @@ TWELVE = [
 
 
 RESERVED = ["agents/" + n + ".md" for n in
-            ("con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9")]
+            ("con", "prn", "aux", "nul", "com0", "com1", "com9", "lpt0", "lpt1", "lpt9")]
 
 
 class CanonicalHash(unittest.TestCase):
@@ -94,7 +94,7 @@ class Allowed(unittest.TestCase):
             self.assertIsNone(bm.ALLOWED.match(p), repr(p))
 
     def test_reserved_lookalikes_accepted(self):
-        for p in ["agents/console.md", "agents/com10.md", "agents/com0.md", "agents/lpt.md",
+        for p in ["agents/console.md", "agents/com10.md", "agents/lpt10.md", "agents/lpt.md",
                   "agents/nul-x.md", "agents/auxiliar.md"]:
             self.assertTrue(bm.ALLOWED.match(p), p)
 

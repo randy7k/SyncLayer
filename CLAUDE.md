@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1280 pruebas, 205 saltadas (202 de `install.ps1` contra pwsh, que no está instalado, y 3 de
+`__pycache__`. La suite: 1579 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -85,10 +85,12 @@ Cuatro piezas, de la más abstracta a la más concreta (la cuarta, el instalador
 
 4. El instalador: `install.ps1` (Windows PowerShell 5.1), `install-manifest.json` (los doce
    archivos gestionados con su hash canónico) y `tools/build_manifest.py` (lo genera y lo
-   comprueba). Lee además `<Target>/synclayer-config.json` (opcional, a mano, sólo `level`; ver «Niveles
-   de esfuerzo» en «Comportamientos no obvios»). En el destino deja el estado `<Target>/synclayer-manifest.json`, con esquema 2 (por
-   archivo: hash del origen `sha256`, hash de lo escrito `written` y `level`; lee también el esquema 1 y lo
-   migra). La clasificación compara el destino con `written`: igual a lo que se escribiría para el nivel (el origen en el nivel 5) es `IGUAL`, igual a
+   comprueba). Lee además `<Target>/synclayer-config.json` (opcional, a mano, sólo `level` y `aliases`; ver «Niveles
+   de esfuerzo» y «Alias de agentes» en «Comportamientos no obvios»). En el destino deja el estado `<Target>/synclayer-manifest.json`, con esquema 2 (por
+   archivo: hash del origen `sha256`, hash de lo escrito `written` y `level`; con algún alias efectivo, esquema 3, que
+   añade `dest`, la ruta real de destino; lee también el esquema 1 y lo migra). Con alias, el agente se escribe en
+   `agents/<alias>.md` y el nombre del rol se reemplaza por el alias en los nueve agentes y en `rules/agentes.md` y
+   `docs/agentes.md` (el hook no se transforma). La clasificación compara el destino con `written`: igual a lo que se escribiría para el nivel (el origen en el nivel 5) es `IGUAL`, igual a
    `written` es `ACTUALIZAR`, cualquier otro caso `MODIFICADO`; un estado no reconocido se trata como
    ausente y nunca produce `ACTUALIZAR`. Las comparaciones de claves y valores del estado son ordinales. Ni el instalador, ni `tools/`, ni el manifiesto del repo se instalan
    en `~/.claude`.
@@ -201,8 +203,106 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
-- Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: T1,
-  T2, T3, T4, T5 y T6 hechas; el cierre pendiente; T7 abierta hasta el cierre de la fase. Los niveles 1 a 4 se aplican (el instalador
+- Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; Fase 4 cerrada
+  en la rama, T1 a T8 y cierre; G1/V1 y V2 del propietario pendientes): `install.ps1` lee y valida la clave `aliases` de `synclayer-config.json` (lectura única;
+  `Get-AliasTableProblem`, V1 a V8, tabla entera antes de escribir; líneas `Alias:`) y, desde T5, la APLICA de
+  punta a punta (la guardia temporal de T2 se retiró). Con alias reales el efecto en Claude Code real NO está
+  verificado (G1/V1 del propietario: renombrar un agente, `effort:`, caso P10): no lo documentes como probado.
+  `$ReservedAliases` son nueve
+  nombres cerrados (los siete integrados, `fork` y `output-style-setup`) y puede quedarse atrás frente a
+  integrados nuevos. La referencia independiente es `tests/aliases_ref.py` y la prueba `tests/test_aliases.py`. Límite de palabra
+  del reemplazo (enmienda E1): letra = `[A-Za-z0-9_]` o la pareja UTF-8 `C3 80` a `C3 BF` sobre texto
+  decodificado ISO-8859-1; el resto es límite (comillas angulares, `¿¡`, rayas, espacio duro, marcas
+  combinantes). `scribe` es subcadena de `escribe`, `describe`, `reescribe`, `sobrescribe`: sin límite de
+  palabra se rompen. Cuidado al editar con la herramienta Bash: colapsa `\\` a `\` y los escapes `\u00xx`
+  pasan a ser el carácter; construye la barra con `chr(92)` y verifica que el archivo no gane bytes no ASCII.
+  - Rol y ruta (T4): en los Pasos 4 a 9 el rol (`$rel`: clave de manifiesto, niveles, `$outBytes`/`$outHash`,
+    mensajes de nivel) va separado de la ruta de destino (`$destRel[$rel]`: leer, escribir, respaldar, verificar
+    y clasificar contra `prevByDest`). El bloque `# Alias:` calcula `$destRel` desde la tabla efectiva (sin
+    alias efectivo es identidad). El ancla `# Alias:` sigue siendo la línea «# Alias: fin
+    del bloque...», tras el cálculo de `$destRel` y antes de `Get-DestRelProblem` (D1 a D7, defensa en profundidad: exit 1
+    antes de escribir, también en `-DryRun`; el mensaje nombra el rol, no la ruta). Las filas `HUERFANO`
+    llevan `Path = $null`.
+  - Estado con esquema 3 (T3, T4): `Read-State` lo lee (campo `dest` por entrada, la ruta real de destino).
+    `ConvertTo-StateBytes` ESCRIBE el esquema 3 (`dest` en todas las entradas) sólo si algún destino difiere del
+    rol; con identidad (sin alias efectivo) escribe el esquema 2. Reglas de `dest` cuando difiere de `path`: `agents/<alias>.md`
+    de hasta 74 caracteres (`agents/` + 64 + `.md`, atado por una prueba a la regex del alias), sin colisión
+    con el `path` de otra entrada ni con ninguna ruta del manifiesto (`$ManifestPaths`, obligatorio en
+    `Read-State`); `dest` se lee con `Get-PropRaw` (estricto) y se valida con `HashSet` ordinales; los
+    mensajes usan `Format-SafeShort`. Un esquema 3 inválido es estado AUSENTE: nunca `ACTUALIZAR` ni
+    `HUERFANO`. `prevByDest` indexa lo escrito por ruta de destino y el huérfano es el destino previo que ya
+    no es destino actual; ningún camino usa `dest` para escribir, respaldar ni borrar.
+  - Transformación (T5): funciones puras con autocomprobación `New-AliasRegex`, `ConvertTo-AliasText`,
+    `Test-AliasDescriptionLine` y `ConvertTo-AliasBytes`. El bloque `# Alias:` calcula `$destRel` y `$aliasBytes`
+    (bytes con alias de los nueve agentes, `rules/agentes.md` y `docs/agentes.md`); `# Nivel:` parte de
+    `$aliasBytes` y busca la celda de la tabla por ROL, no por alias. Sin alias efectivo no se llama a la
+    transformación y la salida es idéntica a la base. El alias nunca entra en la regex: sólo las formas de los
+    roles, escapadas. Límite de palabra E1. `hooks/agent_guard.py` no se transforma y los bloques `hooks:` quedan
+    byte a byte. Un frontmatter defectuoso con alias da exit 1 en ambos modos (también `-DryRun`), sin escribir
+    nada, y el mensaje nombra el rol; con alias se exige ASCII imprimible en todo el frontmatter y que la línea
+    tras `name:` sea `---` o `clave:`. La transformación recorre los nueve agentes aunque sólo uno tenga alias:
+    un defecto en uno sin alias también detiene. Un agente sin cuerpo y sin LF final se instala. Pruebas:
+    casos 32 a 40 y 56 del plan (`test_f4t5_*` en `tests/test_install.py`). Frontmatter y límites de alias están
+    documentados (T8, README: «Alias» y «Límites del instalador»). Límite aceptado: con clave repetida en la tabla gana la última, sin aviso (heredado de T2).
+  - Niveles y verificación con alias (T6): con alias, `model:` y `effort:` salen de la celda del ROL (no del
+    destino) y `Ajuste:` lleva la ruta de destino. `$verifyWhat` con tabla efectiva no vacía dice `lo esperado
+    para el nivel N y los alias` (también en el nivel 5); sin tabla efectiva (vacía o alias igual al rol)
+    conserva los textos de siempre. Caso 46: regresión de la salida del nivel 5 sin alias, idéntica byte a byte a
+    la de antes de la fase (golden embebido `F4T6_GOLDEN`, calculado con el instalador anterior a la fase;
+    normaliza las rutas temporales también en su forma escapada no ASCII). Casos 41 a 45: repositorio real con
+    nueve alias en los niveles 5 y 3 (13 archivos: 12 gestionados + estado; ningún nombre de rol en los once
+    textos salvo `escribe`, `escriben`, `describe`, `reescribe` y `sobrescribe`), `-DryRun` con alias sin
+    escribir nada, el hook con el hash del manifiesto, `hooks:` de `sentinel`, `auditor`, `shield` y
+    `debugger` intactos y verificación posterior alterada con exit 4 (`test_f4t6_*` en `tests/test_install.py`).
+  - Huérfanos y exit 3 con alias (T7): cada fila `HUERFANO` lleva `RenamedTo`: el destino actual del rol si el
+    rol de la entrada previa sigue en el manifiesto; si no, es un huérfano clásico. Un huérfano por cambio de
+    nombre da un aviso por stderr, uno por archivo, sólo si el archivo existe (`File.Exists`; nunca se abre,
+    respalda ni borra), en `-DryRun` y en ejecución real, sin cambiar el exit code. La nota por stdout «ya no
+    están en el manifiesto» sale sólo si hay algún huérfano clásico (texto sin cambio). Exit 3: se añade «Si el
+    archivo es un agente tuyo con el mismo nombre que un alias, elige otro alias.» sólo si algún `MODIFICADO`
+    está en una ruta con alias (destino distinto del `path`), antes de la frase final de `model:`/`effort:`,
+    que sigue siempre al final. Sin alias la salida es idéntica a la base (14 escenarios comparados byte a
+    byte). `synclayer-config.json` nunca se escribe ni se respalda. Pruebas: 19 `test_f4t7_*` (S1 a S12, casos
+    50 a 53) y aserciones nuevas en el caso 20 de T3. Con alias reales el efecto en Claude Code real sigue sin
+    verificar (G1/V1).
+  - Límite conocido: `Get-Prop` desenrolla listas de un elemento, así que `path`, `sha256`, `written`,
+    `level`, `schema`, `algorithm` y `eol` del estado y del manifiesto aceptan `[valor]` (laxitud heredada de
+    las Fases 1 y 3, no es un hueco). `Get-PropRaw(...).Value` no desenrolla: `dest` y los campos de la
+    configuración se leen así y son estrictos. Decisión P11 (2026-11-23): se documenta y se corrige en una tarea
+    aparte tras la Fase 4 (`Get-PropRaw(...).Value` en `Get-ManifestEntries`, `Read-Manifest` y `Read-State`,
+    con prueba roja primero); no la corrijas dentro de la Fase 4. Backlog:
+    `docs/plans/2026-11-19-backlog-configuracion-y-reportes.md`.
+  - Contrato con las pruebas y convenciones del código de alias:
+    - `$AliasRoles`, `$ReservedAliases` y `$YamlWords` son listas (una por línea, como `$LevelAgents`) que las
+      pruebas leen con `read_ps_list`. Las anclas de `patch_script` (inyecta código tras ellas) son sólo el
+      comentario `# Alias:` (la línea «# Alias: fin del bloque...», que no tiene la forma `# Paso N:`) y
+      `function ConvertTo-AliasBytes`. No renombres ni muevas nada de esto sin ajustar `tests/test_install.py` y
+      `tests/test_aliases.py`.
+    - Diccionarios y conjuntos ordinales (`Dictionary[string,string]` y `HashSet[string]` con
+      `StringComparer.Ordinal`) para formas, `$destRel`, `$dests`, `$prevByDest` y la validación de `dest`; un
+      `@{}` de PowerShell compara sin distinguir mayúsculas. Las expresiones regulares van sin `IgnoreCase`.
+    - `Read-State` exige `$ManifestPaths` (lanza si es `$null`): sin él no puede aplicar la regla de colisión
+      de `dest` con el manifiesto. Los mensajes de `Read-State` y `Get-ManifestEntries` pasan por
+      `Format-SafeShort` (40 caracteres y escapado), no por `Format-Safe`.
+    - El `Alias:` de la salida no casa con la expresión `LINE` de las pruebas; sin alias no aparece ninguna
+      línea nueva.
+  - No obvio, alias: rol frente a ruta de destino (el rol es la clave de manifiesto, nivel, `$outBytes`,
+    `$outHash` y `path` del estado; la ruta de destino, lo que se lee, escribe, respalda y verifica; no los
+    mezcles, el nivel dejaría de encontrar la celda en silencio). Alias primero y nivel después:
+    `ConvertTo-LevelBytes` no cambia y recibe los bytes con alias. El límite de palabra trabaja sobre
+    ISO-8859-1 y sólo cuenta como letra `[A-Za-z0-9_]` y la pareja `C3` más un byte de `80` a `BF`.
+    `$ReservedAliases` es una lista cerrada de nueve que hay que revisar cuando Claude Code añada integrados
+    (`output-style-setup` se reserva por prudencia, sin verificar). V8 sólo ve las rutas del manifiesto: no ve
+    archivos propios del usuario en `<Target>/agents/` (un agente suyo con el mismo `name:` que un alias no se
+    detecta; caso P10, documentado, G1 pendiente). El tope de 74 de `dest` sale de la regex del alias
+    (`agents/` + letra + `{0,63}` + `.md`) y una prueba los ata: si cambias uno, cambia el otro.
+  - El texto de `docs/agentes.md` y de `rules/agentes.md` se TRANSFORMA al instalar: una palabra igual a un rol
+    (en minúscula, Capitalizada o MAYÚSCULAS) en esos archivos se reemplaza por el alias, también en código en
+    línea. Al editarlos usa `<rol>` y `<alias>` como ejemplo, nunca un nombre de rol. El inventario de
+    `tests/test_aliases.py` (`INVENTORY`) falla si aparece una forma nueva o cambia un conteo: actualízalo en el
+    mismo cambio. `README.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` no se instalan ni se transforman.
+- Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
+  cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
   Claude Code sólo está verificado por documentación. No lo documentes como probado en una máquina real.
   - Contrato con las pruebas: la tabla nivel por agente vive en `install.ps1` (`$LevelRows`, niveles 1 a 4;
@@ -214,7 +314,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     sección «Niveles» del README (la lista completa de patrones está en `PROMISE_PATTERNS`). Haz lo mismo en el resto de la documentación.
   - Nivel 5 = repositorio tal cual: la instalación escribe los bytes canónicos del origen.
     `assets/brand/src/agents_data.py` y `tests/test_brand_agents.py` siguen en el nivel 5.
-  - `<Target>/synclayer-config.json` (opcional, campo `level` de 1 a 5, sin archivo o `{}` = 5) es entrada
+  - `<Target>/synclayer-config.json` (opcional, campo `level` de 1 a 5, sin archivo o `{}` = 5; la clave `aliases` es de la Fase 4) es entrada
     no confiable: lectura única con tope de 64 KiB, UTF-8 estricto, sin enlaces, claves de lista cerrada
     (incluida `__type`, que `ConvertFrom-Json` de 5.1 descarta en silencio). Una configuración ilegible o
     inválida falla con exit 1 antes de escribir (también en `-DryRun`); un estado ilegible, en cambio, se
@@ -251,7 +351,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (202 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (320 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

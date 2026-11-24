@@ -1044,13 +1044,34 @@ class ReleaseKeyAndObjects(CliBase):
         self.assertNotIn("__dict__", src[start:end])
         self.assertFalse([n for n in ast.walk(tree) if isinstance(n, ast.JoinedStr)])   # sin f-strings
 
-    def test_no_object_reprs_in_any_output(self):
-        tree, proj = self.project_tree()
+    def _assert_no_object_reprs(self, text):
+        for word in ("ReadResult", "CallRecord", "SkillUse", "UsageMetrics", "<usage_report"):
+            self.assertNotIn(word, text)
+        # Repr de objeto tipo '<x.Y object at 0x7f...>'; un '0x' suelto puede venir de una ruta.
+        self.assertIsNone(re.search(r"\bat 0x[0-9a-fA-F]+", text))
+        self.assertIsNone(re.search(r"<[^>\n]* object at 0x[0-9a-fA-F]+>", text))
+
+    def _outputs_with_paths(self, proj_name):
+        tree, proj = self.project_tree(proj=self.make_project(proj_name))
         for argv in (["project", "--claude-dir", tree.claude_dir, "--project-dir", proj, *WIN, "--show-paths"],
                      ["global", "--claude-dir", tree.claude_dir, *WIN, "--show-paths"]):
             code, out, err = self.run_main(*argv)
-            for word in ("ReadResult", "CallRecord", "SkillUse", "UsageMetrics", "<usage_report", "0x"):
-                self.assertNotIn(word, out + err)
+            yield out + err
+
+    def test_no_object_reprs_in_any_output(self):
+        for text in self._outputs_with_paths("mi proyecto"):
+            self._assert_no_object_reprs(text)
+
+    def test_no_object_reprs_ignores_0x_in_paths(self):
+        texts = list(self._outputs_with_paths("sync layer 0xoj3260"))
+        self.assertTrue(any("0x" in t for t in texts))   # la ruta con 0x si se imprime
+        for text in texts:
+            self._assert_no_object_reprs(text)
+
+    def test_object_repr_detector_catches_fake_repr(self):
+        for fake in ("<usage_report.X object at 0x7f12ab>", "<foo.Bar object at 0x7f12ab>", "x at 0xdeadbeef"):
+            with self.assertRaises(AssertionError):
+                self._assert_no_object_reprs("salida " + fake + " fin")
 
 
 class GitWarnings(CliBase):

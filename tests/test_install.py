@@ -11,6 +11,7 @@ esta, y la compatibilidad con pwsh 7 es NO VERIFICADA hasta que alguien la corra
 falta de powershell.exe es un FALLO (ShellAvailability), no un salto silencioso.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -19,12 +20,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import aliases_ref as ar  # noqa: E402
 import build_manifest as bm  # noqa: E402
 import levels_ref as lr  # noqa: E402
 
@@ -100,6 +103,68 @@ LEVEL_SAMPLE = {
 }
 LEVEL_FIXED = [rel for rel in LEVEL_SAMPLE
                if not (rel.startswith("agents/") and rel.split("/")[1][:-3] in lr.read_ps_list("LevelAgents"))]
+
+
+def alias_agent(role, description, body, after=()):
+    """Agente de ALIAS_SAMPLE: frontmatter de una linea por clave (con `after` tras model:), cuerpo en UTF-8."""
+    lines = (["---", "name: " + role, "description: " + description, "tools: Read, Grep", "model: sonnet"]
+             + list(after) + ["color: blue", "---", body])
+    return "\n".join(lines).encode("utf-8")
+
+
+# Fixture de los alias (Fase 4, T5): cuatro de los nueve agentes (sentinel con hooks:), las reglas y la guia (UTF-8, con
+# "escribe", "describe", @agent-forge, `Forge (Sonnet):`, una tabla en mayusculas, roles entre las comillas angulares,
+# tras la apertura de interrogacion y pegados a una letra acentuada, y un bloque cercado sin roles), el hook (que nombra
+# roles y no se transforma) y un agente que no es de los nueve (tampoco se transforma). Los bytes altos son UTF-8 valido.
+ALIAS_SAMPLE = {
+    "agents/atlas.md": alias_agent("atlas", "Plans the work and hands it to FORGE.",
+                                   "Eres ATLAS. Pide a forge que implemente y a SENTINEL que pruebe.\n"),
+    "agents/forge.md": alias_agent(
+        "forge", "Implements one unit of the ATLAS plan.",
+        "Eres FORGE. Usa `forge`, Forge (Sonnet): tarea, @agent-forge, agents/forge.md y ~/.claude/agents/forge.md.\n"
+        "«FORGE» y ¿forge? y Forgeé.\n"),
+    "agents/scribe.md": alias_agent(
+        "scribe", "Writes the docs.",
+        "Eres SCRIBE. Quien escribe, describe, reescribe o sobrescribe; escriben. Describe. scribe.\n"),
+    "agents/sentinel.md": alias_agent(
+        "sentinel", "Runs the tests.",
+        "Eres SENTINEL. «SENTINEL sólo escribe tests». Sentinelé y ñforge no cambian.\n",
+        after=SENTINEL_HOOKS),
+    "agents/alfa.md": "agente alfa que nombra a forge y a SENTINEL\n".encode("utf-8"),
+    "rules/agentes.md": (
+        "# Reglas\n\n| Agente | Uso |\n|---|---|\n| FORGE | implementar |\n| SENTINEL | pruebas |\n"
+        "| ATLAS | planes |\n| SCRIBE | docs |\n\n"
+        "`forge`, `sentinel`, `atlas` y `scribe`. Forge (Sonnet): corregir. @agent-forge y @agent-scribe. "
+        "agents/forge.md.\n"
+        "«SENTINEL sólo escribe tests». ¿scribe escribe o describe? Sentinelé, ñforge, "
+        "éSCRIBE y SCRIBEÁ no cambian. Sobrescribe y reescribe: igual.\n\n"
+        "```text\nbloque cercado sin roles\n```\n").encode("utf-8"),
+    "docs/agentes.md": (
+        "# Guia\n\nCada agente tiene un rol: FORGE implementa, SENTINEL prueba y ATLAS planifica.\n"
+        "«SENTINEL sólo escribe tests» y «FORGE, SCRIBE y ATLAS… forge — sentinel.\n"
+        "Describe lo que escribe `scribe` (Forge (Sonnet)).\n").encode("utf-8"),
+    "hooks/agent_guard.py": b"# forge sentinel SCRIBE ATLAS no se transforman\nprint('guard')\n",
+}
+ALIAS_ONE = {"sentinel": "amigo-qa"}
+ALIAS_FOUR = {"atlas": "mapa", "forge": "dev", "scribe": "redactor", "sentinel": "amigo-qa"}
+
+
+def alias_expected(files, table, level=5):
+    """{ruta del rol: (ruta de destino, bytes esperados)} segun la referencia independiente (aliases_ref) y, con el
+    nivel 1 a 4, la celda del ROL de la tabla de install.ps1."""
+    out = {}
+    for rel, data in files.items():
+        m = re.match(r"^agents/([a-z0-9_-]+)\.md$", rel)
+        canon = data.replace(b"\r\n", b"\n")
+        if m and m.group(1) in ar.roles():
+            canon = ar.transform_agent(data, m.group(1), table)
+        elif rel in ("rules/agentes.md", "docs/agentes.md"):
+            canon = ar.transform_doc(data, table)
+        if level != 5 and m and m.group(1) in lr.read_ps_list("LevelAgents"):
+            model, effort = lr.read_script_table()[(level, m.group(1))]
+            canon = lr.render_expected(canon, model, effort)
+        out[rel] = (ar.dest_for(rel, table), canon)
+    return out
 
 
 def level_expected(files, level):
@@ -207,6 +272,49 @@ class StaticChecks(unittest.TestCase):
                     with self.subTest(agent=name, model=model, effort=effort):
                         lr.render_expected(data, model, effort)
 
+    def test_alias_lists_are_closed_data_in_the_script(self):
+        # Fase 4, T1 (caso 1 y 2): $AliasRoles son los nombres de agents/*.md; las otras dos listas son datos
+        # cerrados en minuscula. Aun sin uso: la instalacion no cambia. Con CRLF se normaliza dentro de read_ps_list.
+        names = sorted(f[:-3] for f in os.listdir(os.path.join(ROOT, "agents")) if f.endswith(".md"))
+        self.assertEqual(len(names), 9)
+        self.assertEqual(lr.read_ps_list("AliasRoles"), names)
+        reserved = lr.read_ps_list("ReservedAliases")
+        self.assertEqual(reserved, ["explore", "plan", "general-purpose", "claude", "statusline-setup",
+                                    "claude-code-guide", "web-fetch", "fork", "output-style-setup"])
+        words = lr.read_ps_list("YamlWords")
+        self.assertEqual(words, ["true", "false", "null", "yes", "no", "on", "off", "y", "n"])
+        for values in (names, reserved, words):
+            self.assertEqual(values, [v.lower() for v in values])
+            self.assertEqual(len(values), len(set(values)))
+
+    def test_t2_alias_anchor_and_validator_are_defined_once(self):
+        # Fase 4, T2: `# Alias:` es ancla de patch_script (T4 inyecta tras ella) y no tiene la forma `# Paso N:`;
+        # la validacion de la tabla es una funcion unica. T5 retiro la guarda temporal de T2.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        lines = [l.strip() for l in text.split("\n")]
+        self.assertEqual(len([l for l in lines if l.startswith("# Alias:")]), 1)
+        self.assertEqual(len(re.findall(r"^function Get-AliasTableProblem\b", text, re.M)), 1)
+        self.assertEqual(text.count("los alias aun no se pueden aplicar en esta version"), 0)
+        self.assertEqual(len([l for l in lines if re.match(r"# Paso \d+:", l)]), 10)
+
+    def test_t2_the_config_is_read_once_through_the_known_anchor(self):
+        # Lectura unica: el ancla de patch_script (`$level = [int](Read-LevelConfig $configPath)`) sigue siendo la
+        # unica llamada de lectura; los alias salen de esa misma lectura y el archivo no se abre otra vez.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        self.assertEqual(text.count("Read-LevelConfig $configPath"), 1)
+        self.assertEqual(text.count("$level = [int](Read-LevelConfig $configPath)"), 1)
+        body = text[text.index("function Read-LevelConfig"):text.index("function Find-AliasPair")]
+        self.assertEqual(len(re.findall(r"\[System\.IO\.File\]::(Open|Read|OpenRead)\w*\(", body)), 1)
+        # Todo uso de $configPath en el script: asignacion, comprobacion de carpeta, de existencia y la unica lectura.
+        uses = [l.strip() for l in text.split("\n") if "$configPath" in l]
+        self.assertEqual(uses, ["$configPath = Join-Path $TargetFull $ConfigName",
+                                "if ([System.IO.Directory]::Exists($configPath)) {",
+                                "if ([System.IO.File]::Exists($configPath)) {",
+                                "$level = [int](Read-LevelConfig $configPath)"])
+        # Get-AliasTableProblem y Get-AliasEffective no tocan el disco
+        pure = text[text.index("function Find-AliasPair"):text.index("# Bytes del estado con esquema 2")]
+        self.assertNotRegex(pure, r"\[System\.IO\.|Get-Content|Set-Content|Out-File")
+
     def test_allowed_pattern_matches_generator(self):
         # Con core.autocrlf git deja install.ps1 en CRLF al hacer checkout o merge: el ancla `$`
         # de la regex no tolera el retorno de carro (CR), asi que se normaliza antes de buscar.
@@ -218,6 +326,110 @@ class StaticChecks(unittest.TestCase):
         self.assertNotIn(r"\Z", ps_pattern)
         # Python usa \Z para lo que .NET llama \z; el resto debe ser identico.
         self.assertEqual(ps_pattern[:-2] + r"\Z", bm.ALLOWED.pattern)
+
+    def test_f4t3_dest_max_length_is_derived_from_the_alias_rule(self):
+        # El tope de dest (74) = "agents/" + alias de hasta 64 (letra inicial + {0,63}) + ".md". Se deriva de la regex
+        # del alias de install.ps1 y se compara con el literal del instalador y con la referencia: si cambian por
+        # separado, falla.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        m = re.search(r"IsMatch\(\$value, '\^\[a-z\]\[a-z0-9_-\]\{0,(\d+)\}" + re.escape(chr(92)) + "z'", text)
+        self.assertIsNotNone(m, "no se encontro la regex del alias en install.ps1")
+        longest = 1 + int(m.group(1))
+        self.assertEqual(longest, 64)
+        expected = len("agents/") + longest + len(".md")
+        self.assertEqual(expected, 74)
+        lits = re.findall(r"\$d\.Length -gt (\d+) -and", text)
+        self.assertEqual(lits, [str(expected)])
+        self.assertEqual(ar.DEST_MAX, expected)
+        ref = re.search(r"\{0,(\d+)\}", ar._ALIAS_RE.pattern)
+        self.assertEqual(1 + int(ref.group(1)), longest)
+
+    def test_f4t3_dest_max_length_literal_in_both_checks_matches_the_alias_rule(self):
+        # Read-State y Get-DestRelProblem llevan cada uno su literal del tope: los dos deben existir, ser iguales entre
+        # si y al tope derivado de la regla del alias (la prueba anterior sólo ve el de Read-State, por el `-and`).
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        m = re.search(r"IsMatch\(\$value, '\^\[a-z\]\[a-z0-9_-\]\{0,(\d+)\}" + re.escape(chr(92)) + "z'", text)
+        self.assertIsNotNone(m, "no se encontro la regla del alias en install.ps1")
+        expected = len("agents/") + 1 + int(m.group(1)) + len(".md")
+        read_state = re.search(r"^function Read-State\(.*?^\}$", text, re.M | re.S)
+        dest_rel = re.search(r"^function Get-DestRelProblem\(.*?^\}$", text, re.M | re.S)
+        self.assertIsNotNone(read_state)
+        self.assertIsNotNone(dest_rel)
+        in_state = re.findall(r"\$d\.Length -gt (\d+)\b", read_state.group(0))
+        in_dest = re.findall(r"\$d\.Length -gt (\d+)\b", dest_rel.group(0))
+        self.assertEqual(in_state, [str(expected)])
+        self.assertEqual(in_dest, [str(expected)])
+        self.assertEqual(in_state, in_dest)
+
+    def test_f4t3_read_state_requires_the_manifest_paths_and_dicts_are_ordinal(self):
+        # Sin valor por defecto: un llamador que olvide $ManifestPaths no desactiva la regla en silencio.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        self.assertEqual(re.findall(r"^function Read-State\((.*)\) \{$", text, re.M), [r"[string]$FilePath, $ManifestPaths"])
+        self.assertEqual(text.count("Read-State $statePath $manifest.Order"), 1)
+        self.assertEqual(len(re.findall(r"Read-State \$", text)), 1)
+        ordinal = "New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)"
+        self.assertIn("$dests = " + ordinal, text)
+        self.assertIn("$prevByDest = " + ordinal, text)
+        self.assertNotRegex(text, r"\$(dests|prevByDest) = @\{\}")
+
+    def test_f4t4_dest_rel_starts_as_identity_then_alias_reassigns_and_anchors_hold(self):
+        # T4/T5: $destRel arranca como identidad (una asignacion) y el alias la reasigna (otra) en el bloque `# Alias:`,
+        # a partir de la tabla efectiva (nunca del estado ni del entorno). Las anclas de patch_script de 3.3 siguen una
+        # sola vez y en su sitio.
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        self.assertEqual(text.count("foreach ($rel in $manifest.Order) { $destRel[$rel] = $rel }"), 1)
+        # T5: dos asignaciones, la identidad (arriba) y la del alias (solo si el archivo del rol esta en el manifiesto).
+        self.assertEqual(len(re.findall(r"\$destRel\[[^\]]*\]\s*=", text)), 2)
+        self.assertEqual(len(re.findall(r"^\s*\$destRel = ", text, re.M)), 1)
+        self.assertEqual(text.count("Write-Atomic $dest $outBytes[$rel] $existing"), 1)
+        self.assertEqual(text.count("Write-Atomic $statePath $stateBytes $stateExists"), 1)
+        self.assertEqual(len(re.findall(r"^function Get-DestRelProblem\b", text, re.M)), 1)
+        self.assertEqual(text.count("ConvertTo-StateBytes $manifest $outHash $level $destRel"), 1)
+        self.assertEqual(text.count("$destProblem = Get-DestRelProblem $destRel $manifest.Order"), 1)
+        lines = [l.strip() for l in text.split("\n")]
+        anchor = next(i for i, l in enumerate(lines) if l.startswith("# Alias:"))
+        check = lines.index("$destProblem = Get-DestRelProblem $destRel $manifest.Order")
+        build = lines.index("foreach ($rel in $manifest.Order) { $destRel[$rel] = $rel }")
+        self.assertLess(build, anchor)
+        self.assertLess(anchor, check)
+
+    def test_f4t4_steps_4_to_9_never_use_the_role_path_on_disk(self):
+        # En los pasos 4 a 9 el rol ($rel) no se usa como ruta del disco: se lee, escribe, respalda y verifica la ruta
+        # de destino. (El rol sirve para outBytes y outHash.)
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        body = text[text.index("# Paso 4: clasificar."):text.index("# Paso 10: mensaje final.")]
+        self.assertEqual(re.findall(r"ConvertTo-LocalPath \$(?:TargetFull|BackupFull) \$rel\b", body), [])
+        self.assertEqual(re.findall(r"Find-Reparse \$(?:TargetFull|BackupFull) \$rel\b", body), [])
+        self.assertEqual(re.findall(r"\$written\.Add\(\$rel\)", body), [])
+        self.assertEqual(re.findall(r"Path = \$prevDest", body), [])
+        self.assertIn("$prevByDest.ContainsKey($destPath)", body)
+        self.assertIn("$outHash[$roleByDest[$destPath]]", body)
+        self.assertIn("Write-Atomic $dest $outBytes[$rel] $existing", body)
+
+    def test_f4t5_static_functions_pattern_and_the_removed_guard(self):
+        text = self.raw.decode("ascii").replace(chr(13) + chr(10), chr(10))
+        for name in ("ConvertTo-AliasText", "ConvertTo-AliasBytes"):
+            self.assertEqual(len(re.findall(r"^function " + name + r"\b", text, re.M)), 1, name)
+        # la expresion de 3.5, tal cual (E1): dos lookbehind de ancho fijo y dos lookahead, sin IgnoreCase
+        bs = chr(92)
+        self.assertIn("'(?<![A-Za-z0-9_])(?<!" + bs + "u00c3[" + bs + "u0080-" + bs + "u00bf])(?:'", text)
+        self.assertIn("')(?![A-Za-z0-9_])(?!" + bs + "u00c3[" + bs + "u0080-" + bs + "u00bf])'", text)
+        body = text[text.index("function ConvertTo-AliasText"):text.index("try {\n    $Source = $PSScriptRoot")]
+        self.assertNotIn("IgnoreCase", body)
+        self.assertNotIn("[regex]::Replace", body)
+        self.assertEqual(text.count("$aliasResult = $latin1.GetBytes("), 1)
+        self.assertEqual(len(re.findall(r"^\s*\$result = \$latin1\.GetBytes\(", text, re.M)), 1)
+        self.assertNotIn("aun no se pueden aplicar", text)
+        lines = [l.strip() for l in text.split("\n")]
+        alias_at = next(i for i, l in enumerate(lines) if l.startswith("# Alias:"))
+        nivel_at = next(i for i, l in enumerate(lines) if l.startswith("# Nivel:"))
+        self.assertLess(alias_at, nivel_at)
+        self.assertEqual(len([l for l in lines if l.startswith("# Alias:")]), 1)
+        self.assertEqual(len([l for l in lines if re.match(r"# Paso \d+:", l)]), 10)
+        # el bloque Nivel parte de los bytes con alias y busca la celda por rol
+        nivel = text[text.index("    # Nivel:"):text.index("    # Paso 3:")]
+        self.assertIn("ConvertTo-LevelBytes $aliasBytes[$rel]", nivel)
+        self.assertIn("Get-LevelCell $level $agentMatch.Groups[1].Value", nivel)
 
 
 class InstallCases:
@@ -287,16 +499,19 @@ class InstallCases:
                 result[m.group(2)] = m.group(1)
         return result
 
-    def write_state(self, files, schema=2, written=None, level=5):
+    def write_state(self, files, schema=2, written=None, level=5, dests=None):
         """Estado previo en el destino, el de una instalacion anterior con esos archivos. schema=1: copia
         del manifiesto (instalador de la Fase 1); schema=2: el estado nuevo, con `written` (por defecto el
-        hash del origen) y `level`."""
+        hash del origen) y `level`; schema=3 (Fase 4): ademas `dest` por entrada, de `dests` {ruta: destino}
+        (por defecto la propia ruta), con la referencia aliases_ref.state_for3."""
         old = os.path.join(self.tmp, "viejo")
         for rel, data in files.items():
             write(old, rel, data)
         manifest = manifest_for(old, sorted(files))
         if schema == 1:
             data = manifest.encode("ascii")
+        elif schema == 3:
+            data = ar.state_for3(manifest, written, level, dests)
         else:
             data = lr.state_for(manifest, written, level)
         write(self.target, "synclayer-manifest.json", data)
@@ -454,7 +669,7 @@ class InstallCases:
             "//srv/share/a.md", "\\\\srv\\share\\a.md",
             "agents/a‐b.md", "agents/K.md", "agents/ａ.md",
         ] + ["agents/" + n + ".md" for n in
-             ("con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9")]
+             ("con", "prn", "aux", "nul", "com0", "com1", "com9", "lpt0", "lpt1", "lpt9")]
         for bad in bad_paths:
             with self.subTest(path=bad):
                 m = dict(base)
@@ -3939,6 +4154,2860 @@ class InstallCases:
                 self.assertNotIn("ACTUALIZAR ", out)
                 self.assertIn("Se trata como ausente", err)
                 self.assertIn("__type", err)
+
+    # --- Fase 4, T2: clave aliases de synclayer-config.json (lectura, validacion V1 a V8 y lineas Alias:; casos 9 a
+    # 19 del plan). T5 retiro la guarda temporal de T2: una tabla efectiva valida ya se aplica de punta a punta. ---
+
+    CONFIG_ERR = "error: synclayer-config.json no es valido: "
+    ALIAS_NINE = {"atlas": "mapa", "auditor": "revisor", "debugger": "cazador", "forge": "dev", "oracle": "guia",
+                  "scout": "explorador", "scribe": "redactor", "sentinel": "amigo-qa", "shield": "guardia"}
+
+    def alias_config(self, aliases, level=None):
+        obj = {}
+        if level is not None:
+            obj["level"] = level
+        obj["aliases"] = aliases
+        return json.dumps(obj).encode("ascii")
+
+    def assert_quiet_failure(self, code, out, err, before, listing):
+        """Nada escrito ni respaldado: ni el destino ni la carpeta temporal cambian."""
+        self.assertEqual(code, 1, out + err)
+        self.assertNotIn("Copiado", out)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+        self.assertTrue(err.isascii(), repr(err))
+        self.assertFalse(any(ord(c) < 0x20 and c not in "\r\n" for c in err + out), repr(err + out))
+
+    def alias_transform_error(self, files, aliases):
+        """La referencia independiente (aliases_ref) aplicada a los archivos del manifiesto: el primer archivo cuya
+        transformacion falla (ValueError) o None."""
+        for rel in sorted(files):
+            m = re.match(r"^agents/([a-z0-9_-]+)\.md$", rel)
+            try:
+                if m and m.group(1) in ar.roles():
+                    ar.transform_agent(files[rel], m.group(1), aliases)
+                elif rel in ("rules/agentes.md", "docs/agentes.md"):
+                    ar.transform_doc(files[rel], aliases)
+            except ValueError:
+                return rel
+        return None
+
+    def assert_alias_verdict(self, aliases, files=None, modes=(["-DryRun"],), raw=None):
+        """El veredicto del instalador es el de la referencia independiente (aliases_ref): el mismo motivo si la tabla
+        es invalida; si es valida y la tabla efectiva no esta vacia, exit 0 (o exit 1 con el error de transformacion
+        si la referencia tambien falla); si esta vacia, exit 0 sin linea Alias:. Nunca se escribe nada en los casos
+        de error."""
+        files = SAMPLE if files is None else files
+        self.make_source(files)
+        self.write_config(self.alias_config(aliases) if raw is None else raw)
+        expected = ar.validate_table(aliases, manifest_paths=sorted(files))
+        effective = isinstance(aliases, dict) and bool(ar.effective(aliases))
+        failing = self.alias_transform_error(files, aliases) if expected is None and effective else None
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in modes:
+            with self.subTest(aliases=repr(aliases)[:80], mode=mode):
+                code, out, err = self.run_install(*mode)
+                if expected is None and failing is None:
+                    self.assertEqual(code, 0, out + err)
+                    self.assertEqual("Alias:" in out, effective)
+                    if "-DryRun" in mode:
+                        self.assertEqual(snapshot(self.target), before)
+                    else:
+                        shutil.rmtree(self.target)
+                        self.write_config(self.alias_config(aliases) if raw is None else raw)
+                        before = snapshot(self.target)
+                    continue
+                self.assert_quiet_failure(code, out, err, before, listing)
+                if expected is None:
+                    self.assertTrue(err.startswith("error: no se pueden aplicar los alias a " + failing + ": "), err)
+                    self.assertTrue(err.strip().endswith(". No se escribio nada."), err)
+                else:
+                    self.assertEqual(err.strip(), self.CONFIG_ERR + expected + ". No se escribio nada.")
+
+    def test_t2_case9_no_aliases_or_empty_or_own_role_is_identical_to_today(self):
+        # Casos 9 y 15: sin `aliases`, con `{}` y con cada alias igual a su propio rol (tabla efectiva vacia)
+        # dan stdout, stderr, destino y estado identicos byte a byte; ninguna linea Alias:.
+        own = json.dumps({"level": 5, "aliases": {r: r for r in ar.roles()}}).encode("ascii")
+        for mode in (["-DryRun"], []):
+            results = {}
+            for name, cfg in (("base", b'{"level": 5}'), ("vacio", b'{"level": 5, "aliases": {}}'),
+                              ("propio", b'{"level": 5, "aliases": {"forge": "forge"}}'), ("nueve propios", own)):
+                with self.subTest(case=name, mode=mode):
+                    self.make_source()
+                    self.write_config(cfg)
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 0, out + err)
+                    self.assertNotIn("Alias:", out)
+                    tree = self.tree(self.target)
+                    tree.pop(self.CONFIG)
+                    results[name] = (code, out, err, tree)
+                    shutil.rmtree(self.target)
+            for name, got in results.items():
+                with self.subTest(compare=name, mode=mode):
+                    self.assertEqual(got, results["base"])
+
+    def test_t2_case9_without_config_equals_empty_aliases_except_the_level_origin(self):
+        self.make_source()
+        code, out0, err0 = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out0 + err0)
+        self.write_config(b'{"aliases": {}}')
+        code, out1, err1 = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out1 + err1)
+        self.assertEqual(err0, err1)
+        self.assertEqual(out0.replace("(por defecto; no hay synclayer-config.json)", "(synclayer-config.json)"), out1)
+        self.assertNotIn("Alias:", out1)
+
+    def test_t2_case10_aliases_of_an_invalid_type_exit1_in_both_modes(self):
+        variants = [("null", b"null"), ("lista vacia", b"[]"), ("lista de un objeto", b'[{"forge": "dev"}]'),
+                    ("cadena", b'"dev"'), ("numero", b"3"), ("true", b"true"), ("false", b"false"),
+                    ("lista de listas", b"[[]]")]
+        for name, value in variants:
+            with self.subTest(case=name):
+                self.assert_config_rejected(b'{"aliases": ' + value + b"}", "aliases debe ser un objeto")
+                shutil.rmtree(self.target)
+
+    def test_t2_case11_unknown_alias_key_exit1_and_the_key_is_escaped(self):
+        for key in ("qa", "Forge", "FORGE", "forge ", "agents", "forg"):
+            with self.subTest(key=key):
+                self.assert_config_rejected(json.dumps({"aliases": {key: "dev"}}).encode("ascii"),
+                                            "rol desconocido en aliases: " + key)
+                shutil.rmtree(self.target)
+        # una clave vacia la rechaza ConvertFrom-Json de 5.1 antes que el instalador
+        self.assert_config_rejected(b'{"aliases": {"": "dev"}}', "JSON invalido")
+        shutil.rmtree(self.target)
+        self.assert_config_rejected(json.dumps({"aliases": {"a\u0000b\u001b[31mé": "dev"}}).encode("ascii"),
+                                    "rol desconocido en aliases: a\\u0000b\\u001b[31m\\u00e9")
+        shutil.rmtree(self.target)
+        self.assert_config_rejected(json.dumps({"aliases": {"k" * 60000: "dev"}}).encode("ascii"),
+                                    "rol desconocido en aliases: " + "k" * 40 + "...")
+
+    def test_t2_case12_invalid_values_name_the_role_and_match_the_reference(self):
+        bad = ["", "Dev", "DEV", "a b", "a:b", "a.b", "a/b", "a\\b", "-dev", "1dev", "123", "1e3", "0x1f", "_dev",
+               "a" * 65, "dév", "dev\n", "dev\nhooks: x", "dev#x", "'dev'", "dev\u0000", "\u00ad", "dev ",
+               "de\u0301v"]
+        for value in bad:
+            self.assertIsNotNone(ar.validate_table({"forge": value}), repr(value))
+            self.assert_alias_verdict({"forge": value})
+        for value in (None, 3, 3.5, True, False, ["dev"], {"a": "b"}, [], {}):
+            self.assertIn("debe ser texto", ar.validate_table({"forge": value}))
+            self.assert_alias_verdict({"forge": value})
+
+    def test_t2_case12_both_modes_for_a_representative_set(self):
+        for value in ("Dev", None, "a" * 65, ["dev"]):
+            self.assert_alias_verdict({"scribe": value}, modes=(["-DryRun"], []))
+
+    def test_t2_case13_reserved_names_yaml_words_and_windows_names(self):
+        words = (ar.reserved() + ["Explore", "PLAN", "General-Purpose"] + ar.yaml_words() +
+                 ["con", "prn", "aux", "nul", "com0", "com1", "com9", "lpt0", "lpt1", "lpt9"])
+        self.assertIn("fork", ar.reserved())
+        self.assertIn("output-style-setup", ar.reserved())
+        for value in words:
+            self.assertIsNotNone(ar.validate_table({"forge": value}), value)
+            self.assert_alias_verdict({"forge": value})
+        # El motivo exacto de cada familia (V1, V2, V3, V4).
+        for value, motivo in (("true", "es una palabra reservada de YAML"), ("null", "es una palabra reservada de YAML"),
+                              ("con", "es un nombre reservado de Windows"), ("nul", "es un nombre reservado de Windows"),
+                              ("com1", "es un nombre reservado de Windows"),
+                              ("fork", "es el nombre de un agente integrado de Claude Code"),
+                              ("output-style-setup", "es el nombre de un agente integrado de Claude Code"),
+                              ("explore", "es el nombre de un agente integrado de Claude Code"),
+                              ("Explore", "solo admite a-z, 0-9, _ y -"), ("PLAN", "solo admite a-z, 0-9, _ y -")):
+            with self.subTest(value=value):
+                self.assert_config_rejected(self.alias_config({"forge": value}),
+                                            "el alias de forge " + motivo, modes=(["-DryRun"],))
+                shutil.rmtree(self.target)
+
+    def test_t2_case14_table_rules_v5_v6_v7_v8_and_cycles(self):
+        two_cycle = {"forge": "scribe", "scribe": "forge"}
+        three_cycle = {"forge": "scribe", "scribe": "sentinel", "sentinel": "forge"}
+        tables = [
+            {"forge": "scribe"}, two_cycle, three_cycle, {"atlas": "shield"},
+            {"forge": "dev", "scribe": "dev"}, {"forge": "dev", "oracle": "x", "scribe": "dev"},
+            {"oracle": "dev-sentinel"}, {"oracle": "forge-2"}, {"oracle": "sentinel-dev"}, {"oracle": "a-forge-b"},
+            {"forge": "forge-2"}, {"forge": "x-scribe"},
+            {"forge": "forge", "scribe": "forge"},
+        ]
+        for table in tables:
+            self.assertIsNotNone(ar.validate_table(table), table)
+            self.assert_alias_verdict(table)
+        for table, motivo in ((two_cycle, "el alias de forge es el nombre de otro agente de SyncLayer"),
+                              (three_cycle, "el alias de forge es el nombre de otro agente de SyncLayer"),
+                              ({"forge": "dev", "scribe": "dev"}, "forge y scribe tienen el mismo alias"),
+                              ({"oracle": "forge-2"}, "el alias de oracle contiene el nombre de un agente de SyncLayer")):
+            with self.subTest(table=table):
+                self.assert_config_rejected(self.alias_config(table), motivo, modes=(["-DryRun"], []))
+                shutil.rmtree(self.target)
+        # V8: un manifiesto con un agente que ya ocupa la ruta del alias.
+        files = dict(SAMPLE)
+        files["agents/forge.md"] = b"agente forge\n"
+        files["agents/dev.md"] = b"agente dev\n"
+        self.assertIn("coincide con otro archivo del manifiesto", ar.validate_table({"forge": "dev"}, sorted(files)))
+        self.assert_alias_verdict({"forge": "dev"}, files=files)
+        self.assert_alias_verdict({"forge": "dev2"}, files=files)
+        self.assert_alias_verdict({"forge": "forge"}, files=files)
+
+    def test_t2_v8_covers_roles_whose_file_is_not_in_the_manifest(self):
+        # E2: SAMPLE trae agents/alfa.md y no trae agents/forge.md: el alias alfa nombra el archivo de otro agente.
+        self.assertIn("coincide con otro archivo del manifiesto", ar.validate_table({"forge": "alfa"}, sorted(SAMPLE)))
+        self.assert_alias_verdict({"forge": "alfa"}, modes=(["-DryRun"], []))
+        self.assert_alias_verdict({"forge": "alfa", "scribe": "redactor"})
+        self.assert_alias_verdict({"forge": "gamma"})  # no coincide con ninguna ruta: pasa la validacion y se instala
+        files = dict(SAMPLE)
+        files["agents/forge.md"] = b"agente forge\n"
+        self.assert_alias_verdict({"forge": "alfa"}, files=files)
+        self.assert_alias_verdict({"forge": "gamma"}, files=files)
+
+    def test_t2_reserved_output_style_setup_is_v4_in_both_modes(self):
+        self.assertIn("agente integrado", ar.validate_table({"forge": "output-style-setup"}))
+        self.assert_alias_verdict({"forge": "output-style-setup"}, modes=(["-DryRun"], []))
+
+    def test_t2_second_read_of_the_config_is_detected_by_behaviour(self):
+        # Lectura unica: tras la lectura se reescribe la configuracion; el resultado (exit y lineas Alias:) debe
+        # reflejar la PRIMERA lectura. Una segunda lectura en cualquier punto posterior lo cambiaria.
+        self.make_source()
+        path = self.write_config(self.alias_config({"forge": "dev"}))
+        for later, why in (('{"aliases": {"forge": "Dev"}}', "tabla invalida"), ('{"aliases": {}}', "tabla vacia"),
+                           ('{"aliases": {"scribe": "redactor"}}', "otra tabla")):
+            with self.subTest(later=why):
+                self.make_source()
+                shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+                self.patch_script("$level = [int](Read-LevelConfig $configPath)",
+                                  "[System.IO.File]::WriteAllText('%s', '%s')" % (path.replace("'", "''"), later))
+                self.write_config(self.alias_config({"forge": "dev"}))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")],
+                                 ["Alias: forge -> dev (agents/dev.md)"])
+                self.assertEqual(err.strip(), "")
+
+    def test_t2_valid_tables_pass_v1_to_v8_and_install(self):
+        # Pasan V1 a V8 (y de ahi se aplican): las dos mitades del veredicto de cada regla.
+        valid = [{"forge": "dev"}, {"sentinel": "amigo-qa", "forge": "dev"}, dict(self.ALIAS_NINE),
+                 {"forge": "a" * 64}, {"forge": "forge_2"}, {"forge": "forgery"}, {"forge": "sentinels"},
+                 {"forge": "com10"}, {"forge": "lpt10"}, {"forge": "yes-no"}, {"forge": "x1"}, {"forge": "y2"},
+                 {"forge": "explorer"}, {"forge": "forge", "scribe": "dev"}, {"forge": "conx"}, {"forge": "nulo"}]
+        for table in valid:
+            self.assertIsNone(ar.validate_table(table, manifest_paths=sorted(SAMPLE)), table)
+            self.assert_alias_verdict(table)
+        # Tabla efectiva vacia: exit 0.
+        for table in ({}, {"forge": "forge"}, {r: r for r in ar.roles()}):
+            self.assert_alias_verdict(table)
+
+    def test_t2_case17_unknown_root_keys_still_exit1_with_aliases_present(self):
+        for data, motivo in ((b'{"aliases": {}, "agents": {}}', "clave desconocida: agents"),
+                             (b'{"Aliases": {}}', "clave desconocida: Aliases"),
+                             (b'{"level": 3, "aliases": {}, "names": {}}', "clave desconocida: names"),
+                             (b'{"alias": {}}', "clave desconocida: alias")):
+            with self.subTest(data=data):
+                self.assert_config_rejected(data, motivo)
+                shutil.rmtree(self.target)
+
+    def test_t2_level_and_empty_aliases_together_keep_working(self):
+        self.make_source()
+        self.write_config(b'{"level": 3, "aliases": {}}')
+        out, err = self.install_ok("-DryRun")
+        self.assertIn("Nivel: 3 (synclayer-config.json)", out.splitlines())
+        self.assertNotIn("Alias:", out)
+
+    def test_t2_case18_level_and_alias_lines_come_in_order_before_the_plan(self):
+        files = dict(SAMPLE)
+        files["agents/sentinel.md"] = agent_md("sentinel", "sonnet")
+        self.make_source(files)
+        self.write_config(self.alias_config({"sentinel": "amigo-qa", "forge": "dev"}, level=3))
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 0, out + err)
+                lines = out.splitlines()
+                self.assertTrue(lines[0].startswith("Destino: "), lines)
+                self.assertEqual(lines[1:4], ["Nivel: 3 (synclayer-config.json)",
+                                              "Alias: forge -> dev (agents/dev.md)",
+                                              "Alias: sentinel -> amigo-qa (agents/amigo-qa.md)"])
+                self.assertTrue(lines[4].startswith(("Respaldo: ", "Modo: ")) or LINE.match(lines[4]), lines)
+                self.assertNotIn("error", err)
+                if "-DryRun" in mode:
+                    self.assertEqual(os.listdir(self.target), [self.CONFIG])
+        # `Alias:` no se confunde con una fila del plan (la expresion LINE de las pruebas)
+        self.assertIsNone(LINE.match("Alias: forge -> dev (agents/dev.md)"))
+
+    def test_t2_alias_lines_follow_the_previous_level_line(self):
+        self.make_source()
+        self.install_ok()
+        self.write_config(self.alias_config({"scribe": "redactor"}, level=2))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        lines = out.splitlines()
+        self.assertEqual(lines[1:4], ["Nivel: 2 (synclayer-config.json)", "Nivel anterior: 5",
+                                      "Alias: scribe -> redactor (agents/redactor.md)"])
+
+    def test_t2_case19_invalid_table_writes_and_backs_up_nothing_with_a_valid_state(self):
+        self.make_source()
+        self.install_ok()
+        self.update_source("agents/alfa.md", b"alfa nueva\n")
+        self.write_config(self.alias_config({"forge": "scribe"}))
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assert_quiet_failure(code, out, err, before, listing)
+                self.assertIn(self.CONFIG_ERR + "el alias de forge es el nombre de otro agente de SyncLayer", err)
+                self.assertNotIn("Respaldo", out)
+                self.assertFalse([n for n in os.listdir(self.tmp) if "backup" in n])
+
+    def test_t2_invalid_alias_values_never_leak_into_stdout_or_stderr(self):
+        secret = "SECRETO-ALIAS-123"
+        values = [secret, secret.lower() + "\u001b[31m", "dev\u0000" + secret, secret + "\n" + secret,
+                  secret + "!", "x" * 60000 + secret, "\u202e" + secret, "'" + secret + "'", secret + "-" * 70]
+        for value in values:
+            with self.subTest(value=value[:25]):
+                self.make_source()
+                self.write_config(self.alias_config({"sentinel": value}))
+                for mode in (["-DryRun"], []) if value == secret else (["-DryRun"],):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 1, out + err)
+                    self.assertIn(self.CONFIG_ERR + "el alias de sentinel ", err)
+                    for needle in (secret, secret.lower(), "SECRETO", "secreto", "x" * 40):
+                        self.assertNotIn(needle, out + err)
+                    self.assertTrue(err.isascii(), repr(err))
+                    self.assertFalse(any(ord(c) < 0x20 and c not in "\r\n" for c in err + out), repr(err))
+                    self.assertLess(len(err), 400)
+                shutil.rmtree(self.target)
+        # un valor inocente tampoco aparece en la salida de error de una tabla invalida por otra causa
+        self.make_source()
+        self.write_config(self.alias_config({"forge": "inocente", "scribe": "Mal"}))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 1, out + err)
+        self.assertNotIn("inocente", out + err)
+        self.assertNotIn("Mal", err.replace("el alias de scribe", ""))
+
+    def test_t2_case16_type_key_inside_aliases_is_rejected(self):
+        for data in (b'{"aliases": {"forge": "x__type"}}', b'{"aliases": {"__type": "x"}}',
+                     b'{"aliases": {"forge": "dev", "__type": "System.String"}}',
+                     b'{"aliases": {"forge": "x\\u005f\\u005ftype"}}', b'{"aliases": {"__t\\u0079pe": "x"}}'):
+            with self.subTest(data=data):
+                self.assert_config_rejected(data, "clave desconocida: __type")
+                shutil.rmtree(self.target)
+
+    def test_t2_case16_repeated_keys_in_windows_powershell_5_1_last_one_wins(self):
+        # Comportamiento medido de ConvertFrom-Json de 5.1 (como con level, caso 17 de la Fase 3): sin error;
+        # la ultima aparicion gana, tambien dentro de aliases y para la propia clave aliases.
+        self.make_source()
+        for data, expect in ((b'{"aliases": {"forge": "dev", "forge": "otro"}}', "Alias: forge -> otro (agents/otro.md)"),
+                             (b'{"aliases": {"forge": "otro", "forge": "dev"}}', "Alias: forge -> dev (agents/dev.md)"),
+                             (b'{"aliases": {"forge": "dev"}, "aliases": {"scribe": "redactor"}}',
+                              "Alias: scribe -> redactor (agents/redactor.md)")):
+            with self.subTest(data=data):
+                self.write_config(data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")], [expect])
+                self.assertEqual(err.strip(), "")
+        self.write_config(b'{"aliases": {"forge": "dev"}, "aliases": {}}')
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("Alias:", out)
+        # una clave repetida con el ultimo valor valido (y el primero invalido) gana el ultimo
+        self.write_config(b'{"aliases": {"forge": "Dev", "forge": "dev"}}')
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")], ["Alias: forge -> dev (agents/dev.md)"])
+
+    def test_t2_config_size_limit_with_aliases(self):
+        head = b'{"aliases": {}}'
+        limit = 65536
+        self.make_source()
+        self.write_config(head + b" " * (limit - len(head)))
+        self.assertEqual(os.path.getsize(os.path.join(self.target, self.CONFIG)), limit)
+        out, err = self.install_ok("-DryRun")
+        self.assertIn("Nivel: 5 (synclayer-config.json)", out)
+        shutil.rmtree(self.target)
+        self.assert_config_rejected(head + b" " * (limit + 1 - len(head)), "supera 65536 bytes")
+        shutil.rmtree(self.target)
+        # una tabla valida de tope exacto se lee y se aplica, no choca con el limite de tamano
+        full = self.alias_config({"forge": "dev"})
+        self.write_config(full + b" " * (limit - len(full)))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Alias: forge -> dev (agents/dev.md)", out.splitlines())
+
+    def test_t2_config_is_never_opened_for_writing_with_aliases(self):
+        # La configuracion no se escribe, respalda ni lista ni con una tabla valida (se instala sin tocarla) ni invalida.
+        self.make_source()
+        for table in ({"forge": "dev"}, {"forge": "Dev"}, {}):
+            with self.subTest(table=table):
+                path = self.write_config(self.alias_config(table))
+                old = os.stat(path).st_mtime_ns - 5_000_000_000
+                os.utime(path, ns=(old, old))
+                before = snapshot(self.target)[self.CONFIG]
+                for mode in (["-DryRun"], []):
+                    self.run_install(*mode)
+                    self.assertEqual(snapshot(self.target)[self.CONFIG], before)
+                shutil.rmtree(self.target)
+
+    # --- Fase 4, T3: estado con esquema 3 (lectura, prevByDest y huerfanos generalizados) ---
+    # Estas pruebas (escritas antes de T5) usan estados de esquema 3 escritos a mano (write_state con dests) y sin alias
+    # en la configuracion: el destino actual de cada rol es su ruta. Con alias, el instalador escribe el esquema 3 (T5).
+
+    F4_OLD_ALFA = b"alfa vieja\n"
+    F4_NEW_ALFA = b"alfa nueva\n"
+
+    def f4_old(self):
+        old = dict(SAMPLE)
+        old["agents/alfa.md"] = self.F4_OLD_ALFA
+        return old
+
+    def f4_target(self, files):
+        """Destino limpio con esos archivos en disco."""
+        shutil.rmtree(self.target, ignore_errors=True)
+        for rel, data in files.items():
+            write(self.target, rel, data)
+
+    def f4_state3(self, files=None, dests=None, written=None, level=5):
+        """Escribe un estado esquema 3 valido (alfa vieja por defecto) y lo devuelve como dict."""
+        self.write_state(files or self.f4_old(), schema=3, written=written, level=level, dests=dests)
+        return json.loads(read(self.target, self.STATE))
+
+    def f4_entry(self, data, rel="agents/alfa.md"):
+        return next(f for f in data["files"] if f["path"] == rel)
+
+    def f4_tree(self, base):
+        """{ruta relativa: bytes} de los archivos bajo base."""
+        found = {}
+        for dirpath, _dirs, names in os.walk(base):
+            for name in names:
+                full = os.path.join(dirpath, name)
+                with open(full, "rb") as f:
+                    found[os.path.relpath(full, base).replace(os.sep, "/")] = f.read()
+        return found
+
+    def test_f4t3_case20_schema3_state_without_aliases_old_dest_is_orphan_and_state_goes_back_to_schema2(self):
+        # Caso 20: estado esquema 3 (alfa estuvo en agents/viejo-alfa.md), sin alias en la configuracion: el rol sale
+        # IGUAL o NUEVO, la ruta dest vieja HUERFANO (informada, intacta), y el estado se reescribe en esquema 2.
+        self.make_source()
+        for present, expected in ((True, "IGUAL"), (False, "NUEVO")):
+            with self.subTest(alfa_on_disk=present):
+                files = dict(SAMPLE)
+                disk = dict(files)
+                disk["agents/viejo-alfa.md"] = b"nombre anterior\n"
+                if not present:
+                    del disk["agents/alfa.md"]
+                self.f4_target(disk)
+                self.write_state(files, schema=3, dests={"agents/alfa.md": "agents/viejo-alfa.md"})
+                prev_state = read(self.target, self.STATE)
+                self.assertIn(b'"schema": 3', prev_state)
+                before = snapshot(self.target)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, out + err)
+                st = self.states(out)
+                self.assertEqual(st["agents/alfa.md"], expected)
+                self.assertEqual(st["agents/viejo-alfa.md"], "HUERFANO")
+                self.assertEqual(sorted(k for k, v in st.items() if v == "HUERFANO"), ["agents/viejo-alfa.md"])
+                # igual que la referencia independiente (huerfanos y prevByDest)
+                prev = json.loads(prev_state)
+                self.assertEqual(ar.state3_orphans(prev, sorted(SAMPLE)), ["agents/viejo-alfa.md"])
+                self.assertNotIn("agents/alfa.md", ar.prev_by_dest(prev))
+                self.assertIn("HUERFANO=1", out)
+                # T7: ahora si se afirma lo que T3 dejo abierto. El huerfano es por cambio de nombre (el rol alfa sigue en
+                # el manifiesto): sin la nota de stdout y con el aviso de stderr (el archivo existe).
+                self.assertNotIn("ya no estan en el manifiesto", out)
+                self.assertNotIn("nota:", out)
+                self.assertEqual([l for l in err.splitlines() if "es el nombre anterior de" in l],
+                                 [self.f4t7_aviso("agents/viejo-alfa.md", "agents/alfa.md")])
+                # Contrato de T3: clasificacion, HUERFANO informado y archivo intacto.
+                self.assertEqual(snapshot(self.target), before)
+                backup = os.path.join(self.tmp, "respaldo")
+                shutil.rmtree(backup, ignore_errors=True)
+                orphan_before = os.stat(os.path.join(self.target, "agents", "viejo-alfa.md")).st_mtime_ns
+                out, err = self.install_ok("-BackupDir", backup)
+                self.assertEqual(self.states(out)["agents/viejo-alfa.md"], "HUERFANO")
+                self.assertEqual(read(self.target, "agents/viejo-alfa.md"), b"nombre anterior\n")
+                self.assertEqual(os.stat(os.path.join(self.target, "agents", "viejo-alfa.md")).st_mtime_ns, orphan_before)
+                self.assertEqual(read(self.target, "agents/alfa.md"), SAMPLE["agents/alfa.md"])
+                # esquema 2 (no se escribe el 3), sin el huerfano, y el estado previo va al respaldo
+                self.assert_state(5)
+                self.assertNotIn(b'"dest"', read(self.target, self.STATE))
+                self.assertNotIn(b"viejo-alfa", read(self.target, self.STATE))
+                self.assertEqual(self.f4_tree(backup), {self.STATE: prev_state})
+
+    def test_f4t3_case20_schema3_with_dest_equal_to_path_behaves_like_schema2(self):
+        # Esquema 3 valido con dest = ruta del rol: misma clasificacion, salida y destino que el esquema 2.
+        old = self.f4_old()
+        scenarios = {
+            "ACTUALIZAR y huerfano": (dict(old, **{"agents/viejo.md": b"anterior\n"}), True, 0),
+            "intacto": (old, False, 0),
+            "MODIFICADO": (dict(old, **{"agents/beta.md": b"editado a mano\n"}), False, 3),
+        }
+        for name, (disk, alfa_new, expected_code) in scenarios.items():
+            with self.subTest(case=name):
+                results = {}
+                for schema in (2, 3):
+                    self.update_source("agents/alfa.md", self.F4_NEW_ALFA if alfa_new else self.F4_OLD_ALFA)
+                    self.f4_target(disk)
+                    state_files = dict(old)
+                    if "agents/viejo.md" in disk:
+                        state_files["agents/viejo.md"] = disk["agents/viejo.md"]
+                    self.write_state(state_files, schema=schema)
+                    backup = os.path.join(self.tmp, "respaldo")
+                    shutil.rmtree(backup, ignore_errors=True)
+                    code, out, err = self.run_install("-BackupDir", backup, "-Force" if expected_code == 3 else "-DryRun")
+                    # Se compara la clasificacion (no el manejo del estado: un esquema 3 distinto del que se escribiria
+                    # se reescribe y se respalda; un esquema 2 igual, no).
+                    summary = [l for l in out.splitlines() if l.startswith("Resumen:")]
+                    results[schema] = (code, self.states(out), summary, err,
+                                       {k: v for k, v in self.f4_tree(self.target).items() if k != self.STATE},
+                                       sorted(k for k in self.f4_tree(backup) if k != self.STATE)
+                                       if os.path.isdir(backup) else None)
+                self.assertEqual(results[2], results[3])
+                self.assertEqual(results[2][0], 0, str(results[2]))
+
+    def test_f4t3_case21_invalid_schema3_state_is_absent_never_actualizar_never_huerfano(self):
+        # Caso 21: un estado esquema 3 invalido se trata como ausente: con la version vieja en el destino sale
+        # MODIFICADO (exit 3), nunca ACTUALIZAR ni HUERFANO; aviso limpio por stderr; ni se respalda ni se toca.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        alfa = "agents/alfa.md"
+
+        def dest(value):
+            def mut(d):
+                self.f4_entry(d)["dest"] = value
+            return mut
+
+        def drop_dest(d):
+            del self.f4_entry(d)["dest"]
+
+        def dest_of(rel, value):
+            def mut(d):
+                self.f4_entry(d, rel)["dest"] = value
+            return mut
+
+        def dup_dest(d):
+            self.f4_entry(d)["dest"] = "agents/x.md"
+            self.f4_entry(d, "agents/beta.md")["dest"] = "agents/x.md"
+
+        def other_entry_path(d):
+            self.f4_entry(d)["dest"] = "agents/beta.md"
+            self.f4_entry(d, "agents/beta.md")["dest"] = "agents/beta2.md"
+
+        def other_entry_path_not_in_manifest(d):
+            # El "otro path" (agents/viejo.md) no esta en el manifiesto: solo la regla "dest igual al path de otra
+            # entrada" lo atrapa, no la de las rutas del manifiesto.
+            d["files"].append({"path": "agents/viejo.md", "sha256": self.f4_entry(d)["sha256"],
+                               "written": self.f4_entry(d)["written"], "level": 5, "dest": "agents/viejo2.md"})
+            self.f4_entry(d)["dest"] = "agents/viejo.md"
+
+        def other_role_without_entry(d):
+            d["files"] = [f for f in d["files"] if f["path"] != "agents/beta.md"]
+            self.f4_entry(d)["dest"] = "agents/beta.md"
+
+        def top(key, value):
+            def mut(d):
+                d[key] = value
+            return mut
+
+        def field(key, value):
+            def mut(d):
+                self.f4_entry(d)[key] = value
+            return mut
+
+        def rename_key(owner, old_key, new_key):
+            def mut(d):
+                target = d if owner == "top" else self.f4_entry(d)
+                items = list(target.items())
+                target.clear()
+                for k, v in items:
+                    target[new_key if k == old_key else k] = v
+            return mut
+
+        def schema1_with_dest(d):
+            d.clear()
+            d.update({"schema": 1, "algorithm": "sha256", "files": [
+                {"path": f["path"], "sha256": f["sha256"], "dest": f["dest"]} for f in
+                json.loads(read(self.target, self.STATE))["files"]]})
+
+        variants = {
+            "sin dest": drop_dest,
+            "dest null": dest(None),
+            "dest numero": dest(5),
+            "dest booleano": dest(True),
+            "dest lista": dest(["agents/x.md"]),
+            "dest objeto": dest({"a": 1}),
+            "dest vacio": dest(""),
+            "dest settings.json": dest("settings.json"),
+            "dest con ..": dest("agents/../x.md"),
+            "dest con barra invertida": dest("agents\\x.md"),
+            "dest con dos puntos": dest("agents/x:y.md"),
+            "dest absoluto": dest("/agents/x.md"),
+            "dest con mayusculas": dest("agents/Amigo.md"),
+            "dest con salto final": dest("agents/amigo.md\n"),
+            "dest reservado de Windows": dest("agents/con.md"),
+            "dest con otra extension": dest("agents/amigo.txt"),
+            "dest en subcarpeta": dest("agents/sub/x.md"),
+            "dest de 75 caracteres": dest("agents/" + "a" * 65 + ".md"),
+            "dest no ASCII": dest("agents/\u00e9.md"),
+            "dest con NUL": dest("agents/a\u0000b.md"),
+            "dest con guion blando": dest("agents/a\u00adb.md"),
+            "dest de otra carpeta fija": dest("rules/agentes.md"),
+            "dest repetido entre entradas": dup_dest,
+            "dest igual al path de otra entrada": other_entry_path,
+            "dest igual al path de otra entrada que no esta en el manifiesto": other_entry_path_not_in_manifest,
+            "dest igual a la ruta de otro rol del manifiesto sin entrada": other_role_without_entry,
+            "dest distinto en la regla fija": dest_of("rules/agentes.md", "agents/otro.md"),
+            "dest distinto en el hook": dest_of("hooks/agent_guard.py", "agents/otro.md"),
+            "dest distinto en la guia": dest_of("docs/agentes.md", "docs/otra.md"),
+            "clave de mas en una entrada": field("extra", 1),
+            "clave de mas en la raiz": top("extra", 1),
+            "clave Dest con otra capitalizacion": rename_key("entry", "dest", "Dest"),
+            "clave dest con NUL": rename_key("entry", "dest", "dest\u0000"),
+            "clave __type": top("__type", "x"),
+            "level 6": field("level", 6),
+            "sin level": lambda d: self.f4_entry(d).pop("level"),
+            "written invalido": field("written", "XYZ"),
+            "eol crlf": top("eol", "crlf"),
+            "algorithm md5": top("algorithm", "md5"),
+            "schema 4": top("schema", 4),
+            "schema 0": top("schema", 0),
+            "schema texto": top("schema", "3"),
+            "schema decimal": top("schema", 3.0),
+            "schema 2 con la clave dest": top("schema", 2),
+            "schema 1 con la clave dest": schema1_with_dest,
+            "files vacio": top("files", []),
+        }
+        # Control: sin mutar, el mismo estado clasifica ACTUALIZAR (las variantes fallan por su campo).
+        self.f4_target(self.f4_old())
+        control = self.f4_state3()
+        self.assertIsNone(ar.state3_problem(control, sorted(SAMPLE)))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(out)[alfa], "ACTUALIZAR")
+        for name, mutate in variants.items():
+            with self.subTest(case=name):
+                self.f4_target(self.f4_old())
+                data = self.f4_state3()
+                mutate(data)
+                # La referencia independiente tambien lo rechaza (o no es un esquema 3).
+                self.assertIsNotNone(ar.state3_problem(data, sorted(SAMPLE)))
+                raw = self.dump_state(data)
+                before = snapshot(self.target)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                st = self.states(out)
+                self.assertEqual(st[alfa], "MODIFICADO")
+                self.assertNotIn("ACTUALIZAR", set(st.values()))
+                self.assertNotIn("HUERFANO", set(st.values()))
+                self.assertIn("HUERFANO=0", out)
+                self.assertNotIn("nota:", out)
+                self.assert_clean_unreadable_warning(err)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(read(self.target, self.STATE), raw)
+
+    def test_f4t3_case21_invalid_schema3_state_real_run_replaces_it_without_backup(self):
+        # Un esquema 3 invalido no se respalda: con -Force se reescribe en esquema 2 y solo se respalda lo sobrescrito.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        self.f4_target(self.f4_old())
+        data = self.f4_state3(dests={"agents/alfa.md": "agents/viejo-alfa.md"})
+        del self.f4_entry(data)["dest"]
+        self.dump_state(data)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-Force", "-BackupDir", backup)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+        self.assertNotIn("HUERFANO", set(self.states(out).values()))
+        self.assert_clean_unreadable_warning(err)
+        self.assert_state(5)
+        self.assertEqual(self.f4_tree(backup), {"agents/alfa.md": self.F4_OLD_ALFA})
+
+    def test_f4t3_case21_state_size_limit_is_exact_for_schema3(self):
+        # 1048576 bytes validos se leen (ACTUALIZAR); un byte mas, estado ausente (MODIFICADO).
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        for extra, expected, expected_code in ((0, "ACTUALIZAR", 0), (1, "MODIFICADO", 3)):
+            with self.subTest(extra=extra):
+                self.f4_target(self.f4_old())
+                self.f4_state3()
+                raw = read(self.target, self.STATE)
+                raw += b" " * (1048576 + extra - len(raw))
+                write(self.target, self.STATE, raw)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, expected_code, out + err)
+                self.assertEqual(self.states(out)["agents/alfa.md"], expected)
+
+    def test_f4t3_case22_schema2_with_dest_key_and_schema4_are_absent(self):
+        # Caso 22: esquema 2 con la clave dest (desconocida en ese esquema) y schema 4: ausentes, con aviso.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        for name, mutate in (("esquema 2 con dest", lambda d: d.update(schema=2)),
+                             ("esquema 4", lambda d: d.update(schema=4))):
+            with self.subTest(case=name):
+                self.f4_target(self.f4_old())
+                data = self.f4_state3(dests={"agents/alfa.md": "agents/viejo-alfa.md"})
+                mutate(data)
+                self.dump_state(data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+                self.assertNotIn("HUERFANO", set(self.states(out).values()))
+                self.assert_clean_unreadable_warning(err)
+
+    def test_f4t3_case23_prev_by_dest_actualizar_when_state_says_we_wrote_these_bytes_in_this_path(self):
+        # Caso 23: estado 3 con dest = ruta actual y written = hash del destino: ACTUALIZAR, con respaldo del destino.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        self.f4_target(self.f4_old())
+        self.f4_state3()
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(out)["agents/alfa.md"], "ACTUALIZAR")
+        self.assertEqual(err, "")
+        backup = os.path.join(self.tmp, "respaldo")
+        self.install_ok("-BackupDir", backup)
+        self.assertEqual(read(self.target, "agents/alfa.md"), self.F4_NEW_ALFA)
+        self.assertEqual(self.f4_tree(backup)["agents/alfa.md"], self.F4_OLD_ALFA)
+        self.assert_state(5)
+
+    def test_f4t3_case23_prev_by_dest_written_of_another_path_is_modified(self):
+        # written de otra ruta (el hash de beta): el estado no afirma esos bytes para esta ruta: MODIFICADO.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        self.f4_target(self.f4_old())
+        self.f4_state3(written={"agents/alfa.md": self.sha(SAMPLE["agents/beta.md"])})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out)["agents/alfa.md"], "MODIFICADO")
+        self.assertNotIn("ACTUALIZAR", set(self.states(out).values()))
+
+    def test_f4t3_case23_prev_by_dest_role_with_a_previous_alias_is_not_actualizar_in_its_own_path(self):
+        # El estado dice que el rol estuvo en agents/amigo.md: en agents/alfa.md (hoy su destino) no hay nada
+        # escrito por nosotros. Con la version vieja da MODIFICADO aunque written coincida con ese hash (clasificar
+        # contra el hash del rol daria ACTUALIZAR). El archivo viejo es HUERFANO, informado y sin tocar.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        disk = dict(self.f4_old())
+        disk["agents/amigo.md"] = b"nombre anterior\n"
+        self.f4_target(disk)
+        self.f4_state3(dests={"agents/alfa.md": "agents/amigo.md"})
+        before = snapshot(self.target)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 3, out + err)
+        st = self.states(out)
+        self.assertEqual(st["agents/alfa.md"], "MODIFICADO")
+        self.assertEqual(st["agents/amigo.md"], "HUERFANO")
+        self.assertNotIn("ACTUALIZAR", set(st.values()))
+        self.assertEqual(snapshot(self.target), before)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(self.states(out)["agents/amigo.md"], "HUERFANO")
+        self.assertEqual(read(self.target, "agents/amigo.md"), b"nombre anterior\n")
+        self.assertEqual(read(self.target, "agents/alfa.md"), self.F4_NEW_ALFA)
+        self.assertEqual(sorted(self.f4_tree(backup)), ["agents/alfa.md", self.STATE])
+        self.assertEqual(self.f4_tree(backup)["agents/alfa.md"], self.F4_OLD_ALFA)
+        self.assert_state(5)
+
+    def test_f4t3_case23_orphan_by_dest_is_reported_even_if_the_file_is_gone(self):
+        # El huerfano se informa aunque el archivo ya no exista (como hoy) y nunca se crea ni se borra nada.
+        self.make_source()
+        disk = dict(SAMPLE)
+        self.f4_target(disk)
+        self.write_state(dict(SAMPLE), schema=3, dests={"agents/alfa.md": "agents/amigo.md"})
+        out, err = self.install_ok("-DryRun")
+        self.assertEqual(self.states(out)["agents/amigo.md"], "HUERFANO")
+        self.assertEqual(self.states(out)["agents/alfa.md"], "IGUAL")
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "amigo.md")))
+
+    def test_f4t3_case23_reassignment_in_the_state_gives_one_orphan_per_old_dest(self):
+        # Dos roles con alias previos: cada destino previo que ya no es destino actual es un HUERFANO.
+        self.make_source()
+        self.f4_target(dict(SAMPLE))
+        self.write_state(dict(SAMPLE), schema=3, dests={"agents/alfa.md": "agents/uno.md", "agents/beta.md": "agents/dos.md"})
+        out, err = self.install_ok("-DryRun")
+        st = self.states(out)
+        self.assertEqual(sorted(k for k, v in st.items() if v == "HUERFANO"), ["agents/dos.md", "agents/uno.md"])
+        self.assertIn("HUERFANO=2", out)
+
+    def test_f4t3_case24_schema1_and_2_states_classify_as_before_and_keep_the_previous_level(self):
+        # Caso 24: con estados de esquema 1 y 2 (y el 3 con dest = ruta) la clasificacion es la de hoy y
+        # `Nivel anterior:` se calcula igual.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        old = dict(self.f4_old())
+        old["agents/viejo.md"] = b"anterior\n"
+        for schema, level in ((1, 5), (2, 5), (3, 5), (2, 3), (3, 3)):
+            with self.subTest(schema=schema, level=level):
+                self.f4_target(old)
+                self.write_state(old, schema=schema, level=level)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.states(out), {
+                    "agents/alfa.md": "ACTUALIZAR", "agents/beta.md": "IGUAL", "rules/agentes.md": "IGUAL",
+                    "hooks/agent_guard.py": "IGUAL", "docs/agentes.md": "IGUAL", "agents/viejo.md": "HUERFANO"})
+                self.assertIn("Resumen: NUEVO=0 IGUAL=4 ACTUALIZAR=1 MODIFICADO=0 HUERFANO=1", out)
+                self.assertIn("nota: los HUERFANO", out)
+                self.assertEqual(err, "")
+                if level == 3:
+                    self.assertIn("Nivel anterior: 3", out.splitlines())
+                else:
+                    self.assertNotIn("Nivel anterior", out)
+
+    def test_f4t3_case25_hostile_dest_gives_bounded_escaped_stderr(self):
+        # Caso 25: un dest enorme o no ASCII no llega crudo ni entero a stdout ni a stderr.
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        variants = {
+            "enorme": ("agents/" + "a" * 200000 + ".md", None),
+            "no ASCII": ("agents/\u00e9\u202e\u0301\u00ad.md", ("\\u00e9", "\\u202e", "\\u0301", "\\u00ad")),
+            "enorme no ASCII": ("agents/" + "\u00e9" * 50000 + ".md", ("\\u00e9",)),
+        }
+        for name, (value, escapes) in variants.items():
+            with self.subTest(case=name):
+                self.f4_target(self.f4_old())
+                data = self.f4_state3()
+                self.f4_entry(data)["dest"] = value
+                self.dump_state(data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                self.assertTrue(out.isascii() and err.isascii(), repr(out + err)[:300])
+                self.assertLess(len(out) + len(err), 4000)
+                self.assertNotIn("a" * 60, out + err)
+                self.assertNotIn("HUERFANO", set(self.states(out).values()))
+                self.assert_clean_unreadable_warning(err)
+                for esc in escapes or ():
+                    self.assertIn(esc, err)
+
+    def test_f4t3_dest_of_74_characters_is_valid(self):
+        # Limite exacto: agents/ + alias de 64 + .md = 74 caracteres es un dest valido (el de 75 se rechaza en el caso 21).
+        self.update_source("agents/alfa.md", self.F4_NEW_ALFA)
+        long_dest = "agents/" + "a" * 64 + ".md"
+        self.f4_target(self.f4_old())
+        self.f4_state3(dests={"agents/alfa.md": long_dest})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out)[long_dest], "HUERFANO")
+        self.assertNotIn("aviso", err)
+
+    def test_f4t3_dest_outside_agents_is_checked_on_its_own(self):
+        # El chequeo "dest fuera de agents/" aislado: sin docs/agentes.md en el manifiesto ni en el estado, un agente
+        # con dest docs/agentes.md no choca con ninguna otra regla (ni path de otra entrada, ni ruta del manifiesto).
+        files = {k: v for k, v in SAMPLE.items() if k != "docs/agentes.md"}
+        self.make_source(dict(files, **{"agents/alfa.md": self.F4_NEW_ALFA}))
+        old = dict(files, **{"agents/alfa.md": self.F4_OLD_ALFA})
+        for dest, valid in (("docs/agentes.md", False), ("agents/otro.md", True)):
+            with self.subTest(dest=dest):
+                self.f4_target(old)
+                data = self.f4_state3(files=old)
+                self.f4_entry(data)["dest"] = dest
+                self.assertEqual(ar.state3_problem(data, sorted(files)) is None, valid)
+                self.dump_state(data)
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 3, out + err)
+                st = self.states(out)
+                self.assertEqual(st["agents/alfa.md"], "MODIFICADO")
+                if valid:
+                    self.assertEqual(st["agents/otro.md"], "HUERFANO")  # control: el estado es valido
+                    self.assertNotIn("aviso", err)
+                else:
+                    self.assertNotIn("HUERFANO", set(st.values()))
+                    self.assert_clean_unreadable_warning(err)
+                    self.assertNotIn("HUERFANO=1", out)
+
+    def f4_big_state(self, schema, n=2000, clash=False):
+        files = []
+        for i in range(n):
+            h = "%064x" % (i + 1)
+            entry = {"path": "agents/p%d.md" % i, "sha256": h, "written": h, "level": 5}
+            if schema == 3:
+                entry["dest"] = "agents/q%d.md" % i
+            files.append(entry)
+        if clash:
+            files[0]["dest"] = "agents/p%d.md" % (n - 1)
+        return {"schema": schema, "algorithm": "sha256", "eol": "lf", "files": files}
+
+    def test_f4t3_schema3_validation_is_not_quadratic(self):
+        # 2000 entradas con dest distinto: tiempo del instalador relativo al esquema 2 equivalente (no depende de la
+        # maquina) y misma decision. Una busqueda por lista en la regla "dest igual al path de otra entrada" tardaba minutos.
+        self.make_source()
+        self.f4_target(dict(SAMPLE))
+        timings = {}
+        for name, state in (("2", self.f4_big_state(2)), ("3", self.f4_big_state(3)),
+                            ("3 con choque", self.f4_big_state(3, clash=True))):
+            with self.subTest(state=name):
+                self.dump_state(state)
+                start = time.perf_counter()
+                code, out, err = self.run_install("-DryRun")
+                timings[name] = time.perf_counter() - start
+                self.assertEqual(code, 0, (out + err)[:500])
+                if name == "3 con choque":
+                    self.assertIn("HUERFANO=0", out)
+                    self.assertIn("dest igual al path de otra entrada", err)
+                else:
+                    self.assertIn("HUERFANO=2000", out)
+                    self.assertEqual(err, "")
+        self.assertLessEqual(timings["3"], 3 * timings["2"] + 2, timings)
+        self.assertLessEqual(timings["3 con choque"], 3 * timings["2"] + 2, timings)
+
+    def test_f4t3_huge_values_give_short_stderr_in_state_and_manifest(self):
+        # Toda ruta del estado o del manifiesto puede medir cientos de miles de caracteres y casar con la lista
+        # permitida: los mensajes la recortan. Estado ausente: todo IGUAL, exit 0, solo el aviso en stderr.
+        self.make_source()
+        huge = "agents/" + "a" * 450000 + ".md"
+        h = "%064x" % 7
+
+        def entry(**kw):
+            base = {"path": huge, "sha256": h, "written": h, "level": 5}
+            base.update(kw)
+            return base
+
+        cases = {
+            "esquema 2, written invalido": (2, [entry(written="zz")]),
+            "esquema 2, level invalido": (2, [entry(level=9)]),
+            "esquema 2, sha256 invalido": (2, [entry(sha256="zz")]),
+            "esquema 2, ruta duplicada": (2, [entry(), entry()]),
+            "esquema 3, written invalido": (3, [entry(written="zz", dest="agents/x.md")]),
+            "esquema 3, level invalido": (3, [entry(level=9, dest="agents/x.md")]),
+            "esquema 3, sin dest": (3, [entry()]),
+            "esquema 3, dest no texto": (3, [entry(dest=5)]),
+            "esquema 3, dest fuera de agents": (3, [entry(dest="rules/agentes.md")]),
+            "esquema 3, dest demasiado largo": (3, [entry(dest="agents/" + "b" * 400000 + ".md")]),
+        }
+        for name, (schema, files) in cases.items():
+            with self.subTest(case=name):
+                self.f4_target(dict(SAMPLE))
+                self.dump_state({"schema": schema, "algorithm": "sha256", "eol": "lf", "files": files})
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, (out + err)[:500])
+                self.assertLess(len(err.encode("utf-8")), 1000, len(err))
+                self.assert_clean_unreadable_warning(err)
+        good = json.loads(read(self.src, "install-manifest.json"))
+        for name, files in (("sha256 invalido", [{"path": huge, "sha256": "zz"}]),
+                            ("ruta duplicada", [{"path": huge, "sha256": h}, {"path": huge, "sha256": h}])):
+            with self.subTest(case="manifiesto, " + name):
+                write(self.src, "install-manifest.json", json.dumps(dict(good, files=files)).encode("ascii"))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, (out + err)[:500])
+                self.assertLess(len(err.encode("utf-8")), 1000, len(err))
+
+    @staticmethod
+    def d5_reason(dest):
+        short = dest[:40] + "..." if len(dest) > 40 else dest
+        return ("el destino " + short + " de agents/sentinel.md es ahora un archivo del manifiesto; si el "
+                "repositorio anadio un agente con el nombre de tu alias, elige otro alias y repite con -Force")
+
+    def test_f4t3_case59_dest_equal_to_a_manifest_path_is_absent_with_the_d5_warning(self):
+        for alias in ('tester', 'a' * 50):
+            with self.subTest(alias=alias):
+                self.f4_case59(alias)
+
+    def f4_case59(self, alias):
+        dest = 'agents/' + alias + '.md'
+        # Caso 59 (E3, S14): el estado dice sentinel -> tester y el repositorio ahora trae agents/tester.md: el estado se
+        # trata como ausente con el aviso de D5; lo que cambio sale MODIFICADO (exit 3, nada escrito); con -Force
+        # respaldo (sin el estado invalido) y sobrescritura; ni ACTUALIZAR ni HUERFANO. Control: sin tester en el
+        # manifiesto el mismo estado es valido y agents/tester.md sale HUERFANO, sin aviso.
+        old = dict(SAMPLE, **{"agents/sentinel.md": b"sentinel viejo\n"})
+        new_source = dict(old, **{"agents/sentinel.md": b"sentinel nuevo\n", dest: b"agente del repositorio\n"})
+        edited = b"sentinel editado a mano\n"
+
+        def prepare(source):
+            self.make_source(source)
+            self.f4_target(dict(old, **{"agents/sentinel.md": edited}))
+            data = self.f4_state3(files=old, dests={"agents/sentinel.md": dest})
+            self.dump_state(data)
+            return data
+
+        state = prepare(new_source)
+        self.assertIsNotNone(ar.state3_problem(state, sorted(new_source)))
+        raw = read(self.target, self.STATE)
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 3, out + err)
+                st = self.states(out)
+                self.assertEqual(st["agents/sentinel.md"], "MODIFICADO")
+                self.assertEqual(st[dest], "NUEVO")
+                self.assertNotIn("ACTUALIZAR", set(st.values()))
+                self.assertNotIn("HUERFANO", set(st.values()))
+                self.assertIn("aviso:", err)
+                self.assertIn("no se pudo leer o no es valido (" + self.d5_reason(dest) + "). Se trata como ausente: no se respalda.", err)
+                self.assertTrue(err.isascii())
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(read(self.target, self.STATE), raw)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-Force", "-BackupDir", backup)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(self.d5_reason(dest), err)
+        self.assertEqual(self.f4_tree(backup), {"agents/sentinel.md": edited})
+        self.assertEqual(read(self.target, "agents/sentinel.md"), b"sentinel nuevo\n")
+        self.assertEqual(read(self.target, dest), b"agente del repositorio\n")
+        self.assert_state(5)
+        # Control: el manifiesto no trae agents/tester.md.
+        shutil.rmtree(backup, ignore_errors=True)
+        control_source = dict(new_source)
+        del control_source[dest]
+        state = prepare(control_source)
+        self.assertIsNone(ar.state3_problem(state, sorted(control_source)))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 3, out + err)
+        st = self.states(out)
+        self.assertEqual(st["agents/sentinel.md"], "MODIFICADO")
+        self.assertEqual(st[dest], "HUERFANO")
+        self.assertNotIn("aviso", err)
+
+    def test_f4t3_read_state_without_manifest_paths_fails_clearly(self):
+        # Llamar a Read-State sin la lista del manifiesto (o con $null) lanza un error claro, no desactiva la regla.
+        self.make_source()
+        self.f4_target(dict(SAMPLE))
+        self.write_state(dict(SAMPLE), schema=3)
+        self.patch_script("$prevLevel = $null",
+                          "try { [void](Read-State $statePath $null) } catch { Write-Err ('PROBE ' + $_.Exception.Message) }")
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("PROBE falta la lista de rutas del manifiesto (ManifestPaths)", err)
+
+    def test_f4t3_read_manifest_still_requires_schema_1(self):
+        # install-manifest.json sigue siendo esquema 1: un manifiesto con schema 3 (y dest) no es valido.
+        self.make_source()
+        good = json.loads(read(self.src, "install-manifest.json"))
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                bad = dict(good, schema=schema)
+                bad["files"] = [dict(f, dest=f["path"]) for f in good["files"]]
+                write(self.src, "install-manifest.json", json.dumps(bad).encode("ascii"))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("schema debe ser 1", err)
+                self.assertFalse(os.path.exists(self.target))
+
+    def test_f4t3_dest_never_leads_to_a_write_or_delete(self):
+        # Un estado forjado con un dest valido solo puede dar un HUERFANO informado: ni se borra, ni se respalda, ni
+        # se escribe en esa ruta (bytes y mtime intactos tras una instalacion real con -Force).
+        self.make_source()
+        disk = dict(SAMPLE)
+        disk["agents/ajeno.md"] = b"archivo del usuario\n"
+        self.f4_target(disk)
+        self.write_state(dict(SAMPLE), schema=3, dests={"agents/alfa.md": "agents/ajeno.md"})
+        before = snapshot(self.target)["agents\\ajeno.md" if os.name == "nt" else "agents/ajeno.md"]
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(self.states(out)["agents/ajeno.md"], "HUERFANO")
+        after = snapshot(self.target)["agents\\ajeno.md" if os.name == "nt" else "agents/ajeno.md"]
+        self.assertEqual(after, before)
+        self.assertNotIn("agents/ajeno.md", self.f4_tree(backup))
+        self.assertEqual(self.leftover_temps(), [])
+
+    # --- Fase 4, T4: destRel (ruta de destino) separada del rol en los pasos 4 a 9 ---
+    # Estas pruebas inyectan, tras el ancla `# Alias:`, un destRel que no es la identidad (sin alias configurados en
+    # produccion destRel es la identidad; con alias lo calcula T5 antes del ancla). El mapa viaja en la variable de
+    # entorno F4_DESTS ("rol=destino;rol=destino"): el mismo script (parcheado una vez) sirve para varias corridas con
+    # destinos distintos, y las ayudas existentes (assert_reparse_rejected, ...) lo heredan sin cambios.
+
+    F4T4_INJECT = ("foreach ($f4pair in ([string]$env:F4_DESTS).Split([char]59)) { if ($f4pair.Length -gt 0) "
+                   "{ $f4kv = $f4pair.Split([char]61); $destRel[$f4kv[0]] = $f4kv[1] } }")
+    F4T4_ALFA = "agents/alfa.md"
+    F4T4_BETA = "agents/beta.md"
+    F4T4_TESTER = "agents/tester.md"
+    F4T4_DEV = "agents/dev.md"
+
+    def f4t4_prepare(self, files=None):
+        self.make_source(files)
+        self.patch_script("# Alias:", self.F4T4_INJECT)
+
+    def f4t4_set(self, mapping):
+        """Fija el destRel inyectado para las corridas siguientes ({} = identidad)."""
+        self.addCleanup(os.environ.pop, "F4_DESTS", None)
+        os.environ["F4_DESTS"] = ";".join("%s=%s" % kv for kv in mapping.items())
+
+    def f4t4_manifest(self):
+        return read(self.src, "install-manifest.json")
+
+    def f4t4_copied(self, out):
+        return [l.split(": ", 1)[1].strip() for l in out.splitlines() if l.startswith("Copiado: ")]
+
+    def f4t4_role_path_absent(self):
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "alfa.md")))
+
+    def test_f4t4_case26_clean_install_writes_only_in_the_dest_path(self):
+        # Caso 26: el archivo del rol alfa se escribe SOLO en agents/tester.md; Copiado: y la fila llevan esa ruta; el
+        # estado es el de la referencia (esquema 3 con dest en todas las entradas).
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.f4t4_role_path_absent()
+        copied = self.f4t4_copied(out)
+        self.assertIn(self.F4T4_TESTER, copied)
+        self.assertNotIn(self.F4T4_ALFA, copied)
+        self.assertEqual(len(copied), 5)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_TESTER], "NUEVO")
+        self.assertNotIn(self.F4T4_ALFA, st)
+        self.assertEqual(len(st), 5)
+        self.assertEqual(set(st.values()), {"NUEVO"})
+        self.assertIn("Verificado: 5 archivo(s)", out)
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), None, 5, {self.F4T4_ALFA: self.F4T4_TESTER}))
+        self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+        self.assertFalse(os.path.exists(backup))
+        self.assertEqual(self.leftover_temps(), [])
+        self.assertNotIn("no se pudo leer o no es valido", err)
+        self.assert_nothing_written_outside_target_and_backup()
+
+    def test_f4t4_case26_dryrun_shows_the_dest_path_and_writes_nothing(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_TESTER], "NUEVO")
+        self.assertNotIn(self.F4T4_ALFA, st)
+        self.assertIn("NUEVO=5", out)
+        self.assertFalse(os.path.exists(self.target))
+        self.assert_nothing_written_outside_target_and_backup()
+
+    def test_f4t4_case27_actualizar_backs_up_the_dest_path(self):
+        # Caso 27 (a): destino con alias intacto segun el estado: ACTUALIZAR, respaldo en <respaldo>/<ruta de destino>.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        prev_state = read(self.target, self.STATE)
+        new = dict(SAMPLE)
+        new[self.F4T4_ALFA] = b"alfa 2\n"
+        self.make_source(new)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-DryRun", "-BackupDir", backup)
+        self.assertEqual(code, 0, out + err)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_TESTER], "ACTUALIZAR")
+        self.assertEqual(sorted(k for k, v in st.items() if v == "ACTUALIZAR"), [self.F4T4_TESTER])
+        self.assertIn("Respaldo: ", out)
+        self.assertFalse(os.path.exists(backup))
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(read(backup, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.assertFalse(os.path.exists(os.path.join(backup, "agents", "alfa.md")))
+        self.assertIn("Respaldado: " + self.F4T4_TESTER, out)
+        self.assertEqual(read(self.target, self.F4T4_TESTER), b"alfa 2\n")
+        self.f4t4_role_path_absent()
+        # el estado cambio (alfa tiene otro written): el anterior va al respaldo
+        self.assertEqual(read(backup, self.STATE), prev_state)
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), None, 5, {self.F4T4_ALFA: self.F4T4_TESTER}))
+        self.assertEqual(self.f4_tree(backup).keys(), {self.F4T4_TESTER, self.STATE})
+
+    def test_f4t4_case27_hand_edited_dest_is_modificado_and_force_backs_it_up(self):
+        # Caso 27 (b): edicion a mano del archivo con alias: MODIFICADO (exit 3, nada escrito); con -Force, respaldo
+        # de la ruta de destino y sobrescritura.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        write(self.target, self.F4T4_TESTER, b"editado a mano\n")
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-BackupDir", backup)
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.states(out)[self.F4T4_TESTER], "MODIFICADO")
+        self.assertIn(self.F4T4_TESTER, err)
+        self.assertNotIn(self.F4T4_ALFA, err)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertFalse(os.path.exists(backup))
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(read(backup, self.F4T4_TESTER), b"editado a mano\n")
+        self.assertFalse(os.path.exists(os.path.join(backup, "agents", "alfa.md")))
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.f4t4_role_path_absent()
+        # el segundo estado no cambia (written igual): solo el archivo editado va al respaldo
+        self.assertEqual(self.f4_tree(backup), {self.F4T4_TESTER: b"editado a mano\n"})
+
+    def test_f4t4_case27_file_in_the_role_path_is_an_orphan_and_is_never_touched(self):
+        # El archivo previo en la ruta del rol queda HUERFANO informado: sin tocar (bytes y mtime), sin respaldar,
+        # tambien con -Force. Una vez reescrito el estado deja de informarse.
+        self.f4t4_prepare()
+        self.f4t4_set({})
+        self.install_ok()
+        role_file = os.path.join(self.target, "agents", "alfa.md")
+        old = os.stat(role_file).st_mtime_ns - 5_000_000_000
+        os.utime(role_file, ns=(old, old))
+        prev_state = read(self.target, self.STATE)
+        before = snapshot(self.target)["agents\\alfa.md" if os.name == "nt" else "agents/alfa.md"]
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_TESTER], "NUEVO")
+        self.assertEqual(st[self.F4T4_ALFA], "HUERFANO")
+        self.assertEqual(sorted(k for k, v in st.items() if v == "HUERFANO"), [self.F4T4_ALFA])
+        self.assertIn("HUERFANO=1", out)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(self.states(out)[self.F4T4_ALFA], "HUERFANO")
+        after = snapshot(self.target)["agents\\alfa.md" if os.name == "nt" else "agents/alfa.md"]
+        self.assertEqual(after, before)
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.assertEqual(self.f4_tree(backup), {self.STATE: prev_state})
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), None, 5, {self.F4T4_ALFA: self.F4T4_TESTER}))
+        out, err = self.install_ok()
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertNotIn(self.F4T4_ALFA, self.states(out))
+
+    def test_f4t4_role_path_is_never_inspected_when_it_has_another_destination(self):
+        # Ni el reanalisis, ni la carpeta, ni el bloqueo de la ruta del rol importan: no se mira. Una junction en
+        # agents/alfa.md no impide instalar alfa en agents/tester.md.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        os.makedirs(os.path.join(self.target, "agents"))
+        link = os.path.join(self.target, "agents", "alfa.md")
+        self.make_link_dir(link, self.outside)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        out, err = self.install_ok()
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.assertEqual(os.listdir(self.outside), [])
+
+    def test_f4t4_case28_verification_names_the_dest_path_exit4(self):
+        # Caso 28: archivo alterado en el Paso 8: exit 4 y el mensaje nombra la ruta de destino (no la del rol).
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        victim = os.path.join(self.target, "agents", "tester.md").replace("'", "''")
+        self.patch_script("# Paso 8:", "[System.IO.File]::WriteAllBytes('%s', [byte[]]@(65))" % victim)
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("la verificacion posterior fallo", err)
+        failed = err.split("la verificacion posterior fallo", 1)[1]
+        self.assertIn(self.F4T4_TESTER, failed.splitlines()[1])
+        self.assertNotIn(self.F4T4_ALFA, err)
+        self.assertFalse(os.path.exists(os.path.join(self.target, self.STATE)))
+        self.f4t4_role_path_absent()
+
+    @unittest.skipUnless(os.name == "nt", "el atributo de solo lectura bloquea el reemplazo solo en Windows")
+    def test_f4t4_copy_failure_names_the_dest_path_exit4(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        new = dict(SAMPLE)
+        new[self.F4T4_ALFA] = b"alfa 2\n"
+        self.make_source(new)
+        self.inject_readonly_at_step7(self.F4T4_TESTER)
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("fallo la copia de " + self.F4T4_TESTER, err)
+        self.assertNotIn(self.F4T4_ALFA, err)
+
+    def test_f4t4_case29_reparse_point_in_the_dest_path_exit1_in_both_modes(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        os.makedirs(os.path.join(self.target, "agents"))
+        link = os.path.join(self.target, "agents", "tester.md")
+        self.make_link_dir(link, self.outside)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        self.assert_reparse_rejected(expect_in_err="tester.md", outside_before=snapshot(self.outside))
+        self.assert_reparse_rejected("-Force", expect_in_err="tester.md", outside_before=snapshot(self.outside))
+        self.assertEqual(os.listdir(self.outside), [])
+
+    def test_f4t4_case29_folder_in_the_dest_path_exit1_in_both_modes(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        os.makedirs(os.path.join(self.target, "agents", "tester.md"))
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], [], ["-Force"]):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("es una carpeta, no un archivo", err)
+                self.assertIn("tester.md", err)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(snapshot(self.target), before)
+
+    def test_f4t4_case29_file_where_a_folder_is_needed_exit1_in_both_modes(self):
+        # Una de las carpetas intermedias de la ruta de destino es un archivo (agents/ en este caso).
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        write(self.target, "agents", b"soy un archivo")
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("es un archivo y deberia ser una carpeta", err)
+                self.assertNotIn("Copiado", out)
+
+    def test_f4t4_case29_read_only_dest_exit1_in_both_modes(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        new = dict(SAMPLE)
+        new[self.F4T4_ALFA] = b"alfa 2\n"
+        self.make_source(new)
+        self.make_readonly(self.F4T4_TESTER)
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("solo lectura", err)
+                self.assertIn("tester.md", err)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(snapshot(self.target), before)
+
+    @unittest.skipUnless(os.name == "nt", "el bloqueo de uso compartido es de Windows")
+    def test_f4t4_case29_locked_dest_exit1_in_both_modes(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        new = dict(SAMPLE)
+        new[self.F4T4_ALFA] = b"alfa 2\n"
+        self.make_source(new)
+        self.lock_file(os.path.join(self.target, "agents", "tester.md"), self.GENERIC_READ, 1)
+        before = snapshot(self.target)
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("bloqueado", err)
+                self.assertIn("tester.md", err)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(snapshot(self.target), before)
+
+    def test_f4t4_case30_hook_goes_first_with_a_non_identity_dest(self):
+        # Caso 30: el hook (rol fijo, Path) va primero aunque el agente con otro destino sea el primero del manifiesto.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        out, err = self.install_ok()
+        copied = self.f4t4_copied(out)
+        self.assertEqual(copied[0], "hooks/agent_guard.py")
+        self.assertIn(self.F4T4_TESTER, copied)
+        # tambien cuando el hook ya existe y se actualiza
+        new = dict(SAMPLE)
+        new["hooks/agent_guard.py"] = b"print('guard 2')\n"
+        new[self.F4T4_ALFA] = b"alfa 2\n"
+        self.make_source(new)
+        out, err = self.install_ok()
+        copied = self.f4t4_copied(out)
+        self.assertEqual(copied[0], "hooks/agent_guard.py")
+        self.assertEqual(sorted(copied), sorted(["hooks/agent_guard.py", self.F4T4_TESTER]))
+
+    def test_f4t4_case31_second_run_is_all_igual_and_does_not_rewrite_the_state(self):
+        # Caso 31: el estado esquema 3 que escribio T4 se relee como valido: segunda corrida todo IGUAL, ni estado, ni
+        # respaldo, ni aviso.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER, self.F4T4_BETA: self.F4T4_DEV})
+        self.install_ok()
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        code, out, err = self.run_install("-DryRun", "-BackupDir", backup)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertNotIn("Respaldo:", out)
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertEqual(len(self.states(out)), 5)
+        self.assertIn("escritos=0 IGUAL=5", out)
+        self.assertNotIn("Estado:", out)
+        self.assertNotIn("Copiado", out)
+        self.assertNotIn("Respaldado", out)
+        self.assertNotIn("no se pudo leer o no es valido", err)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertFalse(os.path.exists(backup))
+
+    def test_f4t4_changing_the_alias_leaves_one_orphan_per_old_dest(self):
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        prev_state = read(self.target, self.STATE)
+        tester_before = snapshot(self.target)["agents\\tester.md" if os.name == "nt" else "agents/tester.md"]
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_DEV})
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_DEV], "NUEVO")
+        self.assertEqual(st[self.F4T4_TESTER], "HUERFANO")
+        self.assertEqual(sorted(k for k, v in st.items() if v == "HUERFANO"), [self.F4T4_TESTER])
+        self.assertEqual(read(self.target, self.F4T4_DEV), SAMPLE[self.F4T4_ALFA])
+        self.f4t4_role_path_absent()
+        after = snapshot(self.target)["agents\\tester.md" if os.name == "nt" else "agents/tester.md"]
+        self.assertEqual(after, tester_before)
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), None, 5, {self.F4T4_ALFA: self.F4T4_DEV}))
+        self.assertEqual(self.f4_tree(backup), {self.STATE: prev_state})
+
+    def test_f4t4_swapping_two_dests_classifies_each_path_against_its_own_state_entry(self):
+        # alfa: tester a dev; beta: dev a tester. Cada ruta de destino lleva los bytes del OTRO rol: intactas segun
+        # prevByDest (ruta a written), asi que son ACTUALIZAR (no MODIFICADO) y los dos viejos van al respaldo.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER, self.F4T4_BETA: self.F4T4_DEV})
+        self.install_ok()
+        self.assertNotEqual(SAMPLE[self.F4T4_ALFA], SAMPLE[self.F4T4_BETA])
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_DEV, self.F4T4_BETA: self.F4T4_TESTER})
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_DEV], "ACTUALIZAR")
+        self.assertEqual(st[self.F4T4_TESTER], "ACTUALIZAR")
+        self.assertEqual(sorted(k for k, v in st.items() if v == "HUERFANO"), [])
+        self.assertEqual(read(self.target, self.F4T4_DEV), SAMPLE[self.F4T4_ALFA])
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_BETA])
+        self.assertEqual(read(backup, self.F4T4_DEV), SAMPLE[self.F4T4_BETA])
+        self.assertEqual(read(backup, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+
+    def test_f4t4_removing_the_alias_orphans_the_alias_file_and_goes_back_to_schema2(self):
+        # Primero sin alias, luego con alias (el archivo del rol queda), luego sin alias otra vez: el del rol sale IGUAL
+        # (sus bytes son los que se escribirian), el del alias HUERFANO, y el estado vuelve a esquema 2.
+        self.f4t4_prepare()
+        self.f4t4_set({})
+        self.install_ok()
+        self.assert_state(5)
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_TESTER})
+        self.install_ok()
+        self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+        self.f4t4_set({})
+        out, err = self.install_ok()
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_ALFA], "IGUAL")
+        self.assertEqual(st[self.F4T4_TESTER], "HUERFANO")
+        self.assertEqual(read(self.target, self.F4T4_TESTER), SAMPLE[self.F4T4_ALFA])
+        self.assert_state(5)
+        self.assertNotIn(b'"dest"', read(self.target, self.STATE))
+        # sin el archivo viejo del rol en disco: NUEVO
+        os.remove(os.path.join(self.target, "agents", "alfa.md"))
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_DEV})
+        self.install_ok()
+        os.remove(os.path.join(self.target, "agents", "tester.md"))
+        self.f4t4_set({})
+        out, err = self.install_ok()
+        st = self.states(out)
+        self.assertEqual(st[self.F4T4_ALFA], "NUEVO")
+        self.assertEqual(st[self.F4T4_DEV], "HUERFANO")
+        self.assert_state(5)
+
+    def test_f4t4_identity_keeps_schema2_without_dest(self):
+        # Con la identidad (tambien dicha de forma explicita) el estado es el esquema 2 de siempre.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_ALFA, "hooks/agent_guard.py": "hooks/agent_guard.py"})
+        self.install_ok()
+        self.assert_state(5)
+        self.assertNotIn(b'"dest"', read(self.target, self.STATE))
+        self.assertIn(b'"schema": 2', read(self.target, self.STATE))
+
+    def test_f4t4_level_cell_is_looked_up_by_role_not_by_dest_path(self):
+        # Con un destRel no identidad, la celda de la tabla de niveles sigue buscandose por ROL: el archivo trae el
+        # model: y el effort: del rol y la linea Ajuste: lleva la ruta de destino.
+        mapping = {"agents/atlas.md": "agents/dev.md", "agents/scribe.md": "agents/qa.md"}
+        self.f4t4_prepare(LEVEL_SAMPLE)
+        self.f4t4_set(mapping)
+        write(self.target, self.CONFIG, b'{"level": 3}')
+        out, err = self.install_ok()
+        expected = level_expected(LEVEL_SAMPLE, 3)
+        self.assertNotEqual(expected["agents/atlas.md"], LEVEL_SAMPLE["agents/atlas.md"])
+        self.assertEqual(read(self.target, "agents/dev.md"), expected["agents/atlas.md"])
+        self.assertEqual(read(self.target, "agents/qa.md"), expected["agents/scribe.md"])
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "atlas.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "scribe.md")))
+        table = lr.read_script_table()
+        for role, dest in (("atlas", "dev"), ("scribe", "qa")):
+            model, effort = table[(3, role)]
+            self.assertIn("Ajuste: agents/%s.md  model: %s  effort: %s" % (dest, model, effort), out.splitlines())
+            self.assertNotIn("Ajuste: agents/%s.md" % role, out)
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), level_hashes(LEVEL_SAMPLE, 3), 3, mapping))
+        # reinstalar igual: todo IGUAL
+        out, err = self.install_ok()
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+
+    def test_f4t4_level_change_with_an_alias_updates_the_dest_file(self):
+        mapping = {"agents/atlas.md": "agents/dev.md"}
+        self.f4t4_prepare(LEVEL_SAMPLE)
+        self.f4t4_set(mapping)
+        write(self.target, self.CONFIG, b'{"level": 3}')
+        self.install_ok()
+        e3 = level_expected(LEVEL_SAMPLE, 3)["agents/atlas.md"]
+        e4 = level_expected(LEVEL_SAMPLE, 4)["agents/atlas.md"]
+        self.assertNotEqual(e3, e4)
+        write(self.target, self.CONFIG, b'{"level": 4}')
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        self.assertEqual(self.states(out)["agents/dev.md"], "ACTUALIZAR")
+        self.assertIn("Nivel anterior: 3", out)
+        self.assertEqual(read(self.target, "agents/dev.md"), e4)
+        self.assertEqual(read(backup, "agents/dev.md"), e3)
+        self.assertEqual(read(self.target, self.STATE),
+                         ar.state_for3(self.f4t4_manifest(), level_hashes(LEVEL_SAMPLE, 4), 4, mapping))
+
+    def test_f4t4_dest_of_75_chars_is_rejected_before_writing_in_both_modes(self):
+        # Tope en el limite: agents/ + 64 + .md = 74 vale; 75 es demasiado larga.
+        long75 = "agents/" + "a" * 65 + ".md"
+        self.assertEqual(len(long75), 75)
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: long75})
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode)
+            self.assertEqual(code, 1, out + err)
+            self.assertIn("error: la ruta de destino de ", err)
+            self.assertIn("es demasiado larga", err)
+            self.assertIn("No se escribio nada", err)
+            self.assertNotIn(long75, out + err)
+            self.assertFalse(os.path.exists(self.target))
+            self.assertNotIn("Copiado", out)
+        self.assert_nothing_written_outside_target_and_backup()
+
+    def test_f4t4_dest_of_exactly_74_chars_is_accepted(self):
+        ok74 = "agents/" + "a" * 64 + ".md"
+        self.assertEqual(len(ok74), 74)
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: ok74})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertFalse(os.path.exists(self.target))
+        out, err = self.install_ok()
+        self.assertEqual(read(self.target, ok74), SAMPLE[self.F4T4_ALFA])
+        self.f4t4_role_path_absent()
+
+    def test_f4t4_dest_equal_to_a_manifest_path_without_repeats_is_rejected_by_manifest_check(self):
+        # Sin repetidos (alfa -> beta.md, beta -> dev.md): sólo la comprobacion contra el manifiesto puede rechazarlo.
+        self.f4t4_prepare()
+        self.f4t4_set({self.F4T4_ALFA: self.F4T4_BETA, self.F4T4_BETA: self.F4T4_DEV})
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode)
+            self.assertEqual(code, 1, out + err)
+            self.assertIn("error: la ruta de destino de ", err)
+            self.assertIn("coincide con un archivo del manifiesto", err)
+            self.assertNotIn("repite", err)
+            self.assertIn("No se escribio nada", err)
+            self.assertFalse(os.path.exists(self.target))
+            self.assertNotIn("Copiado", out)
+        self.assert_nothing_written_outside_target_and_backup()
+
+    def test_f4t4_invalid_dest_table_is_exit1_before_writing_in_both_modes(self):
+        # Defensa en profundidad: ninguna ruta de destino que no cumpla las reglas del estado (D1 a D7) llega a un
+        # destino de escritura, venga de donde venga. El mensaje nombra el rol y nunca la ruta.
+        alfa, beta = self.F4T4_ALFA, self.F4T4_BETA
+        cases = {
+            "con ..": {alfa: "agents/../x.md"},
+            "mayusculas": {alfa: "agents/Tester.md"},
+            "reservado de Windows": {alfa: "agents/con.md"},
+            "barra inicial": {alfa: "/agents/x.md"},
+            "dos puntos": {alfa: "agents/x:y.md"},
+            "sale de agents/": {alfa: "rules/agentes.md"},
+            "ruta de otro archivo del manifiesto": {alfa: "agents/beta.md"},
+            "archivo fijo cambiado": {"hooks/agent_guard.py": "agents/x.md"},
+            "demasiado larga": {alfa: "agents/" + "a" * 72 + ".md"},
+            "repetida": {alfa: "agents/x.md", beta: "agents/x.md"},
+        }
+        for name, mapping in cases.items():
+            with self.subTest(case=name):
+                shutil.rmtree(self.src, ignore_errors=True)
+                os.makedirs(self.src)
+                shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+                self.f4t4_prepare()
+                self.f4t4_set(mapping)
+                shutil.rmtree(self.target, ignore_errors=True)
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 1, out + err)
+                    self.assertIn("error: la ruta de destino de ", err)
+                    self.assertIn("No se escribio nada", err)
+                    for bad in mapping.values():
+                        self.assertNotIn(bad, out + err)
+                    self.assertFalse(os.path.exists(self.target))
+                    self.assertNotIn("Copiado", out)
+                self.assert_nothing_written_outside_target_and_backup()
+
+    # --- Fase 4, T5: transformacion de textos y activacion de los alias (casos 32 a 40 y 56 del plan) ---
+
+    F4T5_MSG = "error: no se pueden aplicar los alias a "
+
+    def f4t5_source(self, files=None, crlf=False):
+        files = ALIAS_SAMPLE if files is None else files
+        self.make_source(files, crlf=crlf)
+        return files
+
+    def f4t5_config(self, aliases, level=None):
+        return self.write_config(self.alias_config(aliases, level=level))
+
+    def assert_alias_installed(self, files, level, aliases):
+        """Cada archivo del destino es, byte a byte, el de la referencia; ningun agents/<rol>.md con alias queda; el
+        estado es el de la referencia (esquema 3 si algun destino difiere del rol, si no el esquema 2)."""
+        expected = alias_expected(files, aliases, level)
+        hashes, dests = {}, {}
+        for rel, (dest, data) in expected.items():
+            self.assertEqual(read(self.target, dest), data, rel)
+            hashes[rel] = bm.canonical_sha256(data)
+            dests[rel] = dest
+            if dest != rel:
+                self.assertFalse(os.path.exists(os.path.join(self.target, *rel.split("/"))), rel)
+        manifest = read(self.src, "install-manifest.json")
+        if any(d != r for r, d in dests.items()):
+            want = ar.state_for3(manifest, hashes, level, dests)
+        else:
+            want = lr.state_for(manifest, hashes, level)
+        self.assertEqual(read(self.target, self.STATE), want)
+
+    def test_f4t5_case32_clean_install_with_one_alias_matches_the_reference(self):
+        files = self.f4t5_source()
+        self.f4t5_config(ALIAS_ONE)
+        out, err = self.install_ok()
+        # el unico aviso es el de siempre de un -Target distinto de ~/.claude
+        self.assertEqual(err.strip().count("aviso:"), 1, err)
+        self.assertNotIn("error", err)
+        self.assert_alias_installed(files, 5, ALIAS_ONE)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "sentinel.md")))
+        self.assertIn(b"\nname: amigo-qa\n", read(self.target, "agents/amigo-qa.md"))
+        self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+        self.assertIn(b'"dest": "agents/amigo-qa.md"', read(self.target, self.STATE))
+        self.assertIn("Alias: sentinel -> amigo-qa (agents/amigo-qa.md)", out.splitlines())
+        copied = self.f4t4_copied(out)
+        self.assertEqual(copied[0], "hooks/agent_guard.py")
+        self.assertIn("agents/amigo-qa.md", copied)
+        self.assertNotIn("agents/sentinel.md", copied)
+        self.assertEqual(self.states(out)["agents/amigo-qa.md"], "NUEVO")
+        self.assertNotIn("agents/sentinel.md", self.states(out))
+        self.assertEqual(self.leftover_temps(), [])
+
+    def test_f4t5_case32_four_aliases_dryrun_and_idempotence(self):
+        files = self.f4t5_source()
+        self.f4t5_config(ALIAS_FOUR)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")],
+                         ["Alias: atlas -> mapa (agents/mapa.md)", "Alias: forge -> dev (agents/dev.md)",
+                          "Alias: scribe -> redactor (agents/redactor.md)",
+                          "Alias: sentinel -> amigo-qa (agents/amigo-qa.md)"])
+        st = self.states(out)
+        for dest in ("agents/mapa.md", "agents/dev.md", "agents/redactor.md", "agents/amigo-qa.md"):
+            self.assertEqual(st[dest], "NUEVO")
+        for role in ("atlas", "forge", "scribe", "sentinel"):
+            self.assertNotIn("agents/%s.md" % role, st)
+        self.assertEqual(os.listdir(self.target), [self.CONFIG])
+        self.install_ok()
+        self.assert_alias_installed(files, 5, ALIAS_FOUR)
+        # segunda corrida: todo IGUAL, estado intacto
+        state_before = snapshot(self.target)[self.STATE]
+        out, err = self.install_ok()
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertEqual(snapshot(self.target)[self.STATE], state_before)
+
+    def test_f4t5_case32_an_alias_for_a_role_outside_the_manifest_only_changes_the_texts(self):
+        # Alias para un rol sin archivo en el manifiesto: se aplica a los textos y no hay archivo que renombrar.
+        files = {k: v for k, v in ALIAS_SAMPLE.items() if k != "agents/sentinel.md"}
+        self.f4t5_source(files)
+        self.f4t5_config(ALIAS_ONE)
+        self.install_ok()
+        self.assert_alias_installed(files, 5, ALIAS_ONE)
+        self.assertNotIn("agents/amigo-qa.md", self.f4_tree(self.target))
+        self.assertIn(b"AMIGO-QA", read(self.target, "docs/agentes.md"))
+
+    def test_f4t5_case33_only_name_description_and_body_change_and_hooks_is_untouched(self):
+        files = self.f4t5_source()
+        self.f4t5_config(ALIAS_FOUR)
+        self.install_ok()
+        for role in ("atlas", "forge", "scribe", "sentinel"):
+            src = files["agents/%s.md" % role].decode("utf-8").split("\n")
+            dst = read(self.target, "agents/%s.md" % ALIAS_FOUR[role])
+            self.assertNotIn(b"\r", dst)
+            self.assertTrue(dst.endswith(b"\n"))
+            out = dst.decode("utf-8").split("\n")
+            self.assertEqual(len(out), len(src))
+            close = src.index("---", 1)
+            self.assertEqual(out.index("---", 1), close)
+            for i, (a, b) in enumerate(zip(src, out)):
+                if a != b:
+                    self.assertTrue(i > close or a.startswith(("name:", "description:")), (role, i, a, b))
+            self.assertEqual(out[1:close].count("name: " + ALIAS_FOUR[role]), 1)
+        # el bloque hooks: de sentinel, byte a byte (con el model: de dentro incluido)
+        src = files["agents/sentinel.md"]
+        dst = read(self.target, "agents/amigo-qa.md")
+        block = ("\n".join(SENTINEL_HOOKS) + "\n").encode("ascii")
+        self.assertIn(block, src)
+        self.assertIn(block, dst)
+        # las lineas de tools:, model: y color: del frontmatter, intactas
+        for role in ("atlas", "forge", "scribe", "sentinel"):
+            dst = read(self.target, "agents/%s.md" % ALIAS_FOUR[role])
+            for line in (b"tools: Read, Grep\n", b"model: sonnet\n", b"color: blue\n"):
+                self.assertIn(line, dst)
+
+    def test_f4t5_case34_four_forms_and_word_boundary_in_literal_text(self):
+        # Los bytes se comparan con la referencia y ademas con cadenas literales (no solo con la referencia).
+        files = self.f4t5_source()
+        table = {"forge": "dev", "scribe": "redactor"}
+        self.f4t5_config(table)
+        self.install_ok()
+        self.assert_alias_installed(files, 5, table)
+        rules = read(self.target, "rules/agentes.md").decode("utf-8")
+        for needle in ("`dev`", "Dev (Sonnet): corregir", "| DEV | implementar |", "@agent-dev", "@agent-redactor",
+                       "agents/dev.md", "`redactor`", "| REDACTOR | docs |"):
+            self.assertIn(needle, rules)
+        left = rules.replace("Sentinelé, ñforge, éSCRIBE y SCRIBEÁ", "")
+        for needle in ("forge", "Forge", "FORGE", "agents/forge.md", "`scribe`", "SCRIBE |", "@agent-scribe"):
+            self.assertNotIn(needle, left)
+        # con scribe aliado, las palabras que lo contienen no se tocan
+        redactor = read(self.target, "agents/redactor.md").decode("utf-8")
+        self.assertIn("Quien escribe, describe, reescribe o sobrescribe; escriben. Describe. redactor.", redactor)
+        self.assertIn("Sobrescribe y reescribe: igual.", rules)
+        for broken in ("esredactor", "deredactor", "redactorn", "reredactor", "sobreredactor"):
+            self.assertNotIn(broken, rules + redactor)
+        # el agente forge: ruta de destino, forma Capitalizada y MAYUSCULAS
+        body = read(self.target, "agents/dev.md").decode("utf-8")
+        self.assertIn("Usa `dev`, Dev (Sonnet): tarea, @agent-dev, agents/dev.md y ~/.claude/agents/dev.md.", body)
+        self.assertIn("Eres DEV.", body)
+
+    def test_f4t5_case35_cross_references_and_files_that_name_no_aliased_role(self):
+        files = self.f4t5_source()
+        self.f4t5_config({"scribe": "redactor"})
+        self.install_ok()
+        self.assert_alias_installed(files, 5, {"scribe": "redactor"})
+        # atlas, forge y sentinel no nombran a scribe: bytes del origen; name: intacto
+        for role in ("atlas", "forge", "sentinel"):
+            self.assertEqual(read(self.target, "agents/%s.md" % role), files["agents/%s.md" % role], role)
+        self.assertIn(b"\nname: redactor\n", read(self.target, "agents/redactor.md"))
+        # referencia cruzada: forge sin alias propio, atlas con alias
+        shutil.rmtree(self.target)
+        self.f4t5_config({"atlas": "mapa"})
+        self.install_ok()
+        self.assert_alias_installed(files, 5, {"atlas": "mapa"})
+        forge = read(self.target, "agents/forge.md").decode("utf-8")
+        self.assertIn("\nname: forge\n", forge)
+        self.assertIn("description: Implements one unit of the MAPA plan.\n", forge)
+        self.assertIn("Eres FORGE.", forge)
+        self.assertEqual(read(self.target, "agents/scribe.md"), files["agents/scribe.md"])
+        # un archivo que no nombra ningun rol con alias sale IGUAL en la segunda corrida
+        out, err = self.install_ok()
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+
+    def f4t5_defects(self):
+        """Variantes defectuosas de agents/forge.md (con alias en forge y sentinel)."""
+        text = ALIAS_SAMPLE["agents/forge.md"].decode("utf-8")
+        return {
+            "sin name": text.replace("name: forge\n", ""),
+            "name duplicado": text.replace("name: forge\n", "name: forge\nname: forge\n"),
+            "name con otro valor": text.replace("name: forge\n", "name: otro\n"),
+            "description multilinea": text.replace("description: Implements one unit of the ATLAS plan.\n",
+                                                   "description: Implements one unit\n  of the ATLAS plan.\n"),
+            "sin description": text.replace("description: Implements one unit of the ATLAS plan.\n", ""),
+            "description duplicada": text.replace("tools:", "description: otra\ntools:"),
+            "rol en tools": text.replace("tools: Read, Grep", "tools: Agent(sentinel), Read"),
+            "rol en hooks": text.replace("tools: Read, Grep", "tools: Read\nhooks:\n  x: sentinel"),
+            "sin cierre": text.replace("color: blue\n---\n", "color: blue\n"),
+            "continuacion tras name": text.replace("name: forge\n", "name: forge\n  extra\n"),
+            "color con CR oculto": text.replace("color: blue\n", "color: orange\rhooks: x\n"),
+            "tools fuera de ASCII": text.replace("tools: Read, Grep", "tools: Read, Grép"),
+        }
+
+    def test_f4t5_case36_defective_frontmatter_exit1_in_both_modes_and_nothing_is_written(self):
+        table = {"forge": "dev", "sentinel": "amigo-qa"}
+        for label, text in self.f4t5_defects().items():
+            with self.subTest(defect=label):
+                files = dict(ALIAS_SAMPLE)
+                files["agents/forge.md"] = text.encode("utf-8")
+                self.assertIsNotNone(self.alias_transform_error(files, table), label)
+                self.f4t5_source(files)
+                self.f4t5_config(table)
+                before = snapshot(self.target)
+                listing = sorted(os.listdir(self.tmp))
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assert_quiet_failure(code, out, err, before, listing)
+                    self.assertTrue(err.startswith(self.F4T5_MSG + "agents/forge.md: "), err)
+                    self.assertTrue(err.strip().endswith(". No se escribio nada."), err)
+                    self.assertNotIn("amigo-qa", err)
+                    if label in ("rol en tools", "rol en hooks"):
+                        self.assertIn("referencia a un rol en una linea del frontmatter", err)
+                shutil.rmtree(self.target)
+
+    def test_f4t5_case36_a_defect_in_a_file_without_its_own_alias_also_stops(self):
+        # Con tabla efectiva no vacia los nueve agentes pasan por la transformacion: un defecto en uno sin alias propio
+        # tambien detiene la instalacion (el mensaje nombra su ruta).
+        files = dict(ALIAS_SAMPLE)
+        files["agents/atlas.md"] = files["agents/atlas.md"].replace(b"name: atlas\n", b"")
+        self.f4t5_source(files)
+        self.f4t5_config(ALIAS_ONE)
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode)
+            self.assertEqual(code, 1, out + err)
+            self.assertTrue(err.startswith(self.F4T5_MSG + "agents/atlas.md: "), err)
+            self.assertEqual(os.listdir(self.target), [self.CONFIG])
+
+    def test_f4t5_case36_agent_without_body_and_without_final_lf_installs_with_aliases(self):
+        # Archivo que termina en el cierre --- sin LF final: no hay lineas tras el cierre, el cuerpo no se transforma.
+        files = dict(ALIAS_SAMPLE)
+        files["agents/atlas.md"] = b"---\nname: atlas\ndescription: Plans.\nmodel: opus\n---"
+        self.assertIsNone(self.alias_transform_error(files, ALIAS_ONE))
+        self.f4t5_source(files)
+        self.f4t5_config(ALIAS_ONE)
+        for mode in (["-DryRun"], []):
+            code, out, err = self.run_install(*mode)
+            self.assertEqual(code, 0, out + err)
+        self.assert_alias_installed(files, 5, ALIAS_ONE)
+        self.assertEqual(read(self.target, "agents/atlas.md"), files["agents/atlas.md"])
+
+    def test_f4t5_case36_the_two_texts_have_no_frontmatter_rules(self):
+        # rules/agentes.md y docs/agentes.md no tienen frontmatter: cualquier texto vale.
+        files = dict(ALIAS_SAMPLE)
+        files["rules/agentes.md"] = b"sin encabezado, forge y SENTINEL\n"
+        self.f4t5_source(files)
+        self.f4t5_config(ALIAS_ONE)
+        self.install_ok()
+        self.assert_alias_installed(files, 5, ALIAS_ONE)
+
+    def test_f4t5_case37_a_defect_only_matters_with_aliases(self):
+        for label, text in self.f4t5_defects().items():
+            with self.subTest(defect=label):
+                files = dict(ALIAS_SAMPLE)
+                files["agents/forge.md"] = text.encode("utf-8")
+                for cfg in (None, b"{}", b'{"aliases": {}}', b'{"aliases": {"forge": "forge", "sentinel": "sentinel"}}'):
+                    self.f4t5_source(files)
+                    if cfg is not None:
+                        self.write_config(cfg)
+                    out, err = self.install_ok()
+                    self.assertNotIn("error", err)
+                    self.assertNotIn("autocomprobacion", err)
+                    for rel, data in files.items():
+                        self.assertEqual(read(self.target, rel), data, rel)
+                    self.assertNotIn("Alias:", out)
+                    shutil.rmtree(self.target)
+
+    def test_f4t5_case38_the_transformation_only_runs_with_a_non_empty_effective_table(self):
+        marker = "[Console]::Out.WriteLine('ALIAS-LLAMADO ' + $Kind + ' ' + $Role)"
+        self.f4t5_source()
+        self.patch_script("function ConvertTo-AliasBytes", marker)
+        for config, calls in ((None, 0), (b'{"level": 5}', 0), (b"{}", 0), (b'{"aliases": {}}', 0),
+                              (b'{"aliases": {"forge": "forge"}}', 0), (b'{"level": 3, "aliases": {}}', 0),
+                              (self.alias_config(ALIAS_ONE), 6), (self.alias_config(ALIAS_FOUR, level=3), 6)):
+            with self.subTest(config=config):
+                shutil.rmtree(self.target, ignore_errors=True)
+                if config is not None:
+                    self.write_config(config)
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 0, out + err)
+                    called = [l for l in out.splitlines() if l.startswith("ALIAS-LLAMADO")]
+                    self.assertEqual(len(called), calls)
+                    if calls:
+                        self.assertEqual(sorted(l.split()[1] for l in called), ["agent"] * 4 + ["text"] * 2)
+
+    def test_f4t5_case39_self_check_catches_a_corrupted_result_in_both_modes(self):
+        # $aliasResult se estropea justo despues de construirlo: la autocomprobacion detiene la instalacion con exit 1
+        # y sin escribir nada. Cada variante toca algo distinto (cuerpo, name:, hooks:, numero de lineas, residuo...).
+        variants = {
+            "ultimo caracter": "$aliasResult[$aliasResult.Length - 2] = 88",
+            "name": "$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('name: amigo-qa', 'name: amigo-qb'))",
+            "hooks": "$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('hooks:', 'hookz:'))",
+            "lineas": "$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('Eres', 'x' + [char]10 + 'Eres'))",
+            "residuo": "$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('AMIGO-QA', 'SENTINEL'))",
+            "description": "$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('description: Runs', 'description:' + [char]10 + '  Runs'))",
+        }
+        for label, code_line in variants.items():
+            with self.subTest(variant=label):
+                self.f4t5_source()
+                self.patch_script("$aliasResult = $latin1.GetBytes(", code_line)
+                self.f4t5_config(ALIAS_ONE)
+                before = snapshot(self.target)
+                listing = sorted(os.listdir(self.tmp))
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assert_quiet_failure(code, out, err, before, listing)
+                    self.assertIn("autocomprobacion", err)
+                    self.assertTrue(err.startswith(self.F4T5_MSG), err)
+                    self.assertTrue(err.strip().endswith(". No se escribio nada."), err)
+                shutil.rmtree(self.target)
+                shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+
+    def test_f4t5_case39_self_check_also_covers_the_two_texts(self):
+        # Solo archivos de texto (sin frontmatter): el recorrido en paralelo los pilla igual.
+        files = {k: v for k, v in ALIAS_SAMPLE.items() if k.startswith(("rules", "docs", "hooks"))}
+        self.f4t5_source(files)
+        self.patch_script("$aliasResult = $latin1.GetBytes(", "$aliasResult[$aliasResult.Length - 2] = 88")
+        self.f4t5_config(ALIAS_ONE)
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        code, out, err = self.run_install("-DryRun")
+        self.assert_quiet_failure(code, out, err, before, listing)
+        self.assertIn("autocomprobacion", err)
+        self.assertTrue(err.startswith(self.F4T5_MSG), err)
+
+    def test_f4t5_case40_crlf_and_high_bytes_give_the_same_result_as_lf(self):
+        results = {}
+        for crlf in (False, True):
+            shutil.rmtree(self.target, ignore_errors=True)
+            files = self.f4t5_source(crlf=crlf)
+            self.f4t5_config(ALIAS_FOUR)
+            self.install_ok()
+            results[crlf] = self.f4_tree(self.target)
+            self.assert_alias_installed(files, 5, ALIAS_FOUR)
+        self.assertEqual(results[False], results[True])
+        for rel, data in results[True].items():
+            self.assertNotIn(b"\r", data, rel)
+            data.decode("utf-8")
+        # los bytes altos se conservan: la comilla angular y la letra acentuada siguen en su sitio
+        rules = results[True]["rules/agentes.md"]
+        self.assertIn("«AMIGO-QA sólo escribe tests»".encode("utf-8"), rules)
+        self.assertEqual(rules.count("é".encode("utf-8")), ALIAS_SAMPLE["rules/agentes.md"].count("é".encode("utf-8")))
+
+    def test_f4t5_case56_boundary_with_high_bytes_in_the_installer(self):
+        files = self.f4t5_source()
+        self.f4t5_config(ALIAS_ONE)
+        self.install_ok()
+        self.assert_alias_installed(files, 5, ALIAS_ONE)
+        for rel in ("rules/agentes.md", "docs/agentes.md", "agents/amigo-qa.md"):
+            text = read(self.target, rel).decode("utf-8")
+            self.assertIn("«AMIGO-QA sólo escribe tests»", text, rel)
+            self.assertNotIn("«SENTINEL", text, rel)
+        for rel in ("rules/agentes.md", "agents/amigo-qa.md"):
+            text = read(self.target, rel).decode("utf-8")
+            # pegado a una letra acentuada no se reemplaza (antes y despues)
+            self.assertIn("Sentinelé", text, rel)
+            self.assertIn("ñforge", text, rel)
+        self.assertIn("éSCRIBE y SCRIBEÁ", read(self.target, "rules/agentes.md").decode("utf-8"))
+        # tras la apertura de interrogacion y entre raya y espacio, si se reemplaza
+        shutil.rmtree(self.target)
+        self.f4t5_config({"scribe": "redactor", "forge": "dev"})
+        self.install_ok()
+        rules = read(self.target, "rules/agentes.md").decode("utf-8")
+        self.assertIn("¿redactor escribe o describe?", rules)
+        docs = read(self.target, "docs/agentes.md").decode("utf-8")
+        self.assertIn("«DEV, REDACTOR y ATLAS… dev — sentinel.", docs)
+        # con forge y scribe aliados, pegados a una letra acentuada (antes y despues) siguen intactos
+        self.assertIn("Sentinelé, ñforge, éSCRIBE y SCRIBEÁ no cambian.", rules)
+        for broken in ("ñdev", "éREDACTOR", "REDACTORÁ"):
+            self.assertNotIn(broken, rules)
+
+    def test_f4t5_the_hook_and_other_files_are_never_transformed(self):
+        files = self.f4t5_source()
+        self.f4t5_config(ALIAS_FOUR)
+        self.install_ok()
+        self.assertEqual(read(self.target, "hooks/agent_guard.py"), files["hooks/agent_guard.py"])
+        self.assertEqual(read(self.target, "agents/alfa.md"), files["agents/alfa.md"])
+        state = json.loads(read(self.target, self.STATE))
+        by_path = {f["path"]: f for f in state["files"]}
+        self.assertEqual(by_path["hooks/agent_guard.py"]["written"], by_path["hooks/agent_guard.py"]["sha256"])
+        self.assertEqual(by_path["agents/alfa.md"]["written"], by_path["agents/alfa.md"]["sha256"])
+        self.assertEqual(by_path["hooks/agent_guard.py"]["dest"], "hooks/agent_guard.py")
+        self.assertNotEqual(by_path["docs/agentes.md"]["written"], by_path["docs/agentes.md"]["sha256"])
+        # ningun archivo nuevo fuera de los diez esperados
+        self.assertEqual(sorted(self.f4_tree(self.target)), sorted(
+            ["agents/mapa.md", "agents/dev.md", "agents/redactor.md", "agents/amigo-qa.md", "agents/alfa.md",
+             "rules/agentes.md", "docs/agentes.md", "hooks/agent_guard.py", self.STATE, self.CONFIG]))
+
+    def test_f4t5_alias_and_level_use_the_cell_of_the_role_not_the_destination(self):
+        files = self.f4t5_source()
+        table = {"atlas": "mapa", "sentinel": "amigo-qa"}
+        self.f4t5_config(table, level=3)
+        out, err = self.install_ok()
+        self.assert_alias_installed(files, 3, table)
+        mapa = read(self.target, "agents/mapa.md").decode("utf-8")
+        self.assertIn("\nmodel: opus\n", mapa)
+        self.assertIn("\neffort: medium\n", mapa)
+        self.assertIn("\nname: mapa\n", mapa)
+        lines = out.splitlines()
+        self.assertIn("Ajuste: agents/mapa.md  model: opus  effort: medium", lines)
+        self.assertIn("Ajuste: agents/amigo-qa.md  model: sonnet  effort: -", lines)
+        self.assertEqual(len([l for l in lines if l.startswith("Ajuste:")]), 4)
+        # el hooks: de sentinel sigue intacto con nivel y alias
+        self.assertIn(("\n".join(SENTINEL_HOOKS) + "\n").encode("ascii"), read(self.target, "agents/amigo-qa.md"))
+
+    # --- Fase 4, T6: alias con niveles, repositorio real y -DryRun (casos 41 a 46 del plan) ---
+
+    F4T6_MODELS = {"atlas": "claude-fable-5-2", "forge": "sonnet", "sentinel": "sonnet", "scribe": "sonnet",
+                   "scout": "sonnet", "oracle": "haiku", "auditor": "opus", "shield": "opus", "debugger": "opus"}
+    F4T6_HOOKED = ("sentinel", "auditor", "shield", "debugger")
+    F4T6_SCRIBE_WORDS = re.compile("escribe|escriben|describe|reescribe|sobrescribe", re.I)
+
+    def f4t6_nine_sample(self):
+        """Los nueve agentes (frontmatter de una linea por clave, los cuatro con guarda con su bloque hooks:, cuerpo con
+        referencias cruzadas a otros roles), las reglas, la guia y el hook, como los de ALIAS_SAMPLE."""
+        files = {}
+        for role, model in self.F4T6_MODELS.items():
+            lines = ["---", "name: " + role, "description: Rol " + role.upper() + " que avisa a FORGE y a SHIELD.",
+                     "tools: Read, Grep", "model: " + model]
+            if role in self.F4T6_HOOKED:
+                lines += SENTINEL_HOOKS
+            lines += ["color: blue", "---",
+                      "Eres " + role.upper() + ". Habla con `forge`, Sentinel y @agent-atlas; «" + role.upper() +
+                      " sólo escribe tests». scribe describe y escribe.\n"]
+            files["agents/%s.md" % role] = "\n".join(lines).encode("utf-8")
+        for rel in ("rules/agentes.md", "docs/agentes.md", "hooks/agent_guard.py"):
+            files[rel] = ALIAS_SAMPLE[rel]
+        return files
+
+    def f4t6_cell(self, level, role):
+        return lr.read_script_table()[(level, role)]
+
+    def f4t6_prepare(self, files, table, level):
+        """Origen nuevo con `files`, destino vacio y la configuracion de `table` y `level`."""
+        self.f4t5_source(files)
+        shutil.rmtree(self.target, ignore_errors=True)
+        self.f4t5_config(table, level=level)
+
+    def test_f4t6_case41_alias_and_level_together_levels_1_to_4(self):
+        files = self.f4t6_nine_sample()
+        table = dict(self.ALIAS_NINE)
+        level_agents = lr.read_ps_list("LevelAgents")
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                self.f4t6_prepare(files, table, level)
+                out, err = self.install_ok()
+                self.assert_alias_installed(files, level, table)
+                lines = out.splitlines()
+                for role in ar.roles():
+                    dest = "agents/%s.md" % table[role]
+                    data = read(self.target, dest)
+                    self.assertFalse(os.path.exists(os.path.join(self.target, "agents", role + ".md")), role)
+                    text = data.decode("utf-8")
+                    front = text.split("\n---\n")[0]
+                    if role in level_agents:
+                        # la celda es la del ROL, no la del alias: model: y effort: del frontmatter, una vez cada uno
+                        model, effort = self.f4t6_cell(level, role)
+                        self.assertEqual(front.count("\nmodel: %s\n" % model), 1, (level, role))
+                        if effort != "-":
+                            self.assertEqual(front.count("\neffort: %s\n" % effort), 1, (level, role))
+                        else:
+                            self.assertNotIn("\neffort:", front)
+                        self.assertIn("Ajuste: %s  model: %s  effort: %s" % (dest, model, effort), lines)
+                    else:
+                        # auditor, shield y debugger: modelo y hooks: del origen con cualquier alias
+                        self.assertNotIn("Ajuste: " + dest, "\n".join(lines))
+                        self.assertIn("\nmodel: %s\n" % self.F4T6_MODELS[role], text)
+                        self.assertNotIn("\neffort:", front)
+                    if role in self.F4T6_HOOKED:
+                        self.assertIn(("\n".join(SENTINEL_HOOKS) + "\n").encode("ascii"), data, role)
+                    self.assertIn("\nname: %s\n" % table[role], text)
+                ajustes = [l for l in lines if l.startswith("Ajuste:")]
+                self.assertEqual(len(ajustes), len(level_agents))
+                for role in ar.roles():
+                    self.assertFalse([l for l in ajustes if l.startswith("Ajuste: agents/%s.md " % role)], role)
+                self.assertIn("Verificado: 12 archivo(s) escritos coinciden con lo esperado para el nivel %d y los alias."
+                              % level, lines)
+                self.assertEqual(read(self.target, "hooks/agent_guard.py"), files["hooks/agent_guard.py"])
+
+    def test_f4t6_case41_alias_then_level_equals_level_then_alias(self):
+        # Los dos ordenes de la referencia dan los mismos bytes, y son los que escribe el instalador.
+        files = self.f4t6_nine_sample()
+        table = dict(self.ALIAS_NINE)
+        for level in (1, 4):
+            with self.subTest(level=level):
+                self.f4t6_prepare(files, table, level)
+                self.install_ok()
+                for role in lr.read_ps_list("LevelAgents"):
+                    model, effort = self.f4t6_cell(level, role)
+                    other = ar.transform_agent(lr.render_expected(files["agents/%s.md" % role], model, effort), role, table)
+                    self.assertEqual(read(self.target, "agents/%s.md" % table[role]), other, (level, role))
+                    self.assertEqual(alias_expected(files, table, level)["agents/%s.md" % role][1], other, (level, role))
+
+    def test_f4t6_case41_a_level_change_with_aliases_keeps_the_role_cell(self):
+        files = self.f4t6_nine_sample()
+        table = dict(self.ALIAS_NINE)
+        self.f4t6_prepare(files, table, 2)
+        self.install_ok()
+        self.f4t5_config(table, level=4)
+        out, err = self.install_ok()
+        self.assertIn("Nivel anterior: 2", out.splitlines())
+        self.assert_alias_installed(files, 4, table)
+        model, effort = self.f4t6_cell(4, "forge")
+        self.assertIn("\nmodel: %s\n" % model, read(self.target, "agents/dev.md").decode("utf-8"))
+
+    def f4t6_repo_files(self):
+        manifest = json.loads(read(ROOT, "install-manifest.json"))
+        return {f["path"]: read(ROOT, f["path"]) for f in manifest["files"]}
+
+    def test_f4t6_case42_real_repository_nine_aliases_levels_5_and_3(self):
+        files = self.f4t6_repo_files()
+        self.assertEqual(len(files), 12)
+        table = dict(self.ALIAS_NINE)
+        texts = ["agents/%s.md" % r for r in ar.roles()] + ["rules/agentes.md", "docs/agentes.md"]
+        for level in (5, 3):
+            with self.subTest(level=level):
+                self.f4t6_prepare(files, table, level)
+                # el manifiesto del repositorio, no uno regenerado: el hook se verifica contra su hash
+                shutil.copyfile(os.path.join(ROOT, "install-manifest.json"), os.path.join(self.src, "install-manifest.json"))
+                manifest = json.loads(read(self.src, "install-manifest.json"))
+                hook_sha = {f["path"]: f["sha256"] for f in manifest["files"]}["hooks/agent_guard.py"]
+                out, err = self.install_ok()
+                self.assertNotIn("error", err)
+                self.assert_alias_installed(files, level, table)
+                tree = self.f4_tree(self.target)
+                tree.pop(self.CONFIG)
+                self.assertEqual(len(tree), 13, sorted(tree))
+                self.assertEqual(sorted(p for p in tree if p.startswith("agents/")),
+                                 sorted("agents/%s.md" % a for a in table.values()))
+                for role in ar.roles():
+                    self.assertNotIn("agents/%s.md" % role, tree)
+                # el hook: bytes y hash del manifiesto, sin transformar
+                self.assertEqual(bm.canonical_sha256(tree["hooks/agent_guard.py"]), hook_sha)
+                self.assertEqual(tree["hooks/agent_guard.py"], files["hooks/agent_guard.py"].replace(b"\r\n", b"\n"))
+                # sin residuo: ningun nombre de rol en los once textos instalados salvo las subcadenas conocidas. Busqueda
+                # simple, sin la regla de limite de palabra de la implementacion; tambien entre « y » (la guia)
+                for rel in texts:
+                    text = tree[ar.dest_for(rel, table)].decode("utf-8")
+                    for role in ar.roles():
+                        # assertFalse y no assertNotIn: si falla, no imprime el texto entero dos veces
+                        self.assertFalse(role in self.F4T6_SCRIBE_WORDS.sub("", text).lower(), (rel, role))
+                    # los roles entre comillas angulares son subcadenas del texto completo: el bucle de arriba ya los cubre
+                # auditor, shield y debugger: frontmatter igual salvo name: y description:
+                for role in ("auditor", "shield", "debugger"):
+                    src = files["agents/%s.md" % role].decode("utf-8").replace("\r\n", "\n").split("\n")
+                    dst = tree["agents/%s.md" % table[role]].decode("utf-8").split("\n")
+                    close = src.index("---", 1)
+                    self.assertEqual(dst.index("---", 1), close)
+                    for i in range(1, close):
+                        if not src[i].startswith(("name:", "description:")):
+                            self.assertEqual(dst[i], src[i], (role, i))
+                self.assertIn("Verificado: 12 archivo(s) escritos coinciden con lo esperado para el nivel %d y los alias."
+                              % level, out.splitlines())
+
+    def test_f4t6_case43_dryrun_with_aliases_lists_aliases_and_dest_rows_and_writes_nothing(self):
+        files = self.f4t6_nine_sample()
+        table = dict(self.ALIAS_NINE)
+        self.f4t6_prepare(files, table, 3)
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(snapshot(self.target), before)
+        self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+        self.assertEqual(os.listdir(self.target), [self.CONFIG])
+        lines = out.splitlines()
+        self.assertEqual([l for l in lines if l.startswith("Alias:")],
+                         ["Alias: %s -> %s (agents/%s.md)" % (r, table[r], table[r]) for r in ar.roles()])
+        st = self.states(out)
+        for role in ar.roles():
+            self.assertEqual(st["agents/%s.md" % table[role]], "NUEVO")
+            self.assertNotIn("agents/%s.md" % role, st)
+        self.assertEqual(len(st), 12)
+        self.assertIn("Resumen: NUEVO=12 IGUAL=0 ACTUALIZAR=0 MODIFICADO=0 HUERFANO=0", lines)
+        ajustes = [l for l in lines if l.startswith("Ajuste:")]
+        self.assertEqual(len(ajustes), 6)
+        for role in lr.read_ps_list("LevelAgents"):
+            model, effort = self.f4t6_cell(3, role)
+            self.assertIn("Ajuste: agents/%s.md  model: %s  effort: %s" % (table[role], model, effort), ajustes)
+        self.assertNotIn("Copiado", out)
+        self.assertNotIn("Verificado", out)
+        # lo que muestra el simulacro es lo que despues hace la real: mismas lineas hasta el primer Copiado
+        code2, out2, err2 = self.run_install()
+        self.assertEqual(code2, 0, out2 + err2)
+        plan = lambda text: [l for l in text.split("\nCopiado:", 1)[0].splitlines() if not l.startswith("Modo:")]
+        self.assertEqual(plan(out), plan(out2))
+        self.assert_alias_installed(files, 3, table)
+
+    def test_f4t6_case44_verification_messages(self):
+        files = self.f4t6_nine_sample()
+        table = dict(self.ALIAS_NINE)
+        cases = ((5, table, "lo esperado para el nivel 5 y los alias"),
+                 (3, table, "lo esperado para el nivel 3 y los alias"),
+                 (1, table, "lo esperado para el nivel 1 y los alias"),
+                 # tabla efectiva vacia (alias igual al rol, o sin alias): los textos de hoy
+                 (5, {"forge": "forge"}, "el manifiesto"), (3, {"forge": "forge"}, "lo esperado para el nivel 3"),
+                 (5, {}, "el manifiesto"))
+        for level, aliases, what in cases:
+            with self.subTest(level=level, aliases=len(aliases), what=what):
+                self.f4t6_prepare(files, aliases, level)
+                out, err = self.install_ok()
+                self.assertIn("Verificado: 12 archivo(s) escritos coinciden con %s." % what, out.splitlines())
+                # Paso 7: bytes distintos de los esperados: exit 4 y el mismo texto
+                self.f4t6_prepare(files, aliases, level)
+                try:
+                    self.patch_script("Write-Atomic $dest $outBytes[$rel] $existing", "$outBytes[$rel] = [byte[]]@(88)",
+                                      before=True)
+                    code, out, err = self.run_install()
+                    self.assertEqual(code, 4, out + err)
+                    self.assertIn("el hash del archivo escrito no coincide con %s\n" % what, err.replace("\r\n", "\n") + "\n")
+                finally:
+                    # restaura la copia aunque falle una asercion: sin esto las demas iteraciones fallan en cascada
+                    shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+
+    def test_f4t6_case45_post_verification_with_aliases_exit4(self):
+        files = self.f4t6_nine_sample()
+        table = dict(self.ALIAS_NINE)
+        self.f4t6_prepare(files, table, 3)
+        victim = os.path.join(self.target, "agents", "amigo-qa.md").replace("'", "''")
+        self.patch_script("# Paso 8:", "[System.IO.File]::AppendAllText('%s', 'x')" % victim)
+        code, out, err = self.run_install()
+        self.assertEqual(code, 4, out + err)
+        self.assertIn("la verificacion posterior fallo", err)
+        failed = [l.strip() for l in err.split("la verificacion posterior fallo:", 1)[1].splitlines() if l.strip()]
+        self.assertEqual(failed[:1], ["agents/amigo-qa.md"])
+        self.assertNotIn("agents/sentinel.md", err)
+        self.assertFalse(os.path.exists(os.path.join(self.target, self.STATE)))
+        self.assertNotIn("Verificado", out)
+
+    def test_f4t6_ajuste_names_the_dest_path_and_never_the_role_path(self):
+        self.f4t6_prepare(self.f4t6_nine_sample(), {"forge": "dev", "scout": "explorador"}, 1)
+        out, err = self.install_ok()
+        lines = out.splitlines()
+        model, effort = self.f4t6_cell(1, "forge")
+        self.assertIn("Ajuste: agents/dev.md  model: %s  effort: %s" % (model, effort), lines)
+        model, effort = self.f4t6_cell(1, "scout")
+        self.assertIn("Ajuste: agents/explorador.md  model: %s  effort: %s" % (model, effort), lines)
+        self.assertFalse([l for l in lines if l.startswith(("Ajuste: agents/forge.md", "Ajuste: agents/scout.md"))])
+        self.assertEqual(len([l for l in lines if l.startswith("Ajuste:")]), 6)
+
+    # Caso 46: salida sin alias, nivel 5, identica a la de antes de la fase. El golden se calculo con el install.ps1 de
+    # antes de la Fase 4 (commit 9c33300) y estas mismas ayudas: por paso, codigo de salida, hash de stdout, hash de
+    # stderr (con las rutas reemplazadas por <T>, <B>, <H> y <TMP>) y hash del arbol del destino y del respaldo.
+    F4T6_GOLDEN = [
+        ["simulacro", 0, "ce93ef3e3bb35424", "e3b0c44298fc1c14", "-", "-"],
+        ["limpia", 0, "67a9f7511ccbfd75", "82b819d5c8b38503", "96eefc2b8f061bbe", "-"],
+        ["repetida", 0, "953cf9224ec3bfac", "82b819d5c8b38503", "96eefc2b8f061bbe", "-"],
+        ["modificado", 3, "55405763bec5d625", "b1556d3d3801c3ea", "a2cc21adae4f6a35", "-"],
+        ["force", 0, "e45f06b6d68001b3", "82b819d5c8b38503", "96eefc2b8f061bbe", "60032c9b6c675ac3"],
+        ["actualizar", 0, "3a3cce7654540f01", "82b819d5c8b38503", "00c9444b1dc4cb89", "7753155e2dae7724"],
+        ["huerfano", 0, "148f83662d074178", "82b819d5c8b38503", "9511547705801bfe", "111a091266d0050c"],
+        ["estado ilegible", 0, "30b266aec73c859e", "2b5b1a2f96879e6c", "9511547705801bfe", "-"],
+        ["nivel 5 explicito", 0, "bc2370e30947d44a", "82b819d5c8b38503", "b113db7993f07848", "-"],
+        ["origen con CRLF", 0, "bc2370e30947d44a", "82b819d5c8b38503", "b113db7993f07848", "-"],
+    ]
+
+    def f4t6_regression_steps(self):
+        backups = []
+
+        def norm(text):
+            return f4t6_normalize_paths(
+                text, [(b, "<B>") for b in backups] + [(self.target, "<T>"), (self.home, "<H>"), (self.tmp, "<TMP>")])
+
+        def digest(text):
+            return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+        def tree_digest(base):
+            if not os.path.isdir(base):
+                return "-"
+            tree = {rel: hashlib.sha256(data).hexdigest()[:16] for rel, data in self.f4_tree(base).items()}
+            return digest(json.dumps(tree, sort_keys=True))
+
+        steps, raw = [], []
+
+        def run(label, *args):
+            backup = os.path.join(self.tmp, "respaldo%d" % len(backups))
+            backups.append(backup)
+            code, out, err = self.run_install("-BackupDir", backup, *args)
+            raw.append((label, norm(out), norm(err)))
+            steps.append([label, code, digest(norm(out)), digest(norm(err)), tree_digest(self.target), tree_digest(backup)])
+
+        files = dict(SAMPLE)
+        self.make_source(files)
+        run("simulacro", "-DryRun")
+        run("limpia")
+        run("repetida")
+        write(self.target, "agents/alfa.md", b"editado a mano\n")
+        run("modificado")
+        run("force", "-Force")
+        files["agents/beta.md"] = b"agente beta 2\n"
+        self.make_source(files)
+        run("actualizar")
+        files.pop("agents/beta.md")
+        self.make_source(files)
+        run("huerfano")
+        write(self.target, "synclayer-manifest.json", b"no es json")
+        run("estado ilegible")
+        self.write_config(b'{"level": 5}')
+        run("nivel 5 explicito")
+        self.make_source(files, crlf=True)
+        run("origen con CRLF")
+        return steps, raw
+
+    def test_f4t6_case46_level5_without_aliases_is_identical_to_before_the_phase(self):
+        steps, raw = self.f4t6_regression_steps()
+        message = "\n".join("--- %s\n%s%s" % item for item in raw)
+        self.assertEqual(steps, self.F4T6_GOLDEN, message)
+        # el golden no es trivial: cubre el simulacro, un exit 3, un respaldo, una actualizacion y un huerfano
+        self.assertEqual([s[1] for s in steps], [0, 0, 0, 3, 0, 0, 0, 0, 0, 0])
+        text = "\n".join(out for _label, out, _err in raw)
+        for needle in ("HUERFANO", "MODIFICADO", "ACTUALIZAR", "Respaldo", "Nivel: 5"):
+            self.assertIn(needle, text)
+        self.assertNotIn("Alias:", text)
+        self.assertNotIn("y los alias", text)
+
+    # --- Fase 4, T7: cambios de alias, ediciones a mano, -Force y huerfanos (casos 47 a 53 del plan) ---
+
+    F4T7_NOTE = "ya no estan en el manifiesto"
+    F4T7_MODEL_HINT = "Si cambiaste model: o effort: a mano, usa synclayer-config.json."
+    F4T7_ALIAS_HINT = "Si el archivo es un agente tuyo con el mismo nombre que un alias, elige otro alias."
+
+    def f4t7_aviso(self, old, new):
+        return ("aviso: %s es el nombre anterior de %s y sigue en el destino: no se borra. Mientras exista hay dos "
+                "agentes activos con descripciones casi iguales y la delegacion puede elegir cualquiera. Quitalo a "
+                "mano si ya no lo usas." % (old, new))
+
+    def f4t7_avisos(self, err):
+        return [l for l in err.splitlines() if "es el nombre anterior de" in l]
+
+    def f4t7_config(self, aliases=None, level=None):
+        obj = {}
+        if level is not None:
+            obj["level"] = level
+        if aliases is not None:
+            obj["aliases"] = aliases
+        self.write_config(json.dumps(obj).encode("ascii"))
+
+    def f4t7_start(self, aliases=None, level=None, files=None):
+        """Origen de ALIAS_SAMPLE e instalacion real con esa configuracion."""
+        files = self.f4t5_source(files)
+        self.f4t7_config(aliases, level)
+        self.install_ok()
+        return files
+
+    def f4t7_file(self, rel):
+        """(bytes, mtime en ns) de un archivo del destino."""
+        p = os.path.join(self.target, *rel.split("/"))
+        with open(p, "rb") as f:
+            data = f.read()
+        return data, os.stat(p).st_mtime_ns
+
+    def f4t7_changed(self, files, old_table, new_table, level=5, old_level=None):
+        """Destinos que no cambian de ruta y cuyos bytes cambian de una tabla a otra, segun la referencia."""
+        old = alias_expected(files, old_table, level if old_level is None else old_level)
+        new = alias_expected(files, new_table, level)
+        return {new[r][0] for r in files if old[r][0] == new[r][0] and old[r][1] != new[r][1]}
+
+    def f4t7_by_state(self, out, state):
+        return sorted(k for k, v in self.states(out).items() if v == state)
+
+    def f4t7_assert_installed(self, files, level, aliases):
+        """Como assert_alias_installed, sin exigir que falte agents/<rol>.md: en T7 el archivo anterior queda en disco
+        (huerfano) y se comprueba aparte. Cada destino = referencia; estado = referencia (esquema 3 o 2)."""
+        expected = alias_expected(files, aliases, level)
+        hashes, dests = {}, {}
+        for rel, (dest, data) in expected.items():
+            self.assertEqual(read(self.target, dest), data, rel)
+            hashes[rel] = bm.canonical_sha256(data)
+            dests[rel] = dest
+        manifest = read(self.src, "install-manifest.json")
+        if any(d != r for r, d in dests.items()):
+            want = ar.state_for3(manifest, hashes, level, dests)
+        else:
+            want = lr.state_for(manifest, hashes, level)
+        self.assertEqual(read(self.target, self.STATE), want)
+
+    def f4t7_assert_one_rename_orphan(self, out, err, old, new, exists=True):
+        """Un solo huerfano, por cambio de nombre: sin la nota de stdout y con el aviso de stderr si el archivo existe."""
+        self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), [old], out)
+        self.assertIn("HUERFANO=1", out)
+        self.assertNotIn(self.F4T7_NOTE, out)
+        self.assertNotIn("nota:", out)
+        self.assertEqual(self.f4t7_avisos(err), [self.f4t7_aviso(old, new)] if exists else [], err)
+
+    def test_f4t7_case47_s1_new_alias_over_an_intact_install_without_aliases(self):
+        files = self.f4t7_start()
+        old_tree = self.f4_tree(self.target)
+        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        prev_state = read(self.target, self.STATE)
+        self.assertIn(b'"schema": 2', prev_state)
+        self.f4t7_config(ALIAS_ONE)
+        changed = self.f4t7_changed(files, {}, ALIAS_ONE)
+        self.assertTrue({"agents/atlas.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
+        before = snapshot(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        for dry in (True, False):
+            with self.subTest(dry_run=dry):
+                if dry:
+                    code, out, err = self.run_install("-DryRun")
+                    self.assertEqual(code, 0, out + err)
+                    self.assertEqual(snapshot(self.target), before)
+                    self.assertFalse(os.path.exists(backup))
+                else:
+                    out, err = self.install_ok("-BackupDir", backup)
+                st = self.states(out)
+                self.assertEqual(st["agents/amigo-qa.md"], "NUEVO")
+                self.assertEqual(st["agents/sentinel.md"], "HUERFANO")
+                self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
+                self.assertEqual(self.f4t7_by_state(out, "NUEVO"), ["agents/amigo-qa.md"])
+                self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+                self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md")
+        # corrida real: el archivo anterior intacto (bytes y mtime), estado a esquema 3, el anterior al respaldo
+        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+        self.f4t7_assert_installed(files, 5, ALIAS_ONE)
+        self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+        tree = self.f4_tree(backup)
+        self.assertEqual(set(tree), set(changed) | {self.STATE})
+        for rel in changed:
+            self.assertEqual(tree[rel], old_tree[rel], rel)
+        self.assertEqual(tree[self.STATE], prev_state)
+
+    def test_f4t7_case47_s2_new_alias_over_a_foreign_file_is_modificado_and_force_backs_it_up(self):
+        files = self.f4t7_start()
+        self.f4t7_config(ALIAS_ONE)
+        write(self.target, "agents/amigo-qa.md", b"agente ajeno del usuario\n")
+        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        before = snapshot(self.target)
+        for flags in ([], ["-DryRun"]):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 3, out + err)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md"])
+                self.assertNotIn("Copiado", out)
+                self.assertIn(self.F4T7_ALIAS_HINT, err)
+                self.assertTrue(err.rstrip().endswith(self.F4T7_MODEL_HINT), err)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md"])
+        self.assertEqual(read(backup, "agents/amigo-qa.md"), b"agente ajeno del usuario\n")
+        self.f4t7_assert_installed(files, 5, ALIAS_ONE)
+        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+        self.assertNotIn("agents/sentinel.md", self.f4_tree(backup))
+
+    def test_f4t7_case47_s3_changed_alias_orphans_the_previous_alias_file_only(self):
+        # Se parte de S1: instalacion sin alias y luego ALIAS_ONE; agents/sentinel.md queda en disco.
+        files = self.f4t7_start()
+        self.f4t7_config(ALIAS_ONE)
+        self.install_ok()
+        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        old_amigo = self.f4t7_file("agents/amigo-qa.md")
+        prev_state = read(self.target, self.STATE)
+        table = {"sentinel": "tester"}
+        self.f4t7_config(table)
+        changed = self.f4t7_changed(files, ALIAS_ONE, table)
+        self.assertTrue({"agents/atlas.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/tester.md"], "NUEVO")
+        self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
+        self.assertNotIn("agents/sentinel.md", st)
+        self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", "agents/tester.md")
+        # el archivo del rol (de la instalacion sin alias) sigue en disco, no es destino ni destino previo: ni fila
+        # HUERFANO ni aviso
+        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+        self.assertNotIn("agents/sentinel.md", self.f4t7_by_state(out, "HUERFANO"))
+        self.assertFalse([l for l in err.splitlines() if "agents/sentinel.md" in l], err)
+        self.assertEqual(self.f4t7_file("agents/amigo-qa.md"), old_amigo)
+        self.f4t7_assert_installed(files, 5, table)
+        tree = self.f4_tree(backup)
+        self.assertEqual(set(tree), set(changed) | {self.STATE})
+        self.assertEqual(tree[self.STATE], prev_state)
+
+    def test_f4t7_case47_s4_removed_alias_without_the_old_role_file_is_nuevo_and_state_goes_back_to_schema2(self):
+        files = self.f4t7_start(ALIAS_ONE)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "sentinel.md")))
+        old_amigo = self.f4t7_file("agents/amigo-qa.md")
+        prev_state = read(self.target, self.STATE)
+        self.assertIn(b'"schema": 3', prev_state)
+        self.f4t7_config(None)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/sentinel.md"], "NUEVO")
+        self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", "agents/sentinel.md")
+        self.assertEqual(self.f4t7_file("agents/amigo-qa.md"), old_amigo)
+        self.f4t7_assert_installed(files, 5, {})
+        self.assertNotIn(b'"dest"', read(self.target, self.STATE))
+        self.assertEqual(self.f4_tree(backup)[self.STATE], prev_state)
+        self.assertNotIn("agents/amigo-qa.md", self.f4_tree(backup))
+
+    def test_f4t7_case47_s5_removed_alias_with_the_old_role_file_on_disk(self):
+        # (a) los bytes son los que se escribirian: IGUAL. (b) distintos: no esta en prevByDest, MODIFICADO y exit 3.
+        for edited in (False, True):
+            with self.subTest(edited=edited):
+                shutil.rmtree(self.target, ignore_errors=True)
+                files = self.f4t7_start()
+                self.f4t7_config(ALIAS_ONE)
+                self.install_ok()
+                if edited:
+                    with open(os.path.join(self.target, "agents", "sentinel.md"), "ab") as f:
+                        f.write(b"editado a mano\n")
+                self.f4t7_config(None)
+                old_amigo = self.f4t7_file("agents/amigo-qa.md")
+                before = snapshot(self.target)
+                code, out, err = self.run_install()
+                if not edited:
+                    self.assertEqual(code, 0, out + err)
+                    self.assertEqual(self.states(out)["agents/sentinel.md"], "IGUAL")
+                    self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", "agents/sentinel.md")
+                    self.f4t7_assert_installed(files, 5, {})
+                else:
+                    self.assertEqual(code, 3, out + err)
+                    self.assertEqual(self.states(out)["agents/sentinel.md"], "MODIFICADO")
+                    self.assertEqual(snapshot(self.target), before)
+                    self.assertNotIn(self.F4T7_ALIAS_HINT, err)
+                    self.assertTrue(err.rstrip().endswith(self.F4T7_MODEL_HINT), err)
+                self.assertEqual(self.f4t7_file("agents/amigo-qa.md"), old_amigo)
+
+    def test_f4t7_case48_s6_level_change_with_the_alias_already_installed(self):
+        files = self.f4t7_start(ALIAS_ONE)
+        e5 = alias_expected(files, ALIAS_ONE, 5)["agents/sentinel.md"][1]
+        e1 = alias_expected(files, ALIAS_ONE, 1)["agents/sentinel.md"][1]
+        self.assertNotEqual(e5, e1)
+        self.f4t7_config(ALIAS_ONE, level=1)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/amigo-qa.md"], "ACTUALIZAR")
+        self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+        self.assertFalse(self.f4t7_by_state(out, "HUERFANO"))
+        self.assertIn("HUERFANO=0", out)
+        self.assertEqual(self.f4t7_avisos(err), [])
+        self.assertIn("Nivel anterior: 5", out)
+        model, effort = lr.read_script_table()[(1, "sentinel")]
+        self.assertIn("Ajuste: agents/amigo-qa.md  model: %s  effort: %s" % (model, effort), out.splitlines())
+        self.assertEqual(read(self.target, "agents/amigo-qa.md"), e1)
+        self.assertEqual(read(backup, "agents/amigo-qa.md"), e5)
+        self.f4t7_assert_installed(files, 1, ALIAS_ONE)
+
+    def test_f4t7_case48_s7_new_alias_and_level_change_at_once(self):
+        files = self.f4t7_start()
+        old_tree = self.f4_tree(self.target)
+        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        prev_state = read(self.target, self.STATE)
+        self.assertIn(b'"schema": 2', prev_state)
+        self.f4t7_config(ALIAS_ONE, level=1)
+        changed = self.f4t7_changed(files, {}, ALIAS_ONE, level=1, old_level=5)
+        self.assertTrue({"agents/atlas.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/amigo-qa.md"], "NUEVO")
+        self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
+        self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+        self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md")
+        self.assertIn("Nivel anterior: 5", out)
+        model, effort = lr.read_script_table()[(1, "sentinel")]
+        self.assertIn("Ajuste: agents/amigo-qa.md  model: %s  effort: %s" % (model, effort), out.splitlines())
+        self.assertEqual(read(self.target, "agents/amigo-qa.md"), alias_expected(files, ALIAS_ONE, 1)["agents/sentinel.md"][1])
+        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+        self.f4t7_assert_installed(files, 1, ALIAS_ONE)
+        self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+        tree = self.f4_tree(backup)
+        self.assertEqual(set(tree), set(changed) | {self.STATE})
+        for rel in changed:
+            self.assertEqual(tree[rel], old_tree[rel], rel)
+        self.assertEqual(tree[self.STATE], prev_state)
+
+    def test_f4t7_case49_s8_hand_edit_of_the_alias_file_is_modificado_and_force_backs_it_up(self):
+        files = self.f4t7_start(ALIAS_ONE)
+        path = os.path.join(self.target, "agents", "amigo-qa.md")
+        with open(path, "ab") as f:
+            f.write(b"editado a mano\n")
+        edited = read(self.target, "agents/amigo-qa.md")
+        before = snapshot(self.target)
+        for flags in ([], ["-DryRun"]):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 3, out + err)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md"])
+                self.assertIn(self.F4T7_ALIAS_HINT, err)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-Force", "-BackupDir", backup)
+        self.assertEqual(read(backup, "agents/amigo-qa.md"), edited)
+        self.f4t7_assert_installed(files, 5, ALIAS_ONE)
+        self.assertEqual(set(self.f4_tree(backup)), {"agents/amigo-qa.md"})
+
+    def test_f4t7_case49_s9_reassignment_between_two_roles(self):
+        files = self.f4t7_start(ALIAS_ONE)
+        old_amigo = self.f4t7_file("agents/amigo-qa.md")
+        old_forge = self.f4t7_file("agents/forge.md")
+        table = {"sentinel": "tester", "forge": "amigo-qa"}
+        self.f4t7_config(table)
+        backup = os.path.join(self.tmp, "respaldo")
+        out, err = self.install_ok("-BackupDir", backup)
+        st = self.states(out)
+        self.assertEqual(st["agents/amigo-qa.md"], "ACTUALIZAR")
+        self.assertEqual(st["agents/tester.md"], "NUEVO")
+        self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+        self.f4t7_assert_one_rename_orphan(out, err, "agents/forge.md", "agents/amigo-qa.md")
+        self.assertEqual(self.f4t7_file("agents/forge.md"), old_forge)
+        self.assertEqual(read(backup, "agents/amigo-qa.md"), old_amigo[0])
+        self.assertNotIn("agents/forge.md", self.f4_tree(backup))
+        self.f4t7_assert_installed(files, 5, table)
+
+    def test_f4t7_case49_s10_missing_or_unreadable_state_with_aliases_already_installed(self):
+        for variant in ("ausente", "ilegible"):
+            for edited in (False, True):
+                with self.subTest(state=variant, edited=edited):
+                    shutil.rmtree(self.target, ignore_errors=True)
+                    files = self.f4t7_start()
+                    self.f4t7_config(ALIAS_ONE)
+                    self.install_ok()
+                    if edited:
+                        with open(os.path.join(self.target, "agents", "amigo-qa.md"), "ab") as f:
+                            f.write(b"editado a mano\n")
+                    state = os.path.join(self.target, self.STATE)
+                    if variant == "ausente":
+                        os.remove(state)
+                    else:
+                        with open(state, "wb") as f:
+                            f.write(b"{no es json")
+                    old_sentinel = self.f4t7_file("agents/sentinel.md")
+                    code, out, err = self.run_install()
+                    if edited:
+                        self.assertEqual(code, 3, out + err)
+                        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md"])
+                    else:
+                        self.assertEqual(code, 0, out + err)
+                        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+                    self.assertFalse(self.f4t7_by_state(out, "HUERFANO"))
+                    self.assertNotIn(self.F4T7_NOTE, out)
+                    self.assertEqual(self.f4t7_avisos(err), [])
+                    self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+
+    def test_f4t7_case49_s11_state_of_schema_1_or_2_and_a_new_alias_behaves_like_s1(self):
+        for schema in (1, 2):
+            with self.subTest(schema=schema):
+                shutil.rmtree(self.target, ignore_errors=True)
+                files = self.f4t5_source()
+                for rel, data in files.items():
+                    write(self.target, rel, data)
+                self.write_state(files, schema=schema)
+                self.f4t7_config(ALIAS_ONE)
+                changed = self.f4t7_changed(files, {}, ALIAS_ONE)
+                out, err = self.install_ok()
+                st = self.states(out)
+                self.assertEqual(st["agents/amigo-qa.md"], "NUEVO")
+                self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
+                self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+                self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md")
+                self.f4t7_assert_installed(files, 5, ALIAS_ONE)
+                self.assertEqual(read(self.target, "agents/sentinel.md"), files["agents/sentinel.md"])
+
+    def test_f4t7_case49_s12_reinstalling_the_same_aliases_changes_nothing(self):
+        files = self.f4t7_start()
+        self.f4t7_config(ALIAS_FOUR)
+        self.install_ok()
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for flags in (["-DryRun"], []):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 0, out + err)
+                self.assertFalse(self.f4t7_by_state(out, "HUERFANO"))
+                self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+                self.assertNotIn("Respaldo:", out)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(self.f4t7_avisos(err), [])
+                self.assertNotIn("nota:", out)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+        self.f4t7_assert_installed(files, 5, ALIAS_FOUR)
+
+    def test_f4t7_case50_rename_orphan_warns_only_if_the_file_exists_and_is_never_touched(self):
+        for exists in (True, False):
+            for dry in (True, False):
+                with self.subTest(file_exists=exists, dry_run=dry):
+                    shutil.rmtree(self.target, ignore_errors=True)
+                    shutil.rmtree(os.path.join(self.tmp, "respaldo"), ignore_errors=True)
+                    self.f4t7_start()
+                    if not exists:
+                        os.remove(os.path.join(self.target, "agents", "sentinel.md"))
+                    old = self.f4t7_file("agents/sentinel.md") if exists else None
+                    self.f4t7_config(ALIAS_ONE)
+                    backup = os.path.join(self.tmp, "respaldo")
+                    flags = ["-DryRun"] if dry else []
+                    code, out, err = self.run_install(*flags, "-BackupDir", backup)
+                    self.assertEqual(code, 0, out + err)
+                    self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md", exists=exists)
+                    if exists:
+                        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old)
+                    else:
+                        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "sentinel.md")))
+                    if not dry:
+                        self.assertNotIn("agents/sentinel.md", self.f4_tree(backup))
+                    else:
+                        self.assertFalse(os.path.exists(backup))
+
+    def test_f4t7_case50_one_warning_per_file(self):
+        # Dos huerfanos por cambio de nombre a la vez (sentinel y forge pasan a alias): un aviso por archivo.
+        self.f4t7_start()
+        self.f4t7_config({"sentinel": "amigo-qa", "forge": "dev"})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(sorted(self.f4t7_avisos(err)),
+                         sorted([self.f4t7_aviso("agents/sentinel.md", "agents/amigo-qa.md"),
+                                 self.f4t7_aviso("agents/forge.md", "agents/dev.md")]))
+        self.assertIn("HUERFANO=2", out)
+        self.assertNotIn(self.F4T7_NOTE, out)
+
+    def test_f4t7_case51_classic_orphan_keeps_the_note_and_has_no_warning(self):
+        # Sin alias: nota por stdout, ningun aviso de cambio de nombre (la prueba existente fija el resto).
+        self.make_source()
+        old = dict(SAMPLE)
+        old["agents/viejo.md"] = b"de una version anterior\n"
+        self.write_state(old)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("nota: los HUERFANO los instalo una version anterior y ya no estan en el manifiesto. No se borran.",
+                      out.splitlines())
+        self.assertEqual(self.f4t7_avisos(err), [])
+        self.assertEqual(err, "")
+
+    def test_f4t7_case51_mixed_classic_and_rename_orphans_print_the_note_and_the_warning(self):
+        files = self.f4t7_start()
+        extra = dict(files)
+        extra["agents/viejo.md"] = b"de una version anterior\n"
+        self.write_state(extra)
+        write(self.target, "agents/viejo.md", b"de una version anterior\n")
+        self.f4t7_config(ALIAS_ONE)
+        for flags in (["-DryRun"], []):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), ["agents/sentinel.md", "agents/viejo.md"])
+                self.assertIn("HUERFANO=2", out)
+                self.assertEqual(out.count("nota: los HUERFANO los instalo una version anterior"), 1)
+                self.assertEqual(self.f4t7_avisos(err), [self.f4t7_aviso("agents/sentinel.md", "agents/amigo-qa.md")])
+                self.assertEqual(read(self.target, "agents/viejo.md"), b"de una version anterior\n")
+                if not flags:
+                    # el huerfano clasico tampoco se toco; el estado ya no los lista
+                    self.assertNotIn(b"viejo", read(self.target, self.STATE))
+
+    def test_f4t7_case51_classic_orphan_with_aliases_configured_and_unchanged(self):
+        # Alias ya instalados y sin cambios, mas un huerfano clasico en el estado: nota, sin aviso de cambio de nombre.
+        files = self.f4t7_start(ALIAS_ONE)
+        extra = dict(files)
+        extra["agents/viejo.md"] = b"de una version anterior\n"
+        write(self.target, "agents/viejo.md", b"de una version anterior\n")
+        self.write_state(extra, schema=3, dests={"agents/sentinel.md": "agents/amigo-qa.md"})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), ["agents/viejo.md"])
+        self.assertIn("nota: los HUERFANO los instalo una version anterior", out)
+        self.assertEqual(self.f4t7_avisos(err), [])
+
+    def test_f4t7_case52_exit3_adds_the_alias_phrase_only_when_a_modificado_is_in_an_alias_path(self):
+        end = self.F4T7_MODEL_HINT
+        files = self.f4t7_start(ALIAS_ONE)
+        # (a) MODIFICADO en la ruta de un alias: frase de alias y, al final de todo, la del model:
+        with open(os.path.join(self.target, "agents", "amigo-qa.md"), "ab") as f:
+            f.write(b"editado a mano\n")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(err.count(self.F4T7_ALIAS_HINT), 1, err)
+        self.assertEqual(err.count(end), 1, err)
+        self.assertTrue(err.rstrip().endswith(end), err)
+        self.assertLess(err.index(self.F4T7_ALIAS_HINT), err.index(end))
+        # (b) MODIFICADO solo en un archivo sin alias (forge no tiene alias), con alias configurados: sin la frase
+        shutil.rmtree(self.target, ignore_errors=True)
+        self.f4t7_start(ALIAS_ONE)
+        with open(os.path.join(self.target, "agents", "forge.md"), "ab") as f:
+            f.write(b"editado a mano\n")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/forge.md"])
+        self.assertNotIn(self.F4T7_ALIAS_HINT, err)
+        self.assertTrue(err.rstrip().endswith(end), err)
+        # (c) los dos a la vez: una sola vez cada frase
+        with open(os.path.join(self.target, "agents", "amigo-qa.md"), "ab") as f:
+            f.write(b"editado a mano\n")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 3, out + err)
+        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md", "agents/forge.md"])
+        self.assertEqual(err.count(self.F4T7_ALIAS_HINT), 1, err)
+        self.assertTrue(err.rstrip().endswith(end), err)
+        # (d) sin alias: el mensaje es el de hoy
+        shutil.rmtree(self.target, ignore_errors=True)
+        self.f4t7_start()
+        with open(os.path.join(self.target, "agents", "forge.md"), "ab") as f:
+            f.write(b"editado a mano\n")
+        code, out, err = self.run_install()
+        self.assertEqual(code, 3, out + err)
+        self.assertNotIn(self.F4T7_ALIAS_HINT, err)
+        self.assertTrue(err.rstrip().endswith(end), err)
+
+    def test_f4t7_case53_the_configuration_is_never_touched_nor_backed_up(self):
+        files = self.f4t7_start()
+        self.f4t7_config(ALIAS_ONE)
+        config = os.path.join(self.target, self.CONFIG)
+        raw = read(self.target, self.CONFIG)
+        mtime = os.stat(config).st_mtime_ns
+        backup = os.path.join(self.tmp, "respaldo")
+        steps = (["-DryRun"], ["-BackupDir", backup], ["-Force", "-BackupDir", backup])
+        for flags in steps:
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(read(self.target, self.CONFIG), raw)
+                self.assertEqual(os.stat(config).st_mtime_ns, mtime)
+        self.assertTrue(os.path.isdir(backup))
+        self.assertNotIn(self.CONFIG, self.f4_tree(backup))
+        # con un cambio de alias y -Force, otro respaldo: la configuracion tampoco entra
+        self.f4t7_config({"sentinel": "tester"})
+        raw = read(self.target, self.CONFIG)
+        mtime = os.stat(config).st_mtime_ns
+        backup2 = os.path.join(self.tmp, "respaldo2")
+        self.install_ok("-Force", "-BackupDir", backup2)
+        self.assertEqual(read(self.target, self.CONFIG), raw)
+        self.assertEqual(os.stat(config).st_mtime_ns, mtime)
+        self.assertNotIn(self.CONFIG, self.f4_tree(backup2))
+        self.assertTrue(self.f4_tree(backup2))
+
+    # --- Fase 4, cierre C1: bordes entre alias, nivel, estado esquema 3, -Force y configuracion invalida ---
+
+    def test_f4c1_invalid_level_with_valid_aliases_exit1_in_both_modes_and_no_alias_line(self):
+        for level in (0, 6, "3", None):
+            with self.subTest(level=level):
+                data = json.dumps({"level": level, "aliases": ALIAS_ONE}).encode("ascii")
+                self.assert_config_rejected(data, "level debe ser un entero de 1 a 5")
+                shutil.rmtree(self.target)
+
+    def test_f4c1_invalid_alias_table_with_force_writes_and_backs_up_nothing(self):
+        self.f4t7_start(ALIAS_ONE)
+        path = os.path.join(self.target, "agents", "amigo-qa.md")
+        with open(path, "ab") as f:
+            f.write(b"editado a mano\n")
+        self.f4t7_config({"sentinel": "Mal"}, level=2)
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        backup = os.path.join(self.tmp, "respaldo")
+        for flags in (["-Force", "-BackupDir", backup], ["-Force", "-DryRun", "-BackupDir", backup]):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assert_quiet_failure(code, out, err, before, listing)
+                self.assertIn(self.CONFIG_ERR + "el alias de sentinel ", err)
+                self.assertNotIn("Alias:", out)
+                self.assertFalse(os.path.exists(backup))
+
+    def test_f4c1_schema3_state_with_mixed_levels_prints_no_previous_level(self):
+        # Contrato de T5: `Nivel anterior:` solo si TODAS las entradas del estado previo tienen el mismo nivel.
+        self.f4t7_start(ALIAS_ONE, level=3)
+        state_path = os.path.join(self.target, self.STATE)
+        data = json.loads(read(self.target, self.STATE))
+        self.assertEqual(data["schema"], 3)
+        self.assertEqual({e["level"] for e in data["files"]}, {3})
+        self.f4t7_config(ALIAS_ONE, level=1)
+        out, err = self.install_ok("-DryRun")
+        self.assertIn("Nivel anterior: 3", out.splitlines())  # control: nivel uniforme
+        data["files"][0]["level"] = 2
+        with open(state_path, "wb") as f:
+            f.write((json.dumps(data, indent=2) + "\n").encode("ascii"))
+        for flags in (["-DryRun"], []):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertNotEqual(code, 1, out + err)
+                self.assertIn("Nivel: 1 (synclayer-config.json)", out.splitlines())
+                self.assertNotIn("Nivel anterior", out)
+
+    def test_f4c1_schema3_state_with_a_foreign_valid_dest_keeps_the_real_alias_file_igual(self):
+        # Estado esquema 3 valido pero manipulado: dest apunta a otra ruta. El archivo de alias real, intacto y con los
+        # bytes que se escribirian, es IGUAL; la ruta falsa es HUERFANO y nunca se toca (no existe, no hay aviso).
+        files = self.f4t7_start(ALIAS_ONE)
+        state_path = os.path.join(self.target, self.STATE)
+        data = json.loads(read(self.target, self.STATE))
+        moved = [e for e in data["files"] if e["path"] == "agents/sentinel.md"]
+        self.assertEqual(len(moved), 1)
+        self.assertEqual(moved[0]["dest"], "agents/amigo-qa.md")
+        moved[0]["dest"] = "agents/otro.md"
+        with open(state_path, "wb") as f:
+            f.write((json.dumps(data, indent=2) + "\n").encode("ascii"))
+        before = snapshot(self.target)
+        out, err = self.install_ok("-DryRun")
+        st = self.states(out)
+        self.assertEqual(st["agents/amigo-qa.md"], "IGUAL")
+        self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), ["agents/otro.md"])
+        self.assertEqual(self.f4t7_avisos(err), [])
+        self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
+        self.assertEqual(snapshot(self.target), before)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "otro.md")))
+
+
+def f4t6_normalize_paths(text, pairs):
+    """Reemplaza cada ruta por su etiqueta, tal cual y en la forma escapada por Format-Safe de install.ps1 (todo lo
+    que no es ASCII imprimible sale como \\uXXXX en minusculas, por unidad UTF-16). Con rutas ASCII las dos formas
+    coinciden."""
+    for path, label in pairs:
+        units = path.encode("utf-16-le")
+        escaped = "".join(
+            chr(c) if 0x20 <= c <= 0x7E else "\\u%04x" % c
+            for c in (int.from_bytes(units[i:i + 2], "little") for i in range(0, len(units), 2)))
+        text = text.replace(path, label)
+        if escaped != path:
+            text = text.replace(escaped, label)
+    return text
+
+
+class F4T6NormalizeCases(unittest.TestCase):
+    def test_f4t6_normalize_paths_ascii_unchanged_and_escaped_non_ascii_replaced(self):
+        ascii_path = "C:\\Temp\\abc"
+        self.assertEqual(f4t6_normalize_paths("Destino: %s fin" % ascii_path, [(ascii_path, "<T>")]), "Destino: <T> fin")
+        path = "C:\\Users\\Jos\u00e9 \U0001F600\\tmp"
+        escaped = "C:\\Users\\Jos\\u00e9 \\ud83d\\ude00\\tmp"
+        self.assertNotEqual(path, escaped)
+        text = "Destino: %s\nraw: %s\notro: %s-x" % (escaped, path, escaped)
+        self.assertEqual(f4t6_normalize_paths(text, [(path, "<TMP>")]), "Destino: <TMP>\nraw: <TMP>\notro: <TMP>-x")
 
 
 def _make_class(label, exe, reason):

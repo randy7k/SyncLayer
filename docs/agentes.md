@@ -12,8 +12,8 @@ Instalado el 2026-11-19 con Claude Code 2.1.310.
 | `~/.claude/CLAUDE.md` | Instrucciones globales del usuario: deben apuntar a `~/.claude/rules/agentes.md` |
 | `~/.claude/docs/agentes.md` | Esta guía |
 | Copias previas | `install.ps1` respalda lo que sobrescribe en `<Target>-backup-<fecha-hora>` (o en el `-BackupDir` que pases; por defecto `~/.claude-backup-<fecha-hora>`); no toca `CLAUDE.md` ni `settings.json`, así que respaldalos vos si los vas a editar |
-| `~/.claude/synclayer-manifest.json` | Estado que deja `install.ps1` tras la última instalación correcta: por archivo, el hash del origen, el de lo escrito y el nivel |
-| `~/.claude/synclayer-config.json` | Opcional. Lo escribís vos a mano (campo `level`, de 1 a 5). No lo instala ni lo gestiona `install.ps1`: sólo lo lee. Al reinstalar, el instalador aplica el nivel (ver «Niveles» en el `README.md`) |
+| `~/.claude/synclayer-manifest.json` | Estado que deja `install.ps1` tras la última instalación correcta: por archivo, el hash del origen, el de lo escrito y el nivel y, con alias, la ruta de destino (`dest`, esquema 3) |
+| `~/.claude/synclayer-config.json` | Opcional. Lo escribís vos a mano (campos `level`, de 1 a 5, y `aliases`). No lo instala ni lo gestiona `install.ps1`: sólo lo lee. Al reinstalar, el instalador aplica el nivel y los alias (ver «Niveles» y «Alias» en el `README.md`) |
 | `~/.claude/synclayer-usage.md` | Reporte global de uso de subagentes. No lo instala `install.ps1`: lo genera `tools/usage_report.py global` (ver «Reporte de uso») |
 
 Cómo instalar y actualizar: `install.ps1`, con `-DryRun` primero. Uso y límites en la sección
@@ -89,6 +89,8 @@ python -B tools/usage_report.py global
   ni el costo real, ni afirma ahorro de tokens.
 - Parámetros, códigos de salida y límites: `README.md` del repositorio («Reporte de uso» y
   «Límites del reporte de uso»).
+- Un agente con alias (ver «Cambiar el nombre de un agente») sale como `(otro agente)` y deja de
+  atribuirse a SyncLayer: el reporte reconoce a los agentes por su nombre original.
 
 ## Mantenimiento
 
@@ -100,6 +102,38 @@ no está verificado en una máquina real). Para cualquier agente también podés
 `inherit` (usa el de la sesión). Los alias apuntan siempre a la versión vigente de cada familia. Una
 edición a mano de `model:` o `effort:` sale `MODIFICADO` (exit 3) la próxima vez que reinstalés, y
 hace falta `-Force` (con respaldo).
+
+**Cambiar el nombre de un agente.** Cada uno de los nueve puede llevar un alias. Agregá en
+`~/.claude/synclayer-config.json` la clave `aliases`, un objeto de `<rol>` a `<alias>` (el `<rol>` es el
+nombre original del agente, el del repositorio; ver «Alias» del `README.md`, en minúsculas): `{ "aliases": { "<rol>": "<alias>" } }`. Al reinstalar, el
+instalador escribe ese agente en `agents/<alias>.md` con `name: <alias>` y cambia el nombre por el alias
+en las descripciones, en los cuerpos y en las dos copias de texto que instala (las reglas y esta guía). El
+repositorio conserva los nombres originales.
+
+- **Formato del alias.** Minúsculas, empieza por letra, sólo `a-z`, `0-9`, `_` y `-`, hasta 64
+  caracteres. No puede ser el nombre de un agente integrado de Claude Code, el de otro agente de
+  SyncLayer, repetirse, contener el nombre de un agente de SyncLayer como palabra ni ser una palabra
+  que YAML no lee como texto. El instalador valida la tabla entera antes de escribir (exit 1, también
+  con `-DryRun`). Las reglas completas están en la sección «Alias» del `README.md`.
+- **Ensayá primero.** `-DryRun` muestra una línea `Alias:` por alias y qué archivo cambia. Para
+  cambiar o quitar un alias, editá el archivo y reinstalá.
+- **El archivo anterior queda.** El instalador nunca borra: si ya existía `agents/<nombre-anterior>.md`,
+  sale como `HUERFANO` y, mientras exista, hay dos agentes activos con descripciones casi iguales.
+  Quitalo a mano.
+- **Reiniciá las sesiones abiertas.** Renombrar con sesiones abiertas no está documentado.
+- **Qué no cambia.** El hook `agent_guard.py` no se transforma, y el bloque `hooks:` de los agentes
+  que lo usan queda igual. Tus referencias propias por nombre (`Agent(<nombre>)` en `tools:`,
+  `permissions.deny`, matchers de hooks, `--agent`, un `.claude/agents/<nombre>.md` de proyecto, y las
+  instrucciones en texto libre que nombren un agente: un `CLAUDE.md` propio, la memoria, reglas)
+  siguen apuntando al nombre anterior y no se actualizan solas; el instalador no las toca.
+- **Un agente tuyo con el mismo `name:`.** Si otro archivo de `~/.claude/agents/` declara el mismo
+  `name:` que un alias, no está documentado cuál de los dos gana, y el agente renombrado podría
+  quedar sin su guarda. El instalador no lo detecta; elegí un alias que no uses.
+- **Copia inversa.** Con alias los archivos de `~/.claude` no son los del repositorio: el cambio se
+  hace en el repositorio y se reinstala.
+- **No verificado.** El efecto de los alias en un Claude Code real (invocar al agente por su alias,
+  nombres con `_` o `-`, el caso de dos archivos con el mismo `name:`) lo tiene que comprobar el
+  propietario; no está probado.
 
 **Cambiar herramientas.** Editá la línea `tools:`. Si se borra la línea, el agente
 hereda todas las herramientas de la sesión, incluidos los conectores MCP.
@@ -167,6 +201,9 @@ Si un agente no usa el modelo esperado, revisá estas variables primero.
    - `~/.claude/synclayer-manifest.json`: si el instalador reescribió un estado previo,
      restaurá ese estado desde el respaldo. Borralo sólo si no existía antes (primera
      instalación): si no, lo restaurado saldría `MODIFICADO` y exigiría `-Force`. Si había un estado ilegible o inválido (no se respalda) o no hay estado porque la primera instalación terminó en exit 4, borralo también: los archivos restaurados saldrán `MODIFICADO` de todos modos y se reinstalan con `-Force`.
+   - Con alias, cada agente vive en `agents/<alias>.md` y el estado lo lista en `dest` (esquema 3), no en
+     `path`: usá `dest` para saber qué borrar o restaurar. Los `agents/<alias-anterior>.md` de un nombre
+     anterior (`HUERFANO`) ya no figuran en el estado tras reescribirlo: quitalos a mano.
    - Si conservás los agentes, quitá antes el bloque `hooks:` del frontmatter de
      `sentinel`, `auditor`, `shield` y `debugger`.
 2. Restaurar la copia previa de `CLAUDE.md` sobre `~/.claude/CLAUDE.md`, o quitar de

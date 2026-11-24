@@ -2,6 +2,206 @@
 
 ## [Sin publicar]
 
+### Añadido (alias, Fase 4)
+
+Resumen de la Fase 4 (plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`); el detalle por task sigue
+en las entradas T1 a T7 de abajo. Fase cerrada en la rama `feat/nombres-configurables` (T1 a T8 y cierre; ver
+la entrada del cierre más abajo). Siguen pendientes del propietario G1/V1 (efecto de los alias en Claude Code
+real, caso P10) y V2 (aplicar los alias a su `~/.claude`).
+
+- Cada uno de los nueve agentes puede llevar un alias en la clave `aliases` de
+  `<Target>/synclayer-config.json`. Al reinstalar, el instalador escribe el agente en `agents/<alias>.md` con
+  `name: <alias>` y reemplaza el nombre del rol por el alias (minúscula, Capitalizada, MAYÚSCULAS y
+  `@agent-<rol>`, con límite de palabra) en `description:` y cuerpo de los nueve agentes y en
+  `rules/agentes.md` y `docs/agentes.md`. El hook no se transforma y los bloques `hooks:` quedan byte a byte.
+  El repositorio conserva los nombres originales. Sin alias, los bytes y la salida son los de siempre.
+- La tabla se valida entera antes de escribir (V1 a V8; exit 1, también con `-DryRun`): minúsculas, letra
+  inicial, `[a-z0-9_-]` y hasta 64 caracteres; ni palabras de YAML, ni nombres de dispositivo de Windows, ni
+  los nueve nombres reservados (los siete integrados, `fork` y `output-style-setup`: lista cerrada), ni el
+  rol de otro agente, ni repetidos, ni un rol como palabra, ni una ruta del manifiesto.
+- El instalador separa el rol de la ruta de destino; el estado pasa a esquema 3 (`dest` en todas las
+  entradas, hasta 74 caracteres) sólo si algún destino difiere del rol, y vuelve a esquema 2 sin alias. El
+  archivo con el nombre anterior no se borra: sale `HUERFANO` con un aviso por stderr, una vez.
+- Documentación (T8): `README.md` gana la sección «Alias» (formato, reglas, qué se renombra, probar y
+  cambiar, tabla de situaciones, qué no está verificado) y actualiza «Instalación» (línea `Alias:`, estado
+  `HUERFANO`, esquema 3, exit 1 y frase del exit 3), «Límites del instalador» (reemplazo textual, límite de
+  palabra, reservados cerrados, agente propio con el mismo `name:` en el caso P10, colisiones, `dest` de 74,
+  laxitud de `Get-Prop` según P11), «Límites del reporte de uso» (un agente con alias sale como
+  `(otro agente)`), «Dos copias», «Estructura» y «Pruebas». `CLAUDE.md` suma el contrato con las pruebas y los
+  puntos no obvios. `docs/agentes.md` gana «Cambiar el nombre de un agente» sin nombres de rol como ejemplo (se
+  transformaría al instalar). El backlog anota el estado de la Fase 4 y la tarea de `Get-Prop` (P11) para
+  después de la fase.
+- No verificado: con alias reales el efecto en Claude Code real (que se invoque por el alias, `_` y `-` en
+  `name:`, el caso de dos archivos con el mismo `name:`, la recarga en caliente) lo comprueba el propietario
+  en G1/V1. Ningún documento lo da por probado.
+- Pruebas: 1579 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de
+  uso).
+
+### Corregido
+
+- Prueba frágil `test_no_object_reprs_in_any_output` (reporte de uso): buscaba `0x` suelto y fallaba al azar
+  cuando la carpeta temporal contenía `0x`. Ahora busca el patrón de un repr de objeto; se añaden 2 pruebas
+  deterministas.
+- `com0` y `lpt0` pasan a ser nombres de dispositivo reservados: `$AllowedPattern` de `install.ps1` y `ALLOWED`
+  de `tools/build_manifest.py` usan `com[0-9]` y `lpt[0-9]`. Un alias `com0` o `lpt0` da exit 1, y un
+  manifiesto con `agents/com0.md` también.
+
+### Añadido (Fase 4, cierre)
+
+- `sentinel`: suite de 1571 pruebas en verde y los 61 casos de la sección 3.11 del plan cubiertos; 4 pruebas
+  `test_f4c1_*` nuevas, comprobadas con mutaciones.
+- `shield` sobre el cambio completo: sin hallazgos Critical, High ni Medium; 3 Low.
+- `auditor` sobre el cambio completo: sin Critical; el Important de los conteos de pruebas, corregido.
+- Documentación: el límite del estado (integridad, no autenticidad) cubre también `dest`; las referencias por
+  nombre que escribe el usuario incluyen las instrucciones en texto libre; la fila de la tabla de situaciones
+  «volver a un nombre anterior» se generaliza.
+- No verificado: G1/V1 (efecto de los alias en Claude Code real, caso P10) y V2 (aplicar los alias al
+  `~/.claude` del propietario) siguen pendientes.
+- Pruebas: 1579 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de
+  uso).
+
+### Añadido (Fase 4, T7: huérfanos por cambio de nombre y frase extra del exit 3)
+
+- Cada fila `HUERFANO` lleva `RenamedTo`: el destino actual del rol si el rol de la entrada previa sigue en el
+  manifiesto; si no, es un huérfano clásico.
+- Un huérfano por cambio de nombre da un aviso por stderr, uno por archivo, sólo si el archivo existe
+  (`File.Exists`; nunca se abre, respalda ni borra), en `-DryRun` y en ejecución real, sin cambiar el exit code.
+- La nota por stdout «ya no están en el manifiesto» sale ahora sólo si hay algún huérfano clásico (texto sin
+  cambio).
+- Exit 3: se añade «Si el archivo es un agente tuyo con el mismo nombre que un alias, elige otro alias.» sólo si
+  algún `MODIFICADO` está en una ruta con alias (destino distinto del `path`), antes de la frase final de
+  `model:`/`effort:`, que sigue siempre al final.
+- Sin alias la salida es idéntica a la base (comparada byte a byte en 14 escenarios). `synclayer-config.json`
+  nunca se escribe ni se respalda.
+- Pruebas: 19 `test_f4t7_*` (S1 a S12, casos 50 a 53) y aserciones nuevas en el caso 20 de T3.
+- No verificado: con alias reales el efecto en Claude Code real lo comprueba el propietario en G1/V1.
+- Pendiente (lo cerró T8): documentación final y límites de alias y frontmatter.
+- Pruebas: la suite pasa a 1569 pruebas, 319 saltadas (316 de `install.ps1` contra pwsh y 3 de la rama POSIX del
+  reporte de uso).
+
+### Añadido (Fase 4, T6: alias con niveles, repositorio real y `-DryRun`)
+
+- Pruebas de los alias con los niveles, del repositorio real con nueve alias y de `-DryRun` (casos 41 a 46,
+  `test_f4t6_*`). Con alias, `model:` y `effort:` salen de la celda del rol, no del destino, y `Ajuste:` lleva la
+  ruta de destino.
+- Repositorio real con nueve alias en los niveles 5 y 3: 13 archivos (12 gestionados + estado) y ningún nombre de
+  rol en los once textos salvo `escribe`, `escriben`, `describe`, `reescribe` y `sobrescribe`. `-DryRun` con alias
+  no escribe nada. El hook sale con el hash del manifiesto y los `hooks:` de `sentinel`, `auditor`, `shield` y
+  `debugger` quedan intactos. Una verificación posterior alterada da exit 4.
+- Caso 46: regresión de la salida del nivel 5 sin alias, idéntica byte a byte a la de antes de la fase (golden
+  embebido `F4T6_GOLDEN`, calculado con el instalador anterior a la fase; normaliza las rutas temporales también
+  en su forma escapada no ASCII).
+- Único cambio de código: `$verifyWhat` con tabla efectiva no vacía dice `lo esperado para el nivel N y los alias`
+  (también en el nivel 5: `lo esperado para el nivel 5 y los alias`). Sin tabla efectiva (vacía o alias igual al
+  rol) los textos no cambian. Cierra el pendiente de T5.
+- Revisiones: `auditor` sin Critical ni Important (Minor y Low corregidos); `shield` sin hallazgos de ninguna
+  severidad. Sin alias, la salida es idéntica a la base en 14 a 15 escenarios por revisor.
+- No verificado: con alias reales el efecto en Claude Code real lo comprueba el propietario en G1/V1.
+- Pendiente (la nota de huérfanos y la frase extra del exit 3 las cerró T7): documentación final y límites de
+  alias y frontmatter (T8).
+- Pruebas: la suite pasa a 1531 pruebas, 300 saltadas (297 de `install.ps1` contra pwsh y 3 de la rama POSIX del
+  reporte de uso).
+
+### Añadido (Fase 4, T5: transformación de textos y activación de los alias)
+
+- `install.ps1` aplica los alias de punta a punta. Funciones puras nuevas con autocomprobación: `New-AliasRegex`,
+  `ConvertTo-AliasText`, `Test-AliasDescriptionLine` y `ConvertTo-AliasBytes`. El bloque `# Alias:` calcula
+  `$destRel` desde la tabla efectiva y `$aliasBytes` (bytes con alias de los nueve agentes, de
+  `rules/agentes.md` y de `docs/agentes.md`); `# Nivel:` parte de `$aliasBytes` y busca la celda por rol. El
+  alias nunca entra en la regex (sólo las formas de los roles, escapadas) y rige el límite de palabra E1.
+  `hooks/agent_guard.py` no se transforma y los bloques `hooks:` quedan byte a byte.
+- Se retiró la guardia temporal de T2 y sus dos pruebas; las pruebas de T2 afines se ajustaron sin debilitarlas.
+- Un frontmatter defectuoso con alias da exit 1 en ambos modos (también `-DryRun`), sin escribir nada, y el
+  mensaje nombra el rol. Con alias se exige ASCII imprimible en todo el frontmatter y que la línea tras `name:`
+  sea `---` o `clave:`. La transformación recorre los nueve agentes aunque sólo uno tenga alias: un defecto en
+  uno sin alias también detiene. Un agente sin cuerpo y sin LF final se instala.
+- Sin alias efectivo no se llama a la transformación y la salida es idéntica a la base (13 + 11 + 17
+  escenarios, 0 diferencias).
+- Revisiones: `auditor` sin Critical ni Important (4 Minor corregidos); `shield` sin Critical, High ni Medium
+  (Low de frontmatter corregido; Low de `$verifyWhat` queda para T6).
+- No verificado: con alias reales activos el efecto en Claude Code real (renombrar un agente, `effort:`, caso
+  P10) lo comprueba el propietario en G1/V1.
+- Pendiente (`$verifyWhat` lo cerró T6): `$verifyWhat` dice «el manifiesto» con alias en nivel 5; frase extra del exit 3 y aviso de
+  huérfano por cambio de nombre (T7); frontmatter y límites de alias documentados en T8. Límite aceptado: con
+  clave repetida en la tabla gana la última, sin aviso (heredado de T2).
+- Pruebas: casos 32 a 40 y 56 del plan (`test_f4t5_*`). La suite pasa a 1512 pruebas, 291 saltadas (288 de
+  `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de uso).
+
+### Añadido (Fase 4, T4: rol separado de la ruta de destino y estado con esquema 3)
+
+- `install.ps1` separa el rol (`$rel`: clave de manifiesto, niveles, `$outBytes` y `$outHash`, mensajes de nivel)
+  de la ruta de destino (`$destRel[$rel]`: leer, escribir, respaldar, verificar y clasificar contra
+  `prevByDest`) en los Pasos 4 a 9. El bloque `# Alias:` calcula `$destRel`; en producción es siempre
+  identidad, porque la guardia temporal de T2 sigue y la retira T5. El ancla `# Alias:` es ahora la línea
+  «# Alias: fin del bloque...», tras el cálculo y antes de `Get-DestRelProblem`.
+- Función nueva `Get-DestRelProblem` (D1 a D7, defensa en profundidad): exit 1 antes de escribir, también en
+  `-DryRun`, y el mensaje nombra el rol, no la ruta. Las filas `HUERFANO` llevan `Path = $null`.
+- `ConvertTo-StateBytes` escribe el esquema 2 con identidad y el esquema 3 (`dest` en todas las entradas) si
+  algún destino difiere del rol. Con identidad, los bytes de destino, el estado y la salida son idénticos a los
+  de la base (comparados en 16 escenarios de `forge` y 17 de `auditor`, 0 diferencias).
+- Revisiones: `auditor` sin Critical ni Important (2 Minor corregidos con pruebas); `shield` sin Critical, High
+  ni Medium (2 Low aceptados: `$row.Dest` sin `Format-Safe`, hoy no explotable, y un TOCTOU preexistente).
+- Pruebas: casos 26 a 31 del plan (`test_f4t4_*`) y 4 pruebas de límite 74/75 y de manifiesto. La suite pasa a
+  1479 pruebas, 275 saltadas (272 de `install.ps1` contra pwsh y 3 de la rama POSIX del reporte de uso).
+
+### Añadido (Fase 4, T3: lectura del estado con esquema 3 y huérfanos)
+
+- `install.ps1` lee el estado con esquema 3: cada entrada puede llevar `dest`, la ruta real de destino de ese
+  rol (en la Fase 4, `agents/<alias>.md`). Un `dest` distinto de `path` debe ser `agents/<alias>.md` de hasta
+  74 caracteres, único y sin coincidir con el `path` de otra entrada ni con una ruta del manifiesto actual; un
+  estado con esquema 3 inválido, o con la clave `dest` en esquema 2, se trata como ausente y nunca produce
+  `ACTUALIZAR` ni `HUERFANO`. La validación usa `HashSet` ordinales (con listas tardaba 304 s con 2000
+  entradas) y todos los mensajes del estado y del manifiesto se recortan con `Format-SafeShort`.
+- La clasificación usa `prevByDest` (lo escrito, por ruta de destino) y el huérfano es el destino previo que
+  ya no es destino actual. Con estados de esquema 1 y 2 el resultado es idéntico al de antes. El instalador
+  todavía escribe el esquema 2 y no aplica alias; ningún camino usa `dest` para escribir, respaldar o borrar.
+- Enmienda E3 del plan (aprobada tras T3): las reglas de `dest` (colisión con el manifiesto, tope de 74
+  caracteres, validación ordinal) y la situación S14 (el repositorio añade un agente con el nombre de un alias
+  ya instalado: el estado se trata como ausente y hace falta `-Force`). Punto abierto P11: `Get-Prop`
+  desenrolla listas de un elemento (laxitud heredada de las Fases 1 y 3).
+- Pruebas: casos 20 a 25 y 59 a 61 del plan; `tests/aliases_ref.py` gana la referencia independiente del estado
+  con esquema 3.
+
+### Añadido (Fase 4, T2: clave `aliases` del archivo de configuración)
+
+- `install.ps1` acepta la clave opcional `aliases` (objeto rol a alias) en `<Target>/synclayer-config.json`,
+  junto a `level`; cualquier otra clave sigue dando exit 1. La lectura sigue siendo única y la validación
+  de la tabla entera ocurre antes de escribir nada, también en `-DryRun`: el alias va en minúsculas,
+  empieza por letra, usa sólo `[a-z0-9_-]` y hasta 64 caracteres; no puede ser una palabra que YAML no lee
+  como cadena, un nombre de dispositivo de Windows, un agente integrado de Claude Code (los siete de la
+  documentación más `fork` y `output-style-setup`, la lista es cerrada), el rol de otro agente, un alias
+  repetido, contener un rol como palabra, formar un ciclo ni coincidir con una ruta del manifiesto. Un alias
+  igual al propio rol se descarta sin error. Los mensajes nunca contienen el valor de un alias inválido.
+- La salida muestra una línea `Alias: <rol> -> <alias> (agents/<alias>.md)` por alias efectivo. **Guardia
+  temporal:** una tabla efectiva válida y no vacía termina con exit 1 («los alias aun no se pueden aplicar
+  en esta version») antes de escribir; la retira T5. Sin `aliases`, o con una tabla efectiva vacía, la salida
+  y los bytes son idénticos a los de antes.
+- Enmienda E2 del plan (aprobada tras T2): `$ReservedAliases` pasa de siete a nueve nombres y V8 compara el
+  destino de toda alias efectiva con todas las rutas del manifiesto, esté o no el rol de origen. Punto
+  abierto P10: un agente propio del usuario con el mismo `name:` que un alias.
+- Pruebas: casos 9 a 19 y 57 y 58 del plan, comparados con la referencia independiente
+  `tests/aliases_ref.py`; una prueba de comportamiento fija que la configuración se lee una sola vez.
+
+### Añadido (Fase 4, T1: listas cerradas del alias y referencia independiente)
+
+- `install.ps1` lleva tres listas cerradas para los alias de agentes, todavía sin uso (el instalador se
+  comporta igual que antes): `$AliasRoles` (los nueve roles), `$ReservedAliases` (nombres de agentes
+  integrados de Claude Code que un alias no puede pisar) y `$YamlWords` (palabras que YAML no lee como
+  cadena).
+- `tests/aliases_ref.py` es la referencia independiente en Python de lo que el instalador hará con los alias:
+  validación de la tabla, las tres formas del nombre (minúscula, Capitalizada, MAYÚSCULAS) y reemplazo en
+  una sola pasada con límite de palabra. `tests/test_aliases.py` la prueba y fija el inventario de cada
+  rol en los once textos que se instalan.
+- Enmienda E1 del plan: al implementar T1 se vio que contar todo byte alto como letra dejaba sin reemplazar
+  `SENTINEL` y `AUDITOR` pegados a comillas angulares en `docs/agentes.md`. Ahora una letra es
+  `[A-Za-z0-9_]` o una letra latina acentuada real (secuencia UTF-8 `C3 80` a `C3 BF`) y el resto, comillas
+  angulares, signos de interrogación, rayas, espacio duro y marcas combinantes, es límite. Límites
+  reconocidos: `×` y `÷` cuentan como letra y las letras fuera de U+00C0 a U+00FF son límite.
+- Plan y exploración: `docs/plans/2026-11-22-fase4-nombres-configurables.md` y
+  `2026-11-22-fase4-nombres-exploracion.md`: la identidad de un subagente es su `name:`; las referencias por
+  nombre del usuario (`Agent(nombre)`, `permissions.deny`, matchers de hooks, `--agent`) se romperían al
+  renombrar.
+
 ### Añadido (Fase 3, cierre: T7)
 
 Estado final de la fase de esfuerzo configurable (plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`).
