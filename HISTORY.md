@@ -6,8 +6,8 @@
 
 Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
 con los valores por defecto de P1 a P14; rama `feat/configuraciones-dinamicas`. 9 unidades (T1 a T8 y el
-cierre), 5 cerradas (T1 a T5, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar, y
-los textos del reporte de uso salen de un catálogo (sin `--lang` todavía).
+cierre), 6 cerradas (T1 a T6, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar, y
+el reporte de uso sale en español o en inglés con `--lang`.
 
 - Candidatas que entran: carpeta de planes configurable (clave `plans_dir` de `synclayer-config.json`,
   aplicada al instalar; sin la clave, bytes y salida idénticos a los de hoy); idioma del reporte de uso
@@ -22,6 +22,29 @@ los textos del reporte de uso salen de un catálogo (sin `--lang` todavía).
   editarla a mano o un agente de proyecto. (e) estrictez de la guarda: exige transformar el bloque `hooks:`,
   hoy prohibido, y un modo sin guarda contradice la falla cerrada; no se ofrece nada.
 - Pendiente del propietario, fuera del conteo: G1 de la Fase 5 (no bloquea), V1 y V2.
+
+### Añadido (Fase 5, T6)
+
+- Idioma del reporte de uso: `LANGS = ("es", "en")`, catálogo `en` de 137 claves por idioma (mismo juego de claves
+  que `es`; traducción fiel, ASCII, sin promesas de ahorro, calidad ni costo). `render_project_report` y
+  `render_global_report` aceptan `lang` (por defecto `es`); un valor que no sea la cadena `es` ni `en` lanza
+  `ValueError` con mensaje fijo, sin eco.
+- `--lang es|en` en `project` y `global` (no en `inspect`), por defecto `es`: `type=` propio, comparación exacta
+  (`EN`, `en-US` y vacío dan exit 2 con `idioma invalido: use es o en`, sin repetir el valor), validado antes de leer
+  nada; repetido gana el último; con `--stdout` imprime en el idioma pedido; un reporte `en` sustituye al `es` en el
+  mismo destino (mismo marcador). Sin `--lang` los bytes son los de antes.
+- Etiquetas cerradas del lector traducidas con tablas cerradas por idioma (`_labels`, `_cell`; los nombres de
+  conjunto sin paréntesis solo en columnas de conjunto); `_code(text, t=None)` toma sus marcadores de vacío y de no
+  cadena del catálogo. No cambian con el idioma: cifras, fechas, orden, marcador, `REPORT_SCHEMA`, claves del pie
+  (`report_schema`, `herramienta`, `ultima_version_verificada`, `proyecto`), destinos, nombres del usuario, mensajes
+  de la CLI e `inspect` (en español). Lector y agregado sin cambios.
+- Pruebas: golden `tests/usage_golden_en.json` (mismos cinco escenarios y receta que el del español),
+  `ReportGoldenEn`, `ReportCatalogCoverageEn`, `ReportCatalogEn`, `ReportLang`, `LangOption` (CLI) y
+  `LangPrivacyEndToEnd` (bordes). `ReportTextsOutsideCatalog` baja a 7 excepciones (`integrado`, `(no cadena)` y
+  `(vacio)` pasan al catálogo). Suite: 1790 pruebas, 367 saltadas (365 contra pwsh y 2 de la rama POSIX).
+- Límites: el reporte `en` es traducción; las claves del pie siguen en español; `argparse` repite en stderr los
+  argumentos desconocidos (también `inspect --lang X`, ya ocurría antes); `lbl_other_version` no existe porque
+  `versions_seen` es numérico. El efecto con un `~/.claude` real no se verificó (V2 del propietario).
 
 ### Añadido (Fase 5, T5)
 

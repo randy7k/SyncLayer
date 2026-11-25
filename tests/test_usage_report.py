@@ -5617,7 +5617,7 @@ class ReportPrivacy(ReaderBase):
     def test_generator_receives_only_aggregated_metrics(self):
         import inspect
         params = list(inspect.signature(ur.render_project_report).parameters)
-        self.assertEqual(params, ["metrics", "project_alias", "generated"])
+        self.assertEqual(params, ["metrics", "project_alias", "generated", "lang"])    # T6: `lang` al final
 
 
 class ReportSourceHygiene(unittest.TestCase):
@@ -6055,6 +6055,15 @@ class ReportPurity(unittest.TestCase):
         # Fase 5, T5: el catalogo de textos (los textos fijos salen de `CATALOG[DEFAULT_LANG]`; HOW_TO_READ,
         # PRIVACY_NOTES, NOTE_*, LEGEND_SMALL y UNKNOWN_WARNING dejan de alcanzarse: son alias del catalogo)
         "CATALOG", "DEFAULT_LANG", "_ES", "_ES_HOW_TO_READ_COMMON",
+        # Fase 5, T6: idioma `en` y traduccion de etiquetas cerradas (todo puro: constantes, tablas y funciones que
+        # solo leen el catalogo; ninguna lee estado que cambie con la corrida). `LANGS` y `MSG_REPORT_LANG` validan
+        # `lang`; `_EN*` es el catalogo ingles; `_cell`/`_labels` aplican la tabla cerrada de etiquetas; los
+        # `*_INDEX`, `WARNING_ORDER` y `READ_INFO_SHOWN` eligen la traduccion de avisos y contadores por posicion;
+        # `OTHER_*`, `NO_META_AGENT` y `GROUP_*` son los identificadores del lector que la tabla traduce.
+        "LANGS", "MSG_REPORT_LANG", "_EN", "_EN_HOW_TO_READ_COMMON", "_EN_REPEAT_LIMITATIONS",
+        "_EN_SKILL_LIMITATIONS", "_cell", "_labels", "WARNING_ORDER", "WARNING_INDEX", "READ_INCIDENT_INDEX",
+        "READ_INFO_INDEX", "READ_INFO_SHOWN", "OTHER_AGENT", "NO_META_AGENT", "OTHER_SKILL", "OTHER_MODEL",
+        "OTHER_LABELS", "OTHER_PLUGIN_GROUP", "GROUP_BUILTIN", "GROUP_OTHERS", "GROUP_PLUGIN_INVALID",
         # tipos de las metricas (isinstance)
         "UsageMetrics", "ScopeMetrics", "DataQuality", "Dist", "TokenStats", "SkillMetrics", "SkillQuality",
         "Window",
@@ -6063,6 +6072,8 @@ class ReportPurity(unittest.TestCase):
         "ValueError", "any", "append", "astimezone", "dataclass", "date", "divmod", "groups", "int", "isinstance",
         "isoformat", "join", "len", "list", "match", "max", "min", "replace", "sorted", "sum", "tuple", "extend",
         "startswith", "get", "items",
+        # `type(lang) is str` de la validacion de `lang` (excluye subclases de str)
+        "type",
         # parametro de `_model_rows`: la funcion pura que el llamador inyecta (`_global_model_label` o None)
         "label_of",
     ))
@@ -6862,7 +6873,8 @@ class GlobalPrivacy(ReaderBase):
 
     def test_generator_receives_only_aggregated_metrics_and_a_date(self):
         import inspect
-        self.assertEqual(list(inspect.signature(ur.render_global_report).parameters), ["metrics", "generated"])
+        self.assertEqual(list(inspect.signature(ur.render_global_report).parameters),
+                         ["metrics", "generated", "lang"])    # T6: `lang` al final
 
     def test_the_text_is_the_same_whatever_the_digest_keys_of_each_read(self):
         first = self._text()
@@ -7697,11 +7709,13 @@ class ReportCatalog(unittest.TestCase):
         self.assertEqual(len(ur.KNOWN_WARNINGS), 9)
         self.assertEqual(ur.TOOL_NAME, "tools/usage_report.py")
 
-    def test_public_signatures_do_not_change_in_t5(self):
+    def test_public_signatures_gain_only_a_trailing_lang_in_t6(self):
+        # T5 las dejo sin cambios; T6 anade `lang` al final (por defecto `es`, ver `ReportLang`)
         import inspect
         self.assertEqual(list(inspect.signature(ur.render_project_report).parameters),
-                         ["metrics", "project_alias", "generated"])
-        self.assertEqual(list(inspect.signature(ur.render_global_report).parameters), ["metrics", "generated"])
+                         ["metrics", "project_alias", "generated", "lang"])
+        self.assertEqual(list(inspect.signature(ur.render_global_report).parameters),
+                         ["metrics", "generated", "lang"])
 
 
 class ReportTextsOutsideCatalog(unittest.TestCase):
@@ -7713,16 +7727,11 @@ class ReportTextsOutsideCatalog(unittest.TestCase):
         # identificadores de las listas cerradas del lector (se comparan, no se muestran como texto)
         "plugin:": "prefijo de conjunto `plugin:<prefijo>` que produce el lector (startswith)",
         "SyncLayer": "nombre de conjunto del lector (comparacion en `_skill_shown`)",
-        "integrado": "nombre de conjunto del lector (comparacion en `_skill_shown`)",
         # claves del pie: identificadores estables que no se traducen (3.2.3 del plan, P10)
         "report_schema: %d": "clave estable del pie",
         "herramienta: ": "clave estable del pie",
         "ultima_version_verificada: ": "clave estable del pie",
         "proyecto: ": "clave estable del pie (el valor es el alias)",
-        # marcadores de `_code` para un valor que no es texto o esta vacio: `_code` no recibe catalogo (lo usan
-        # las pruebas y todas las tablas con un solo argumento); T6 decide si los traduce
-        "`(no cadena)`": "marcador de `_code`; sin acceso al catalogo",
-        "`(vacio)`": "marcador de `_code`; sin acceso al catalogo",
         # error interno de programacion, nunca llega al reporte
         "fila con columnas de mas o de menos": "ValueError interno de `_raw_table`: no es texto del reporte",
     }
@@ -7812,6 +7821,11 @@ class ReportCatalogCoverage(unittest.TestCase):
     """Cada texto del catalogo se ve en alguno de los reportes del golden: cambiar cualquier texto (o cualquier
     elemento de una tupla) cambia al menos un reporte. Es una mutacion de todo el catalogo, texto por texto."""
 
+    # Claves de ETIQUETA que ningun escenario del golden muestra (T6): las ve `ReportLabels` con su propio escenario
+    # (`test_label_only_keys_change_the_labels_scenario_in_their_own_language`). Lista cerrada, en el orden de
+    # `_catalog_leaves`; la prueba exige que sean EXACTAMENTE las silenciosas (ni una menos ni una de mas).
+    LABEL_ONLY = [("code_empty", None), ("code_not_text", None), ("lbl_other_agent", None)]
+
     def mutated(self, key, index):
         import types
         entry = dict(ur.CATALOG["es"])
@@ -7838,7 +7852,627 @@ class ReportCatalogCoverage(unittest.TestCase):
                         break
             if not changed:
                 silent.append((key, index))
-        self.assertEqual(silent, [], "textos del catalogo que ningun escenario del golden muestra")
+        self.assertEqual(silent, self.LABEL_ONLY, "textos del catalogo que ningun escenario del golden muestra")
+
+
+# --- Fase 5, T6: catalogo `en`, parametro `lang` y golden en ---
+GOLDEN_EN_PATH = os.path.join(ROOT, "tests", "usage_golden_en.json")
+
+
+def golden_outputs(lang):
+    """{escenario: {"project": texto, "global": texto}} con el idioma `lang` y los mismos cinco escenarios del golden es.
+
+    Receta para regenerar `tests/usage_golden_en.json` (solo si el ingles cambia a proposito):
+    `json.dumps(golden_outputs("en"), indent=1, sort_keys=True)` mas un LF final, escrito en ASCII (json.dumps escapa
+    lo demas, como en el golden es)."""
+    out = {}
+    with mock.patch.object(ur, "VERIFIED_MAX", GOLDEN_ES_VERIFIED_MAX):
+        for name, build in GOLDEN_ES_BUILDERS:
+            metrics = build()
+            out[name] = {"project": ur.render_project_report(metrics, ALIAS, generated=GOLDEN_ES_DAY, lang=lang),
+                         "global": ur.render_global_report(metrics, generated=GOLDEN_ES_DAY, lang=lang)}
+    return out
+
+
+def _read_golden_en():
+    with open(GOLDEN_EN_PATH, "rb") as f:
+        raw = f.read()
+    raw.decode("ascii")
+    return json.loads(raw.decode("ascii"))
+
+
+def _is_ascii_or_bar(text):
+    return all(ch == "\n" or " " <= ch <= "~" or ch in (ur.BAR_FULL, ur.BAR_EMPTY) for ch in text)
+
+
+class ReportGoldenEn(unittest.TestCase):
+    """T6: el ingles de los dos reportes, byte a byte, sobre los mismos cinco escenarios del golden es."""
+
+    def test_golden_scenarios_are_the_same_closed_list_as_the_spanish_one(self):
+        self.assertEqual(sorted(_read_golden_en()), sorted(name for name, _ in GOLDEN_ES_BUILDERS))
+        for name, texts in _read_golden_en().items():
+            self.assertEqual(sorted(texts), ["global", "project"], name)
+
+    def test_project_and_global_reports_match_the_golden_byte_for_byte(self):
+        golden = _read_golden_en()
+        current = golden_outputs("en")
+        for name in golden:
+            for kind in ("project", "global"):
+                with self.subTest(scenario=name, report=kind):
+                    self.assertEqual(current[name][kind], golden[name][kind])
+                    self.assertEqual(current[name][kind].encode("utf-8"), golden[name][kind].encode("utf-8"))
+
+    def test_golden_is_ascii_except_the_two_bar_characters(self):
+        for name, texts in _read_golden_en().items():
+            for kind, text in texts.items():
+                self.assertTrue(_is_ascii_or_bar(text), (name, kind))
+                self.assertNotIn("\r", text)
+                self.assertTrue(text.endswith("\n"))
+
+    def test_golden_does_not_depend_on_the_current_verified_max(self):
+        golden = _read_golden_en()
+        with mock.patch.object(ur, "VERIFIED_MAX", "9.9.9"):
+            current = golden_outputs("en")
+        self.assertEqual(current, golden)
+
+    def test_two_runs_give_the_same_bytes_and_the_marker_is_the_first_line(self):
+        first, second = golden_outputs("en"), golden_outputs("en")
+        self.assertEqual(first, second)
+        for name, texts in first.items():
+            for kind, text in texts.items():
+                self.assertEqual(text.split("\n", 1)[0], "<!-- synclayer-usage-report v1 -->", (name, kind))
+
+    def test_the_english_golden_is_not_the_spanish_one_and_the_spanish_one_is_untouched(self):
+        en, es = _read_golden_en(), _read_golden_es()
+        for name in es:
+            for kind in ("project", "global"):
+                self.assertNotEqual(en[name][kind], es[name][kind], (name, kind))
+        self.assertEqual(golden_outputs("es"), es)
+
+    def test_golden_covers_the_sections_the_plan_asks_for(self):
+        wide = _read_golden_en()["wide"]["project"]
+        self.assertGreater(wide.count("\n"), 400)
+        self.assertEqual(wide.count("> - NOTICE: "), 16)
+        self.assertIn("Showing the first %d rows of" % ur.MAX_TABLE_ROWS, wide)
+        self.assertIn("no recognizable version", wide)
+        self.assertIn("(other group)", wide)
+
+
+class ReportCatalogCoverageEn(unittest.TestCase):
+    """Cada texto del catalogo `en` se ve en algun reporte del golden en (mutacion de todo el catalogo, texto por
+    texto), salvo las claves de etiqueta que cubre `ReportLabels` con su propio escenario."""
+
+    def mutated(self, key, index):
+        import types
+        entry = dict(ur.CATALOG["en"])
+        value = entry[key]
+        if index is None:
+            entry[key] = "ZZ" + value
+        else:
+            items = list(value)
+            items[index] = "ZZ" + items[index]
+            entry[key] = tuple(items)
+        return types.MappingProxyType({"es": ur.CATALOG["es"], "en": types.MappingProxyType(entry)})
+
+    def test_each_english_text_changes_some_golden_report(self):
+        golden = _read_golden_en()
+        silent = []
+        for key, index, _text in _catalog_leaves(ur.CATALOG["en"]):
+            with mock.patch.object(ur, "CATALOG", self.mutated(key, index)):
+                changed = False
+                with mock.patch.object(ur, "VERIFIED_MAX", GOLDEN_ES_VERIFIED_MAX):
+                    for name, build in GOLDEN_ES_BUILDERS:
+                        metrics = build()
+                        if (ur.render_project_report(metrics, ALIAS, generated=GOLDEN_ES_DAY, lang="en")
+                                != golden[name]["project"]
+                                or ur.render_global_report(metrics, generated=GOLDEN_ES_DAY, lang="en")
+                                != golden[name]["global"]):
+                            changed = True
+                            break
+            if not changed:
+                silent.append((key, index))
+        self.assertEqual(silent, ReportCatalogCoverage.LABEL_ONLY, "textos en que ningun escenario del golden muestra")
+
+
+# Neutros: valores iguales en es y en (cabeceras o siglas que no se traducen), con su motivo.
+EN_NEUTRAL = {
+    ("th_agent_tokens", 2): "n: siglas de tamano de muestra",
+    ("th_agent_tokens", 6): "p90: percentil",
+    ("th_agent_time", 3): "p90: percentil",
+    ("th_agent_time", 5): "p90: percentil",
+    ("th_group", 5): "p90: percentil",
+    ("th_group_detail", 3): "n: siglas de tamano de muestra",
+    ("th_group_range", 3): "n: siglas de tamano de muestra",
+    ("th_group_range", 5): "p90: percentil",
+    ("th_range", 3): "p90: percentil",
+    ("th_skill", 0): "Skill: termino de Claude Code",
+    ("th_skill_agent", 2): "Skill: termino de Claude Code",
+    ("th_skill_group", 1): "Skills: termino de Claude Code",
+    ("h_skills", None): "## Skills: termino de Claude Code",
+    ("h_skills_sub", None): "### Skills: termino de Claude Code",
+    ("hdr_claude", None): "> - Claude Code: nombre propio",
+}
+
+PROMISE_PATTERNS_EN = (
+    r"\bsav(?:e|es|ed|ing|ings)\b", r"\bcheap(?:er|est)?\b", r"\bcost[- ]effective\b", r"\bbetter\b",
+    r"\bbest\b", r"\bimprov\w*", r"\befficien\w*", r"\breduc\w*", r"\boptimi[sz]\w*", r"\bfaster\b",
+    r"\bcut(?:s|ting)? (?:costs?|spend)\b", r"\bhigher quality\b",
+)
+# Frases negadas que se admiten (cada una dice que la herramienta NO promete eso).
+PROMISE_ALLOWED_EN = ("nor anyone's savings",)
+
+
+class ReportCatalogEn(unittest.TestCase):
+    """Casos 34 y 35: el catalogo `en`. La paridad de claves, tipos, longitudes y marcadores con `es` la comprueba
+    `ReportCatalog` sobre TODOS los idiomas de `CATALOG`; aqui, lo propio del ingles."""
+
+    def test_english_is_a_closed_language_with_its_own_entry(self):
+        import types
+        self.assertEqual(ur.LANGS, ("es", "en"))
+        self.assertEqual(ur.DEFAULT_LANG, "es")
+        self.assertEqual(set(ur.CATALOG), {"es", "en"})
+        self.assertIsInstance(ur.CATALOG["en"], types.MappingProxyType)
+        self.assertEqual(len(ur.CATALOG["en"]["q_problems"]), 17)
+        self.assertEqual(len(ur.CATALOG["en"]["q_problems"]), len(ur.CATALOG["es"]["q_problems"]))
+
+    def test_every_english_value_is_ascii(self):
+        for key, index, text in _catalog_leaves(ur.CATALOG["en"]):
+            text.encode("ascii")
+            self.assertTrue(all(" " <= ch <= "~" for ch in text), (key, index))
+
+    def test_no_english_value_equals_the_spanish_one_outside_the_neutral_list(self):
+        seen = set()
+        for key, index, text in _catalog_leaves(ur.CATALOG["en"]):
+            es_value = ur.CATALOG["es"][key] if index is None else ur.CATALOG["es"][key][index]
+            if text == es_value:
+                self.assertIn((key, index), EN_NEUTRAL, (key, index, text))
+                seen.add((key, index))
+        self.assertEqual(seen, set(EN_NEUTRAL))
+
+    def test_the_stable_footer_keys_and_the_marker_are_not_in_the_catalog(self):
+        for lang, entry in ur.CATALOG.items():
+            for key, index, text in _catalog_leaves(entry):
+                for stable in ("report_schema:", "herramienta: ", "ultima_version_verificada", "usage-report v"):
+                    self.assertNotIn(stable, text, (lang, key))
+
+    def test_no_english_value_promises_savings_quality_or_cost(self):
+        for key, index, text in _catalog_leaves(ur.CATALOG["en"]):
+            cleaned = text.lower()
+            for phrase in PROMISE_ALLOWED_EN:
+                cleaned = cleaned.replace(phrase, "")
+            for pattern in PROMISE_PATTERNS_EN:
+                self.assertIsNone(re.search(pattern, cleaned), (key, index, pattern, text))
+
+    def test_the_promise_patterns_catch_what_they_should(self):
+        for text in ("saves tokens", "a cheaper agent", "better quality", "improves results", "cost-effective",
+                     "reduces cost", "higher quality", "optimized"):
+            self.assertTrue(any(re.search(p, text) for p in PROMISE_PATTERNS_EN), text)
+        self.assertFalse(any(re.search(p, "does not show costs") for p in PROMISE_PATTERNS_EN))
+
+    def test_the_english_texts_state_the_same_limits_as_the_spanish_ones(self):
+        # por elemento: cada limite vive en el texto concreto que lo dice, no en la union de todos
+        en = ur.CATALOG["en"]
+        expected = (("how_to_read", 0, ("quality", "cost")), ("how_to_read", 1, ("cost", "invoice")),
+                    ("how_to_read_global", 0, ("quality", "cost")), ("how_to_read_global", 1, ("cost", "invoice")),
+                    ("global_compares", 1, ("quality", "cost", "savings")), ("privacy_notes", 0, ("git",)))
+        for key, index, needles in expected:
+            for needle in needles:
+                self.assertIn(needle, en[key][index], (key, index, needle))
+
+
+class ReportLang(unittest.TestCase):
+    """Casos 36, 37 y 43 sobre los generadores: `lang` sin argumento es `es`, byte a byte; `en` es ASCII, con la
+    misma estructura; un `lang` fuera de la lista da un error fijo sin eco."""
+
+    def test_default_is_spanish_for_both_generators_byte_for_byte(self):
+        for name, build in GOLDEN_ES_BUILDERS:
+            metrics = build()
+            self.assertEqual(ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY),
+                             ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, "es"), name)
+            self.assertEqual(ur.render_project_report(metrics, ALIAS, generated=GOLDEN_ES_DAY),
+                             ur.render_project_report(metrics, ALIAS, generated=GOLDEN_ES_DAY, lang="es"), name)
+            self.assertEqual(ur.render_global_report(metrics, GOLDEN_ES_DAY),
+                             ur.render_global_report(metrics, GOLDEN_ES_DAY, "es"), name)
+            self.assertEqual(ur.render_global_report(metrics),
+                             ur.render_global_report(metrics, None, "es"), name)
+
+    def test_signatures_take_a_trailing_lang_that_defaults_to_es(self):
+        import inspect
+        for func, names in ((ur.render_project_report, ["metrics", "project_alias", "generated", "lang"]),
+                            (ur.render_global_report, ["metrics", "generated", "lang"])):
+            params = inspect.signature(func).parameters
+            self.assertEqual(list(params), names)
+            self.assertEqual(params["lang"].default, "es")
+            self.assertEqual(params["generated"].default, None)
+
+    def test_invalid_lang_is_a_value_error_with_a_fixed_message_and_no_echo(self):
+        metrics = agg([mk(1)])
+        hostile = ("fr", "EN", "En", "en-US", "english", "", " en", "en ", "es\n", "\x00", "../x", "x" * 5000,
+                   "ñ", None, 1, 1.5, b"en", ["en"], ("en",), True, object())
+        for bad in hostile:
+            for call in (lambda b=bad: ur.render_project_report(metrics, ALIAS, lang=b),
+                         lambda b=bad: ur.render_global_report(metrics, lang=b),
+                         lambda b=bad: ur.render_project_report(metrics, ALIAS, None, b),
+                         lambda b=bad: ur.render_global_report(metrics, None, b)):
+                with self.assertRaises(ValueError) as cm:
+                    call()
+                self.assertEqual(str(cm.exception), ur.MSG_REPORT_LANG)
+                text = str(cm.exception)
+                if isinstance(bad, str) and bad.strip() not in ur.MSG_REPORT_LANG:
+                    self.assertNotIn(bad, text)
+        self.assertEqual(ur.MSG_REPORT_LANG.encode("ascii"), ur.MSG_REPORT_LANG.encode("utf-8"))
+        # ni `LANGS` ni el valor entran en el mensaje
+        self.assertNotIn("None", ur.MSG_REPORT_LANG)
+
+    def test_other_argument_errors_keep_their_messages(self):
+        with self.assertRaises(ValueError) as cm:
+            ur.render_project_report("x", ALIAS, lang="en")
+        self.assertEqual(str(cm.exception), ur.MSG_REPORT_METRICS)
+        with self.assertRaises(ValueError) as cm:
+            ur.render_project_report(agg([mk(1)]), "no-alias", lang="en")
+        self.assertEqual(str(cm.exception), ur.MSG_REPORT_ALIAS)
+        with self.assertRaises(ValueError) as cm:
+            ur.render_global_report(agg([mk(1)]), generated="hoy", lang="en")
+        self.assertEqual(str(cm.exception), ur.MSG_REPORT_DATE)
+
+    def test_the_english_report_is_ascii_except_the_bars_and_keeps_the_marker(self):
+        for name, build in GOLDEN_ES_BUILDERS:
+            metrics = build()
+            for text in (ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, "en"),
+                         ur.render_global_report(metrics, GOLDEN_ES_DAY, "en")):
+                self.assertTrue(_is_ascii_or_bar(text), name)
+                self.assertEqual(text.split("\n", 1)[0], ur.REPORT_MARKER)
+                self.assertIn("> - Report schema: 1", text)
+
+    def test_the_stable_footer_keys_do_not_change_with_the_language(self):
+        metrics = agg([mk(1)])
+        for lang in ur.LANGS:
+            project = ur.render_project_report(metrics, ALIAS, lang=lang)
+            glob = ur.render_global_report(metrics, lang=lang)
+            for text in (project, glob):
+                self.assertIn("\n- report_schema: 1\n- herramienta: tools/usage_report.py\n"
+                              "- ultima_version_verificada: `%s`\n" % ur.VERIFIED_MAX, text, lang)
+            self.assertIn("\n- proyecto: %s\n" % ALIAS, project)
+
+    def test_a_lang_that_lies_about_equality_is_rejected_with_the_fixed_message(self):
+        class Liar(str):
+            def __eq__(self, other):
+                return True
+
+            def __hash__(self):
+                return hash("zz")
+
+        metrics = agg([mk(1)])
+        liar = Liar("zz")
+        for call in (lambda: ur.render_project_report(metrics, ALIAS, lang=liar),
+                     lambda: ur.render_global_report(metrics, lang=liar)):
+            with self.assertRaises(ValueError) as cm:
+                call()
+            self.assertEqual(str(cm.exception), ur.MSG_REPORT_LANG)
+            self.assertNotIn("zz", str(cm.exception))
+
+    # --- criterio: el reporte en no contiene ningun texto del catalogo es que difiera del en ---
+    # Excepciones cerradas (hojas es que SI salen en el reporte en): `proyecto` es la clave estable del pie (no se
+    # traduce), `Skills:` es igual en los dos idiomas dentro de un texto mas largo, y el prefijo `` `*`: n < `` es el
+    # marcador de pocas muestras que no cambia.
+    ES_LEAF_EXCEPTIONS = ("proyecto", "Skills:", "`*`: n <")
+
+    def test_the_english_report_contains_no_spanish_catalog_text(self):
+        es, en = ur.CATALOG["es"], ur.CATALOG["en"]
+        texts = [t for pair in golden_outputs("en").values() for t in pair.values()]
+        scenario = _labels_scenario()
+        texts += [ur.render_project_report(scenario, ALIAS, GOLDEN_ES_DAY, "en"),
+                  ur.render_global_report(scenario, GOLDEN_ES_DAY, "en")]
+        report = chr(10).join(texts)
+        checked = 0
+        for key, index, es_text in _catalog_leaves(es):
+            en_text = en[key] if index is None else en[key][index]
+            if es_text == en_text:
+                continue
+            for piece in re.split(r"%[ds%]", es_text):
+                if len(piece) < 4 or any(x in piece for x in self.ES_LEAF_EXCEPTIONS):
+                    continue
+                checked += 1
+                self.assertNotIn(piece, report, (key, index, piece))
+        self.assertGreater(checked, 100)
+
+    def test_group_constants_match_what_the_classifiers_return(self):
+        self.assertEqual(ur.classify_agent("x")[1], ur.GROUP_OTHERS)
+        self.assertEqual(ur.classify_agent("")[1], ur.GROUP_BUILTIN)
+        self.assertEqual(ur.classify_agent("+:x")[1], ur.GROUP_PLUGIN_INVALID)
+        self.assertEqual(ur.classify_skill("x")[1], ur.GROUP_OTHERS)
+        self.assertEqual(ur.classify_skill("+:x")[1], ur.GROUP_PLUGIN_INVALID)
+        self.assertEqual((ur.GROUP_BUILTIN, ur.GROUP_OTHERS, ur.GROUP_PLUGIN_INVALID),
+                         ("integrado", "otros", "plugin:(no-valido)"))
+        self.assertEqual(ur.AGENT_GROUPS, frozenset(("SyncLayer", ur.GROUP_BUILTIN, ur.GROUP_OTHERS,
+                                                     ur.GROUP_PLUGIN_INVALID, ur.NO_META_GROUP)))
+        self.assertEqual(ur.HIDDEN_COUNT_GROUPS, frozenset((ur.GROUP_OTHERS, ur.GROUP_PLUGIN_INVALID,
+                                                            ur.OTHER_GROUP)))
+        self.assertEqual(ur.SKILL_GROUPS, frozenset(("SyncLayer", ur.GROUP_BUILTIN, ur.GROUP_OTHERS,
+                                                     ur.GROUP_PLUGIN_INVALID)))
+
+    # --- caso 37: misma estructura ---
+    SPAN_RE = re.compile(r"`([^`]*)`")
+
+    def back_map(self):
+        """{texto en de una etiqueta: texto es} para comparar los `_code` de los dos idiomas."""
+        es, en = ur.CATALOG["es"], ur.CATALOG["en"]
+        pairs = {}
+        for key in es:
+            if key.startswith(("lbl_", "code_")):
+                pairs[en[key].strip("`")] = es[key].strip("`")
+        for key in ("read_incident_labels", "read_info_labels"):
+            for mine, theirs in zip(en[key], es[key]):
+                pairs[mine] = theirs
+        return pairs
+
+    def assert_same_structure(self, es_text, en_text, label):
+        es_lines, en_lines = es_text.split("\n"), en_text.split("\n")
+        self.assertEqual(len(es_lines), len(en_lines), label)
+        back = self.back_map()
+        for n, (a, b) in enumerate(zip(es_lines, en_lines), 1):
+            where = "%s linea %d" % (label, n)
+            self.assertEqual(a.startswith("|"), b.startswith("|"), where)
+            self.assertEqual(a.startswith("#"), b.startswith("#"), where)
+            self.assertEqual(a == "", b == "", where)
+            if a.startswith("|"):
+                self.assertEqual(len(re.findall(r"(?<!\\)\|", a)), len(re.findall(r"(?<!\\)\|", b)), where)
+            self.assertEqual(re.findall(r"\d+", a), re.findall(r"\d+", b), where)
+            for ch in (ur.BAR_FULL, ur.BAR_EMPTY):
+                self.assertEqual(a.count(ch), b.count(ch), where)
+            spans_es = self.SPAN_RE.findall(a)
+            spans_en = [back.get(s, s) for s in self.SPAN_RE.findall(b)]
+            self.assertEqual(len(spans_es), len(spans_en), where)
+            if a.startswith("|"):
+                # las celdas de codigo de una tabla (datos y etiquetas) son las mismas salvo la traduccion cerrada
+                spans_en = [re.sub(r"^project (\d+)$", r"proyecto \1", s) for s in spans_en]
+                self.assertEqual(spans_es, spans_en, where)
+
+    def test_same_lines_tables_rows_numbers_and_bars_in_both_languages(self):
+        for name, build in GOLDEN_ES_BUILDERS:
+            metrics = build()
+            with self.subTest(scenario=name):
+                self.assert_same_structure(ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, "es"),
+                                           ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, "en"), name + "/p")
+                self.assert_same_structure(ur.render_global_report(metrics, GOLDEN_ES_DAY, "es"),
+                                           ur.render_global_report(metrics, GOLDEN_ES_DAY, "en"), name + "/g")
+
+    def test_same_structure_over_the_labels_scenario(self):
+        metrics = _labels_scenario()
+        self.assert_same_structure(ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, "es"),
+                                   ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, "en"), "labels/p")
+        self.assert_same_structure(ur.render_global_report(metrics, GOLDEN_ES_DAY, "es"),
+                                   ur.render_global_report(metrics, GOLDEN_ES_DAY, "en"), "labels/g")
+
+    # --- sin espanol en el reporte en ---
+    # solo palabras que NO son tambien ingles (version, cache, agent...): las con tilde las cubre ACCENTED
+    SPANISH_WORDS = re.compile(
+        r"\b(de|del|el|la|los|las|llamadas?|sesiones|agentes|conjuntos?|con|una|que|para|solo|por|hay|versiones|"
+        r"ventana|reporte|herramientas|ninguna|resumen|repeticiones|pocas|muestras|filas|primeras|"
+        r"calidad de los datos|no se)\b", re.I)
+    KEY_LINES = re.compile(r"^- (report_schema|herramienta|ultima_version_verificada|proyecto): ")
+
+    def outside_code(self, text):
+        out = []
+        for line in text.split("\n"):
+            if self.KEY_LINES.match(line):
+                continue
+            out.append(re.sub(r"`[^`]*`", "", line))
+        return "\n".join(out)
+
+    def test_the_english_reports_have_no_spanish_words_outside_code_and_footer_keys(self):
+        outputs = list(golden_outputs("en").values())
+        scenario = _labels_scenario()
+        texts = [t for pair in outputs for t in pair.values()]
+        texts += [ur.render_project_report(scenario, ALIAS, GOLDEN_ES_DAY, "en"),
+                  ur.render_global_report(scenario, GOLDEN_ES_DAY, "en")]
+        for text in texts:
+            outside = self.outside_code(text)
+            self.assertEqual(self.SPANISH_WORDS.findall(outside), [])
+            for ch in outside:
+                self.assertFalse(ch in ACCENTED, ch)
+
+    def test_the_spanish_checker_catches_spanish(self):
+        self.assertTrue(self.SPANISH_WORDS.findall("Llamadas por agente"))
+        self.assertTrue(self.SPANISH_WORDS.findall("> - Ventana: x"))
+        self.assertEqual(self.SPANISH_WORDS.findall("> - Window: all history (no window)"), [])
+
+    # --- caso 43 ---
+    def test_the_tool_source_is_ascii_and_each_language_is_deterministic(self):
+        with open(SCRIPT, "rb") as f:
+            f.read().decode("ascii")
+        for lang in ur.LANGS:
+            first, second = golden_outputs(lang), golden_outputs(lang)
+            self.assertEqual(first, second, lang)
+            self.assertEqual(json.dumps(first, sort_keys=True), json.dumps(second, sort_keys=True))
+
+
+def _labels_scenario():
+    """Todas las etiquetas cerradas del lector que el reporte muestra: agentes, modelos, versiones, conjuntos, skills,
+    contadores de lectura y los nueve avisos mas uno libre. Sin ningun dato de usuario que se parezca a una etiqueta."""
+    calls = [
+        mk(1, project=_pid(0), session="a", agent="(otro agente)", agent_group="otros", model="(otro modelo)",
+           models=("(otro modelo)",), **span(9)),
+        mk(2, project=_pid(0), session="a", agent="(sin-meta)", agent_group="sin-meta", has_meta=False,
+           versions=(), **span(9, hour=11)),
+        mk(3, project=_pid(1), session="b", agent="general-purpose", agent_group="integrado", **span(9, hour=12)),
+        mk(4, project=_pid(1), session="b", agent="x", agent_group="plugin:(no-valido)", **span(9, hour=13)),
+        mk(5, project=_pid(2), session="c", agent="rara", agent_group="ZZ conjunto raro", **span(9, hour=14)),
+        mk(6, project=_pid(2), session="c", agent="", agent_group="otros", **span(9, hour=15)),
+        mk(7, project=_pid(2), session="c", agent="forge", agent_group="SyncLayer", versions=("sin-version",),
+           model="claude-zzcustom-9", models=("claude-zzcustom-9",), **span(9, hour=16)),
+    ]
+    res = ur.ReadResult()
+    res.calls.extend(calls)
+    for i, label in enumerate(ur.READ_QUALITY_LABELS):
+        res.quality[label] = i + 1
+    uses = [su(1, skill=ur.OTHER_SKILL, group="otros", session="a", project=_pid(0)),
+            su(2, skill="x", group="plugin:(no-valido)", session="b", project=_pid(1), origin="subagente",
+               agent="(otro agente)", agent_group="otros"),
+            su(3, skill="plugin:zz", group="plugin:zz", session="c", project=_pid(2)),
+            su(4, skill="plugin:pl", group="plugin:pl", session="c", project=_pid(2), origin="subagente",
+               agent="plugin:pl", agent_group="plugin:pl")]
+    metrics = agg(res, skill_uses=uses)
+    return dataclasses.replace(metrics, warnings=tuple(ur.WARNING_ORDER) + ("ZZ aviso libre",),
+                               unverified_versions=("9.9.9",))
+
+
+def _names_scenario():
+    """Datos de usuario que SON validos y se llaman como un conjunto o una etiqueta bare: agentes y skills."""
+    calls = [mk(1, project=_pid(0), session="a", agent="otros", agent_group="SyncLayer", **span(9)),
+             mk(2, project=_pid(0), session="a", agent="integrado", agent_group="SyncLayer", **span(9, hour=11)),
+             mk(3, project=_pid(0), session="a", agent="sin-meta", agent_group="SyncLayer", **span(9, hour=12))]
+    uses = [su(1, skill="otros", group="SyncLayer", session="a", project=_pid(0)),
+            su(2, skill="integrado", group="SyncLayer", session="a", project=_pid(0)),
+            su(3, skill="sin-meta", group="SyncLayer", session="a", project=_pid(0))]
+    return agg(calls, skill_uses=uses)
+
+
+EN_LABELS = (
+    ("(otro agente)", "(other agent)"), ("(sin-meta)", "(no-meta)"), ("(otra skill)", "(other skill)"),
+    ("(otro modelo)", "(other model)"),
+    ("sin version reconocible", "no recognizable version"), ("(vacio)", "(empty)"),
+    ("(otro conjunto)", "(other group)"), ("sin-meta", "no-meta"), ("integrado", "built-in"),
+    ("otros", "others"), ("plugin:(no-valido)", "plugin:(invalid)"), ("plugin:(otro)", "plugin:(other)"),
+)
+
+
+class ReportLabels(unittest.TestCase):
+    """Caso 38: las etiquetas de listas cerradas del lector salen traducidas con `en` (tabla cerrada en el generador) y
+    no cambian con `es`; un dato de usuario que se llama igual que un conjunto NO se traduce."""
+
+    def spans(self, text):
+        return set(re.findall(r"`([^`]*)`", text))
+
+    def test_spanish_keeps_every_closed_label_as_the_reader_produces_it(self):
+        metrics = _labels_scenario()
+        spans = self.spans(ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY)) \
+            | self.spans(ur.render_global_report(metrics, GOLDEN_ES_DAY))
+        for es_label, _en in EN_LABELS:
+            self.assertIn(es_label, spans, es_label)
+        for label in ur.READ_QUALITY_LABELS:
+            if label != ur.LABEL_MAIN_READ:
+                self.assertIn(label, spans, label)
+
+    def test_english_translates_every_closed_label_and_none_of_the_spanish_ones_remains(self):
+        metrics = _labels_scenario()
+        for kind, text in (("project", ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, "en")),
+                           ("global", ur.render_global_report(metrics, GOLDEN_ES_DAY, "en"))):
+            spans = self.spans(text)
+            for es_label, en_label in EN_LABELS:
+                if kind == "project" and es_label == "plugin:(otro)":
+                    continue        # el reporte de proyecto muestra el conjunto de la skill tal cual
+                self.assertIn(en_label, spans, (kind, en_label))
+                self.assertNotIn(es_label, spans, (kind, es_label))
+            for label in ur.READ_QUALITY_LABELS:
+                self.assertNotIn(label, spans, (kind, label))
+
+    def test_read_quality_counters_are_translated_by_position(self):
+        metrics = _labels_scenario()
+        en = ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, "en")
+        for label in ur.READ_QUALITY_LABELS:
+            if label == ur.LABEL_MAIN_READ:
+                continue
+            index = ur.READ_INCIDENT_LABELS.index(label) if label in ur.READ_INCIDENT_LABELS \
+                else tuple(x for x in ur.READ_INFO_LABELS if x != ur.LABEL_MAIN_READ).index(label)
+            key = "read_incident_labels" if label in ur.READ_INCIDENT_LABELS else "read_info_labels"
+            self.assertIn("`%s`" % ur.CATALOG["en"][key][index], en, label)
+
+    def test_warnings_are_translated_and_an_unknown_one_is_the_generic_translated_notice(self):
+        metrics = _labels_scenario()
+        en_text = ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, "en")
+        es_text = ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, "es")
+        for i, warning in enumerate(ur.WARNING_ORDER):
+            self.assertIn("> - AVISO: " + warning + "\n", es_text)
+            self.assertNotIn(warning, en_text)
+            self.assertIn("> - NOTICE: " + ur.CATALOG["en"]["warn_texts"][i] + "\n", en_text)
+        self.assertNotIn("ZZ aviso libre", en_text + es_text)
+        self.assertIn("> - NOTICE: " + ur.CATALOG["en"]["unknown_warning"] + "\n", en_text)
+        self.assertEqual(ur.CATALOG["en"]["unknown_warning"], "unrecognized notice")
+
+    def test_warning_order_is_the_closed_list_of_known_warnings(self):
+        self.assertEqual(set(ur.WARNING_ORDER), set(ur.KNOWN_WARNINGS))
+        self.assertEqual(len(ur.WARNING_ORDER), len(set(ur.WARNING_ORDER)))
+        self.assertEqual(len(ur.CATALOG["en"]["warn_texts"]), len(ur.WARNING_ORDER))
+        self.assertIs(ur.CATALOG["es"]["warn_texts"], ur.WARNING_ORDER)
+
+    @staticmethod
+    def rows_after(text, heading):
+        """Filas (lista de celdas) de la primera tabla tras la linea `heading`."""
+        lines = text.split("\n")
+        rows = []
+        for line in lines[lines.index(heading) + 4:]:
+            if not line.startswith("|"):
+                break
+            rows.append([cell.strip() for cell in re.split(r"(?<!\\)\|", line)[1:-1]])
+        return rows
+
+    def test_user_data_that_looks_like_a_group_is_never_translated(self):
+        metrics = _names_scenario()
+        names = ["`integrado`", "`otros`", "`sin-meta`"]
+        for lang in ur.LANGS:
+            t = ur.CATALOG[lang]
+            project = ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, lang)
+            for kind, text in (("project", project), ("global", ur.render_global_report(metrics, GOLDEN_ES_DAY, lang))):
+                agents = self.rows_after(text, t["h_agent_calls"])
+                self.assertEqual(sorted(row[0] for row in agents), names, (lang, kind))
+                self.assertEqual({row[1] for row in agents}, {"`SyncLayer`"}, (lang, kind))
+            skills = self.rows_after(project, t["skills_by_skill"])
+            self.assertEqual(sorted(row[0] for row in skills), names, lang)
+            self.assertEqual({row[1] for row in skills}, {"`SyncLayer`"}, lang)
+
+    def test_code_markers_of_empty_and_non_text_values_follow_the_language(self):
+        for lang, empty, not_text in (("es", "`(vacio)`", "`(no cadena)`"), ("en", "`(empty)`", "`(not text)`")):
+            t = ur.CATALOG[lang]
+            self.assertEqual(ur._code("", t), empty)
+            self.assertEqual(ur._code(None, t), not_text)
+            self.assertEqual(ur._code(5, t), not_text)
+            self.assertEqual(ur._code("a|b", t), "`a\\|b`")
+        self.assertEqual(ur._code(""), "`(vacio)`")
+        self.assertEqual(ur._code(None), "`(no cadena)`")
+        metrics = dataclasses.replace(agg([mk(1)]), verified_max=None)
+        self.assertIn("- ultima_version_verificada: `(not text)`\n",
+                      ur.render_project_report(metrics, ALIAS, lang="en"))
+        self.assertIn("- ultima_version_verificada: `(no cadena)`\n", ur.render_project_report(metrics, ALIAS))
+
+    def test_label_only_keys_change_the_labels_scenario_in_their_own_language(self):
+        """Las claves que el golden no muestra (ver `ReportCatalogCoverage.LABEL_ONLY`) se ven en este escenario."""
+        import types
+        scenario = _labels_scenario()
+        scenario_none = dataclasses.replace(agg([mk(1)]), verified_max=None)
+        silent = []
+        for lang in ur.LANGS:
+            for key, index in ReportCatalogCoverage.LABEL_ONLY:
+                entry = dict(ur.CATALOG[lang])
+                value = entry[key]
+                if index is None:
+                    entry[key] = "ZZ" + value
+                else:
+                    items = list(value)
+                    items[index] = "ZZ" + items[index]
+                    entry[key] = tuple(items)
+                catalog = dict(ur.CATALOG)
+                catalog[lang] = types.MappingProxyType(entry)
+                changed = False
+                for metrics in (scenario, scenario_none):
+                    base_p = ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, lang)
+                    base_g = ur.render_global_report(metrics, GOLDEN_ES_DAY, lang)
+                    with mock.patch.object(ur, "CATALOG", types.MappingProxyType(catalog)):
+                        if (ur.render_project_report(metrics, ALIAS, GOLDEN_ES_DAY, lang) != base_p
+                                or ur.render_global_report(metrics, GOLDEN_ES_DAY, lang) != base_g):
+                            changed = True
+                if not changed:
+                    silent.append((lang, key, index))
+        self.assertEqual(silent, [])
+
+    def test_the_label_tables_do_not_touch_the_reader_constants(self):
+        self.assertEqual(ur.OTHER_AGENT, "(otro agente)")
+        self.assertEqual(ur.NO_META_AGENT, "(sin-meta)")
+        self.assertEqual(ur.OTHER_SKILL, "(otra skill)")
+        self.assertEqual(ur.RANGE_NONE, "sin version reconocible")
+        self.assertEqual(ur.OTHER_LABELS, {"type": "(otro type)", "version": "(otra version)", "model": "(otro modelo)"})
+        self.assertEqual(len(ur.READ_QUALITY_LABELS), 30)
+        self.assertEqual(len(ur.KNOWN_WARNINGS), 9)
 
 
 if __name__ == "__main__":

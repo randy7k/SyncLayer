@@ -904,11 +904,11 @@ class FilterAndHeader(CliBase):
         seen = {}
         real = ur.render_project_report
 
-        def spy(metrics, alias, generated=None):
+        def spy(metrics, alias, generated=None, lang="es"):    # T6: la CLI pasa tambien el idioma
             seen["aliases"] = {p.project for p in metrics.projects}
             seen["alias"] = alias
             seen["folders"] = metrics.folders_read
-            return real(metrics, alias, generated)
+            return real(metrics, alias, generated, lang)
 
         with mock.patch.object(ur, "render_project_report", spy):
             self.assertEqual(self.project(tree, proj)[0], 0)
@@ -1720,6 +1720,211 @@ class FinalRoundFixes(CliBase):
         for code in ("0 correcto", "1 entorno", "2 uso incorrecto", "3 esquema", "130"):
             self.assertIn(code, block)
         self.assertIn("5 %", block)
+
+
+# --- Fase 5, T6: `--lang` ---
+LANG_MESSAGE = "idioma invalido: use es o en"
+LANG_HOSTILE = (
+    "fr", "EN", "En", "en-US", "english", "", " en", "en ", "es\n", "es\r\nx", "\x00", "\x1b[31mred\x1b[0m",
+    "../x", "..\\x", "C:\\Users\\alguien", "/etc/passwd", "x" * 10000, "\u00f1\u00e9", "\u202een", "%s%d%%",
+    "en\x00", "-1",
+)
+
+
+class LangOption(CliBase):
+    """Casos 39 a 41: `--lang` de `project` y `global`. Lista cerrada, sin eco, sin tocar el disco."""
+
+    DAY = datetime.date(2026, 4, 1)
+
+    def run_fixed_day(self, *argv):
+        with mock.patch.object(ur, "utc_today", return_value=self.DAY):
+            return self.run_main(*argv)
+
+    def expected(self, tree, proj, kind, lang):
+        window = ur.make_window(self.DAY, datetime.date(2026, 3, 1), datetime.date(2026, 3, 31))
+        if kind == "global":
+            res = ur.read_calls(tree.claude_dir, None, check_damage=False)
+            return ur.render_global_report(ur._aggregate(res, window), self.DAY, lang).encode("utf-8")
+        path = os.path.abspath(proj)
+        res = ur.read_calls(tree.claude_dir, path, check_damage=False, extra_folders=[])
+        alias = ur._project_alias(ur.derive_folder_name(path))
+        return ur.render_project_report(ur._aggregate(res, window), alias, self.DAY, lang).encode("utf-8")
+
+    def argv(self, kind, tree, proj, *extra):
+        if kind == "project":
+            return ("project", "--claude-dir", tree.claude_dir, "--project-dir", proj, *WIN, *extra)
+        return ("global", "--claude-dir", tree.claude_dir, *WIN, *extra)
+
+    def dest(self, kind, tree, proj):
+        return self.report_path(proj) if kind == "project" else os.path.join(tree.claude_dir, "synclayer-usage.md")
+
+    # --- parseo ---
+    def test_parser_accepts_es_and_en_and_defaults_to_es(self):
+        parser = ur._build_parser()
+        for sub in ("project", "global"):
+            self.assertEqual(parser.parse_args([sub]).lang, "es")
+            self.assertEqual(parser.parse_args([sub, "--lang", "en"]).lang, "en")
+            self.assertEqual(parser.parse_args([sub, "--lang", "es"]).lang, "es")
+            self.assertEqual(parser.parse_args([sub, "--lang=en"]).lang, "en")
+            self.assertEqual(parser.parse_args([sub, "--stdout", "--lang", "en", "--all"]).lang, "en")
+        self.assertEqual(ur.DEFAULT_LANG, "es")
+
+    def test_repeated_lang_last_wins_and_every_occurrence_is_validated(self):
+        parser = ur._build_parser()
+        self.assertEqual(parser.parse_args(["global", "--lang", "es", "--lang", "en"]).lang, "en")
+        self.assertEqual(parser.parse_args(["global", "--lang", "en", "--lang", "es"]).lang, "es")
+        tree, proj = self.project_tree()
+        for argv in (("--lang", "fr", "--lang", "en"), ("--lang", "en", "--lang", "fr")):
+            code, out, err = self.run_main("global", "--claude-dir", tree.claude_dir, *argv)
+            self.assertEqual(code, 2, argv)
+            self.assertEqual(out, "")
+
+    def test_inspect_does_not_accept_lang_and_the_help_lists_it_for_the_two_report_commands_only(self):
+        tree, proj = self.project_tree()
+        before = tur.snapshot(self.base)
+        for value in ("en", "es"):
+            code, out, err = self.run_main("inspect", "--claude-dir", tree.claude_dir, "--lang", value)
+            self.assertEqual(code, 2)
+            self.assertEqual(out, "")
+            self.assertEqual(tur.snapshot(self.base), before)
+        parser = ur._build_parser()
+        subparsers = [a for a in parser._actions if a.__class__.__name__ == "_SubParsersAction"][0].choices
+        self.assertIn("--lang", subparsers["project"].format_help())
+        self.assertIn("--lang", subparsers["global"].format_help())
+        self.assertNotIn("--lang", subparsers["inspect"].format_help())
+
+    def test_lang_argument_type_is_a_closed_list_with_a_fixed_message(self):
+        import argparse
+        self.assertEqual(ur._lang_arg("es"), "es")
+        self.assertEqual(ur._lang_arg("en"), "en")
+        for bad in LANG_HOSTILE:
+            with self.assertRaises(argparse.ArgumentTypeError) as cm:
+                ur._lang_arg(bad)
+            self.assertEqual(str(cm.exception), LANG_MESSAGE)
+        self.assertEqual(ur.MSG_LANG_ARG, LANG_MESSAGE)
+
+    # --- valor invalido ---
+    def test_invalid_value_is_exit_2_with_no_echo_and_nothing_read_or_written(self):
+        tree, proj = self.project_tree()
+        before = tur.snapshot(self.base)
+        self.assertGreaterEqual(len(LANG_HOSTILE), 13)
+        for bad in LANG_HOSTILE:
+            for kind in ("project", "global"):
+                for extra in ((), ("--stdout",)):
+                    base = self.argv(kind, tree, proj)
+                    with mock.patch.object(ur, "read_calls", side_effect=AssertionError("leyo transcripciones")):
+                        code, out, err = self.run_main(*base, "--lang", bad, *extra)
+                    where = (bad[:20], kind, extra)
+                    self.assertEqual(code, 2, where)
+                    self.assertEqual(out, "", where)
+                    self.assertIn(LANG_MESSAGE, err, where)
+                    self.assertNotIn("Traceback", err, where)
+                    core = err.split("error:", 1)[1].replace(LANG_MESSAGE, "")
+                    if bad:
+                        self.assertNotIn(bad, core, where)
+                        self.assertNotIn(bad, out, where)
+                    self.assertFalse(os.path.exists(os.path.join(proj, ".synclayer")), where)
+                    self.assertEqual(tur.snapshot(self.base), before, where)
+        self.assertEqual(temps_under(self.base), [])
+
+    def test_missing_value_and_lang_equals_empty_are_exit_2(self):
+        tree, proj = self.project_tree()
+        for argv in (("--lang",), ("--lang=",), ("--lang", "--stdout")):
+            for kind in ("project", "global"):
+                code, out, err = self.run_main(*self.argv(kind, tree, proj), *argv)
+                self.assertEqual(code, 2, (kind, argv))
+                self.assertEqual(out, "")
+        self.assertFalse(os.path.exists(os.path.join(proj, ".synclayer")))
+
+    def test_an_invalid_lang_never_prints_the_value_in_any_stream_with_show_paths(self):
+        tree, proj = self.project_tree()
+        secret = "ZZSECRETLANG"
+        code, out, err = self.run_main(*self.argv("project", tree, proj), "--lang", secret, "--show-paths")
+        self.assertEqual(code, 2)
+        self.assertNotIn(secret, out + err)
+
+    # --- bytes = generador ---
+    def test_report_bytes_are_the_generator_output_for_each_language_writing_and_with_stdout(self):
+        tree, proj = self.project_tree()
+        for kind in ("project", "global"):
+            for lang in ("es", "en"):
+                with self.subTest(kind=kind, lang=lang):
+                    expected = self.expected(tree, proj, kind, lang)
+                    code, out, err = self.run_fixed_day(*self.argv(kind, tree, proj), "--lang", lang)
+                    self.assertEqual(code, 0, err)
+                    self.assertEqual(self.read_bytes(self.dest(kind, tree, proj)), expected)
+                    wrapper = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", newline="\r\n")
+                    errs = io.StringIO()
+                    with contextlib.redirect_stdout(wrapper), contextlib.redirect_stderr(errs), \
+                            mock.patch.object(ur, "utc_today", return_value=self.DAY):
+                        code = ur.main(list(self.argv(kind, tree, proj, "--stdout", "--lang", lang)))
+                    self.assertEqual(code, 0, errs.getvalue())
+                    self.assertEqual(wrapper.buffer.getvalue(), expected)
+                    self.assertEqual(errs.getvalue(), "")
+
+    def test_without_lang_the_bytes_are_those_of_lang_es(self):
+        tree, proj = self.project_tree()
+        for kind in ("project", "global"):
+            code, plain, err = self.run_fixed_day(*self.argv(kind, tree, proj), "--stdout")
+            self.assertEqual(code, 0, err)
+            code, es, err = self.run_fixed_day(*self.argv(kind, tree, proj), "--stdout", "--lang", "es")
+            self.assertEqual(plain, es)
+            code, en, err = self.run_fixed_day(*self.argv(kind, tree, proj), "--stdout", "--lang", "en")
+            self.assertNotEqual(plain, en)
+            self.assertIn("Subagent usage report" if kind == "project" else "Global subagent usage report", en)
+            self.assertIn("Reporte", plain)
+
+    def test_cli_messages_stay_in_spanish_with_lang_en(self):
+        tree, proj = self.project_tree()
+        code, out, err = self.run_main(*self.argv("project", tree, proj), "--lang", "en")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(out.startswith("reporte de proyecto escrito: 2 llamadas, 1 sesion"), out)
+        code, out, err = self.run_main("project", "--claude-dir", os.path.join(self.base, "nada"),
+                                       "--project-dir", proj, "--lang", "en")
+        self.assertEqual(code, 1)
+        self.assertTrue(err.startswith("error: falta la carpeta projects/"), err)
+
+    def test_the_written_english_report_is_ascii_plus_bars_and_the_gitignore_is_the_same(self):
+        tree, proj = self.project_tree()
+        self.assertEqual(self.run_main(*self.argv("project", tree, proj), "--lang", "en")[0], 0)
+        data = self.read_bytes(self.report_path(proj)).decode("utf-8")
+        self.assertTrue(all(ch == "\n" or " " <= ch <= "~" or ch in ("\u2588", "\u2591") for ch in data))
+        self.assertEqual(self.read_bytes(os.path.join(proj, ".synclayer", ".gitignore")), b"*\n")
+
+    # --- caso 41: sustitucion ---
+    def test_a_report_in_one_language_is_replaced_by_the_other_and_back(self):
+        tree, proj = self.project_tree()
+        for kind in ("project", "global"):
+            path = self.dest(kind, tree, proj)
+            seen = []
+            for lang in ("es", "en", "es", "en"):
+                code, out, err = self.run_fixed_day(*self.argv(kind, tree, proj), "--lang", lang)
+                self.assertEqual(code, 0, (kind, lang, err))
+                data = self.read_bytes(path)
+                self.assertTrue(data.startswith(ur.REPORT_MARKER.encode("ascii") + b"\n"))
+                seen.append(data)
+            self.assertEqual(seen[0], seen[2])
+            self.assertEqual(seen[1], seen[3])
+            self.assertNotEqual(seen[0], seen[1])
+        self.assertEqual(temps_under(self.base), [])
+
+    def test_a_foreign_destination_is_still_exit_1_with_lang_en(self):
+        tree, proj = self.project_tree()
+        os.makedirs(os.path.join(proj, ".synclayer"))
+        with open(os.path.join(proj, ".synclayer", ".gitignore"), "wb") as f:
+            f.write(b"*\n")
+        foreign = os.path.join(proj, ".synclayer", "usage-report.md")
+        with open(foreign, "wb") as f:
+            f.write(b"mio\n")
+        glob_dest = os.path.join(tree.claude_dir, "synclayer-usage.md")
+        with open(glob_dest, "wb") as f:
+            f.write(b"# otro archivo\n")
+        for kind, path, original in (("project", foreign, b"mio\n"), ("global", glob_dest, b"# otro archivo\n")):
+            code, out, err = self.run_main(*self.argv(kind, tree, proj), "--lang", "en")
+            self.assertEqual(code, 1, kind)
+            self.assertIn("marcador", err)
+            self.assertEqual(self.read_bytes(path), original)
+        self.assertEqual(temps_under(self.base), [])
 
 
 if __name__ == "__main__":

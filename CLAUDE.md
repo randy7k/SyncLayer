@@ -9,8 +9,9 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1735 pruebas, 367 saltadas (365 contra pwsh, que no está instalado, y 2 de
-la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), entre unos 48 y 70 minutos. No la
+`__pycache__`. La suite: 1790 pruebas, 367 saltadas (365 contra pwsh, que no está instalado, y 2 de
+la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), entre unos 43 y 70 minutos.
+Las pruebas de `install.ps1` corren en esta máquina contra Windows PowerShell 5.1. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
 
@@ -44,8 +45,8 @@ Reporte de uso de subagentes (se ejecuta desde el clon, no se instala). Pasa sie
 
 ```
 python -B tools/usage_report.py inspect [--claude-dir DIR] [--project-dir DIR] [--show-paths]
-python -B tools/usage_report.py project [--project-dir DIR] [--claude-dir DIR] [--transcripts-dir NOMBRE]... [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths]
-python -B tools/usage_report.py global  [--claude-dir DIR] [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths]
+python -B tools/usage_report.py project [--project-dir DIR] [--claude-dir DIR] [--transcripts-dir NOMBRE]... [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths] [--lang es|en]
+python -B tools/usage_report.py global  [--claude-dir DIR] [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths] [--lang es|en]
 ```
 
 Exit 0 correcto, 1 entorno o datos, 2 uso incorrecto, 3 esquema desconocido o demasiados
@@ -345,13 +346,23 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     al esquema 2) y la configuración nunca escrita ni respaldada. Abiertos a propósito (Minor, aserciones
     opcionales): respaldo del estado y de los otros nueve archivos en K1 a K3 del repo real, aserto redundante
     del esquema 2 y respaldo del estado ilegible con `-Force` final en K5.
-- Idioma del reporte de uso (Fase 5, mismo plan; T5 hecha, T6 pendiente): T5 solo reúne los textos en un
-  catálogo, sin `--lang` ni parámetro `lang` (eso es T6). Detalle en «Reporte de uso», bullet «Catálogo de
-  textos». Pendiente para T6: (a) las etiquetas del lector que salen por `_code` (`(otro agente)`, `integrado`,
-  `sin-meta`, `WARN_*`, `RANGE_*`, `READ_QUALITY_LABELS`, `OTHER_*`, `(vacio)`/`(no cadena)`) NO están en el
-  catálogo: T6 las traduce con tabla cerrada; (b) `REPEAT_LIMITATIONS` y `SKILL_LIMITATIONS` se referencian, no
-  se copian; (c) el catálogo `en` debe tener las mismas 17 entradas y el mismo orden en `q_problems`; (d)
-  `test_public_signatures_do_not_change_in_t5` y la prueba de pureza (`ReportPurity.REACHABLE`) cambian en T6.
+- Idioma del reporte de uso (Fase 5, mismo plan; T5 y T6 hechas): `project` y `global` aceptan `--lang es|en`
+  (por defecto `es`; `inspect` no lo acepta) y `render_project_report` / `render_global_report` el parámetro
+  `lang` (por defecto `es`). Detalle en «Reporte de uso», bullets «Catálogo de textos» e «Idioma».
+  - `--lang` usa un `type=` propio (`_lang_arg`): lista cerrada `LANGS`, comparación exacta (`EN`, `en-US` y
+    vacío dan exit 2 con `idioma invalido: use es o en`, sin repetir el valor), validada antes de leer nada. No
+    uses `choices=`: `argparse` repetiría el valor. Repetido gana el último. Con `--stdout` imprime en el idioma
+    pedido. Un reporte `en` sustituye al `es` en el mismo destino (mismo marcador).
+  - Los generadores validan con `type(lang) is str and lang in LANGS`; si no, `ValueError` con mensaje fijo
+    (`MSG_REPORT_LANG`), sin eco del valor.
+  - No cambia con el idioma: cifras, fechas, orden, marcador, `REPORT_SCHEMA`, claves del pie (`report_schema`,
+    `herramienta`, `ultima_version_verificada`, `proyecto`), destinos, nombres de agente, modelo, skill y versión
+    del usuario, ni los mensajes de la CLI ni `inspect` (siguen en español). Lector y agregado sin tocar.
+  - `argparse` repite en stderr los argumentos desconocidos (también `inspect --lang X`); ya ocurría antes de T6
+    y no se corrigió.
+  - `lbl_other_version` no existe: `versions_seen` es numérico, no hay etiqueta de «otra versión».
+  - El efecto con un `~/.claude` real no se verificó (V2 del propietario: una corrida de `global --lang en
+    --stdout`). No lo documentes como probado.
   `shield` interviene en T6 (agrega `--lang`, entrada de usuario).
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
   cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
@@ -403,7 +414,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (365 en la última corrida de 1735 pruebas y 367 saltadas; las otras 2 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (365 en la última corrida de 1790 pruebas y 367 saltadas; las otras 2 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los
@@ -446,9 +457,9 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   - Las pruebas «sin aviso de git» suben carpetas padre reales: fallarían en una máquina con `.git`
     en el home o en `%TEMP%`. Las pruebas pasan siempre `--claude-dir` a una carpeta temporal.
   - El instalador no instala la herramienta ni toca `synclayer-usage.md` ni `settings.json`.
-  - Catálogo de textos (Fase 5, T5): `LANGS = ("es",)`, `DEFAULT_LANG = "es"` y `CATALOG`, inmutable
-    (`MappingProxyType` en dos capas: idioma y claves). Un diccionario por idioma con el mismo juego de claves
-    (unas 150 por idioma); por clave, mismo tipo (tupla o cadena), misma longitud de tupla y mismos marcadores
+  - Catálogo de textos (Fase 5, T5 y T6): `LANGS = ("es", "en")`, `DEFAULT_LANG = "es"` y `CATALOG`, inmutable
+    (`MappingProxyType` en dos capas: idioma y claves). Un diccionario por idioma (`_ES`, `_EN`) con el mismo
+    juego de claves (137 por idioma); por clave, mismo tipo (tupla o cadena), misma longitud de tupla y mismos marcadores
     `%d`/`%s`/`%%`. Los 28 generadores internos, de `_legend` a `render_global_report`, reciben el catálogo ya
     resuelto `t` como primer argumento y leen `t["clave"]`. No hay estado global mutable que decida el texto. Las
     firmas públicas no cambian. Las constantes de texto del módulo (`HOW_TO_READ`, `PRIVACY_NOTES`, `NOTE_*`,
@@ -456,11 +467,22 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     leen, así que editarlas no cambia el reporte; edita el catálogo. Las claves estables del pie (las que
     consume quien lee el reporte) no se traducen.
   - Todo texto nuevo del reporte va a `CATALOG`. La prueba `ReportTextsOutsideCatalog` (caso 33, con `ast`) falla
-    si un generador trae un texto fijo fuera del catálogo, salvo una lista cerrada de 10 excepciones justificadas
-    (`plugin:`, `SyncLayer`, `integrado`, las 4 claves estables del pie, los marcadores de `_code` y el error
-    interno de `_raw_table`). `ReportCatalogCoverage` exige paridad de claves, tipos y marcadores entre idiomas,
+    si un generador trae un texto fijo fuera del catálogo, salvo una lista cerrada de excepciones justificadas
+    (`ReportTextsOutsideCatalog.ALLOWED`: `plugin:`, `SyncLayer`, las 4 claves estables del pie y el error
+    interno de `_raw_table`; `integrado` y los marcadores de `_code` ya están en el catálogo). `ReportCatalogCoverage` exige paridad de claves, tipos y marcadores entre idiomas,
     que toda clave se use y que cada texto cambie algún escenario del golden.
-  - Golden del español: `tests/usage_golden_es.json` (5 escenarios: wide, empty, singular, volumes, all_time;
+  - Idioma (T6): `_code(text, t=None)` toma los marcadores de vacío y de no cadena del catálogo (`code_empty`,
+    `code_not_text`); sin `t`, los del idioma por defecto. `_labels(t, group=False)` y `_cell(t, value, group=False)`
+    traducen las etiquetas cerradas del lector con tablas cerradas por idioma (`lbl_*`): los nombres de conjunto
+    sin paréntesis (`integrado`, `otros`, `sin-meta`, `plugin:(no-valido)`) solo se traducen en columnas de
+    conjunto (`group=True`); en una columna de agente, skill o modelo pueden ser un dato del usuario y salen tal
+    cual. Un valor fuera de la tabla sale como estaba. El catálogo `en` es ASCII, traducción fiel, sin promesas
+    de ahorro, calidad ni costo (pruebas `ReportCatalogEn`, `ReportCatalogCoverageEn`, `ReportLang`).
+  - Golden del inglés: `tests/usage_golden_en.json`, mismos cinco escenarios y misma receta que el del español
+    (`golden_outputs("en")` en `tests/test_usage_report.py`, `VERIFIED_MAX` fijado en `2.1.326` con `mock.patch`);
+    regenéralo solo si el inglés cambia a propósito. Pruebas de CLI: `LangOption` (`tests/test_usage_report_cli.py`)
+    y `LangPrivacyEndToEnd` (`tests/test_usage_report_edges.py`).
+  - Golden del español (T5): `tests/usage_golden_es.json` (5 escenarios: wide, empty, singular, volumes, all_time;
     proyecto y global). Se generó con la herramienta ANTERIOR al refactor; es ASCII, `indent=1`, `sort_keys` y LF
     final. Se construye y renderiza con `VERIFIED_MAX` fijado en `2.1.326` mediante `mock.patch`
     (`GOLDEN_ES_VERIFIED_MAX`): subir `VERIFIED_MAX` no lo rompe. Receta de regeneración: comentario de
