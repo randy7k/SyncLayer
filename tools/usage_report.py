@@ -64,6 +64,7 @@ import os
 import re
 import stat
 import sys
+import types
 
 EXIT_OK = 0
 EXIT_ENV = 1
@@ -2486,20 +2487,17 @@ SMALL_MARK = " *"
 MSG_REPORT_METRICS = "render_project_report necesita un UsageMetrics"
 MSG_REPORT_ALIAS = "alias de proyecto invalido: debe ser p- y 8 hexadecimales en minuscula"
 MSG_REPORT_DATE = "fecha de generacion invalida: debe ser datetime.date o None"
-UNKNOWN_WARNING = "aviso no reconocido"
-LABEL_MAIN_READ = "sesiones principales leidas"
-# Conjuntos de agentes que el reporte conoce (los de classify_agent y `sin-meta`); un conjunto `plugin:<prefijo>`
-# con el prefijo validado tambien se muestra. Cualquier otra etiqueta sale como OTHER_GROUP en las tablas de los
-# dos reportes (defensa uniforme: el lector nunca la produce).
-OTHER_GROUP = "(otro conjunto)"
-NO_META_GROUP = "sin-meta"
-AGENT_GROUPS = frozenset(("SyncLayer", "integrado", "otros", "plugin:(no-valido)", NO_META_GROUP))
-# Conjuntos cuyo numero de agentes (o de skills) distintos el global no muestra: reunen nombres de usuario.
-HIDDEN_COUNT_GROUPS = frozenset(("otros", "plugin:(no-valido)", OTHER_GROUP))
-
-# "Como leer estos numeros" (texto fijo). Las limitaciones de repeticiones y de skills salen de
-# REPEAT_LIMITATIONS y SKILL_LIMITATIONS (T3, T4) y se vuelcan tal cual debajo.
-HOW_TO_READ = (
+# Catalogo de textos del reporte (Fase 5, T5). Los DOS generadores toman todo texto fijo de aqui y reciben el idioma
+# como el catalogo ya resuelto (`t`): ninguna funcion lee un estado global que cambie con la corrida. Hoy hay un solo
+# idioma, `es`; las claves y los marcadores (`%d`, `%s`, `%%`) son el contrato que un segundo idioma debe repetir.
+# Un valor es un texto o una tupla de textos (cabeceras de tabla, parejas singular/plural, listas con vinetas). Se
+# mantienen fuera del catalogo, por ser identificadores y no texto: el marcador de la primera linea, REPORT_SCHEMA,
+# las claves del pie (`report_schema`, `herramienta`, `ultima_version_verificada`, `proyecto`), las alineaciones de
+# columna, las barras y los valores del lector (WARN_*, OTHER_*, grupos, contadores). Las listas del lector
+# REPEAT_LIMITATIONS y SKILL_LIMITATIONS se referencian, no se copian.
+LANGS = ("es",)
+DEFAULT_LANG = "es"
+_ES_HOW_TO_READ_COMMON = (
     "No mide la calidad del resultado de un agente ni el costo en dinero: una llamada con menos tokens no"
     " dice nada sobre su resultado.",
     "No muestra costos. Los tokens no son una factura (la cach\u00e9 le\u00edda se cobra distinto) y cualquier costo"
@@ -2518,30 +2516,268 @@ HOW_TO_READ = (
     " num\u00e9ricamente. Comparar entre rangos de versi\u00f3n es solo indicativo.",
     "Los n\u00fameros dependen de un formato interno de Claude Code que no est\u00e1 garantizado y puede cambiar sin"
     " aviso.",
-    "Solo se leen las carpetas de transcripciones elegidas para este proyecto: las sesiones abiertas desde"
-    " una subcarpeta o un worktree viven en otra carpeta y no se incluyen salvo que se indique.",
 )
-PRIVACY_NOTES = (
-    "Este archivo no copia mensajes, prompts, argumentos de herramientas ni rutas. S\u00ed copia nombres de skill"
-    " que escribe el modelo y ids de modelo que pasan un patr\u00f3n (hasta 64 caracteres por celda, aunque la"
-    " skill no exista): pueden llevar texto elegido por el modelo. Es local y revela volumen de uso: no lo subas a"
-    " git ni lo compartas sin revisarlo.",
-    "El alias `p-<8 hex>` es un hash sin sal del nombre de la carpeta del proyecto: quien conozca o adivine el"
-    " nombre de la carpeta puede recalcularlo. No es anonimato.",
-    "Los nombres de skills de usuario salen tal cual: pueden revelar nombres privados. El prefijo de una skill de"
-    " plugin (`plugin:<prefijo>`) sale de texto que escribe el modelo: puede ser cualquier cadena `[a-z0-9-]{1,32}`,"
-    " no solo un nombre de plugin.",
-    "Los nombres de modelo salen de las transcripciones con un patr\u00f3n amplio (`claude-` y tramos de palabra de"
-    " hasta 12 caracteres): un id de modelo personalizado puede salir tal cual.",
-    "Un agente de proyecto con el mismo nombre que uno de SyncLayer cuenta como SyncLayer.",
-)
+_ES = {
+    # palabras con singular y plural: `_plural(n, *t["w_..."])`
+    "w_call": ("llamada", "llamadas"),
+    "w_session": ("sesi\u00f3n", "sesiones"),
+    "w_project": ("proyecto", "proyectos"),
+    "w_counter": ("contador", "contadores"),
+    "w_invocation": ("invocaci\u00f3n", "invocaciones"),
+    "w_call_no_start": ("llamada sin hora de inicio", "llamadas sin hora de inicio"),
+    "w_placed": ("ubicada", "ubicadas"),
+    # tablas: leyenda de `*` y nota de filas omitidas
+    "legend_small": "`*`: n < %d, pocas muestras. La mediana y el p90 dicen poco.",
+    "table_capped": "Se muestran las %d primeras filas de %d.",
+    # ventana y versiones (cabecera)
+    "window_all": "todo el historial (sin ventana)",
+    "window_range": "%s a %s (UTC, ambos inclusive)",
+    "versions_none": "sin versiones reconocibles",
+    "versions_one": "versi\u00f3n %s",
+    "versions_many": "versiones %s a %s (%d versiones)",
+    "versions_more": " (+%d m\u00e1s)",
+    # cabecera
+    "title_project": "# Reporte de uso de subagentes: proyecto %s",
+    "title_global": "# Reporte global de uso de subagentes",
+    "hdr_window": "> - Ventana: %s",
+    "hdr_calls": "> - Llamadas: %d en %s",
+    "hdr_calls_global": "> - Llamadas: %d en %s en %s",
+    "hdr_folders": "> - Carpetas de transcripciones le\u00eddas: %d",
+    "hdr_claude": "> - Claude Code: %s",
+    "hdr_schema": "> - Esquema del reporte: %d",
+    "hdr_generated": "> - Generado: %s",
+    "hdr_local": "> - Reporte local: no lo subas a git.",
+    "hdr_scope_global": "> - Alcance: todos los proyectos le\u00eddos; proyectos numerados por volumen, sin nombres ni"
+                        " rutas ni alias.",
+    "hdr_private_global": "> - Reporte privado por defecto: lleva el volumen de uso de cada proyecto; no lo subas a git"
+                          " y comp\u00e1rtelo solo despu\u00e9s de revisarlo.",
+    "hdr_notice": "> - AVISO: %s",
+    # avisos de la cabecera
+    "notice_doubtful": "%s con versiones de Claude Code de 2.1.310 a 2.1.327: tokens posiblemente inflados por"
+                       " reintentos (corregido en 2.1.328).",
+    "notice_unverified": "hay versiones de Claude Code posteriores a la \u00faltima verificada (%s): %s. El formato"
+                         " interno puede haber cambiado.",
+    "unknown_warning": "aviso no reconocido",
+    "notice_excluded_one": "1 llamada da\u00f1ada queda fuera de los tokens, la duraci\u00f3n y las herramientas.",
+    "notice_excluded_many": "%d llamadas da\u00f1adas quedan fuera de los tokens, la duraci\u00f3n y las herramientas.",
+    "notice_placed": "; %s por la fecha de modificaci\u00f3n del archivo (aproximada)",
+    "notice_hardlinks_one": "1 llamada le\u00edda de un enlace duro aceptado.",
+    "notice_hardlinks_many": "%d llamadas le\u00eddas de enlaces duros aceptados.",
+    "notice_incidents": "la lectura tuvo incidencias en %s (detalle en Calidad de los datos).",
+    # resumen
+    "h_summary": "## Resumen",
+    "sum_calls": "Llamadas: %d en %s (%s llamadas por sesi\u00f3n)",
+    "sum_none": "Sin llamadas a subagentes en la ventana.",
+    "sum_agents": "Agentes distintos (por nombre y conjunto): %d",
+    "sum_tokens": "Tokens (suma de las llamadas con estad\u00edsticas): %s en %s",
+    "sum_repeats": "Repeticiones consecutivas (inferido): %d",
+    "sum_doubtful": "Llamadas en el rango de versi\u00f3n dudoso (2.1.310 a 2.1.327): %d de %d (%s)",
+    "sum_excluded": "Llamadas da\u00f1adas, fuera de tokens, duraci\u00f3n y herramientas: %d de %d (%s)",
+    "sum_skills": "Skills: %s en %s",
+    "global_sum_projects": "Proyectos con llamadas en la ventana: %d",
+    "global_sum_groups": "Conjuntos con llamadas: %d",
+    # tablas por agente
+    "h_agent_calls": "## Llamadas por agente",
+    "th_agent_calls": ("Agente", "Conjunto", "Llamadas", "Barra", "Sesiones", "Llamadas/sesi\u00f3n",
+                       "Repeticiones (inferido)"),
+    "h_agent_tokens": "## Tokens por llamada",
+    "th_agent_tokens": ("Agente", "Conjunto", "n", "Tokens (suma)", "Barra", "Mediana", "p90", "Entrada (med.)",
+                        "Salida (med.)", "Cach\u00e9 escrita (med.)", "Cach\u00e9 le\u00edda (med.)",
+                        "Peticiones (med.)"),
+    "h_agent_time": "## Duraci\u00f3n y herramientas",
+    "th_agent_time": ("Agente", "Conjunto", "Duraci\u00f3n aprox. s (med.)", "p90", "Herramientas (med.)", "p90"),
+    "h_agent_model": "## Modelo real",
+    "th_agent_model": ("Agente", "Conjunto", "Modelo", "Llamadas"),
+    # conjuntos
+    "h_by_group": "## Por conjunto",
+    "th_group": ("Conjunto", "Agentes", "Llamadas", "Barra", "Tokens/llamada (med.)", "p90",
+                 "Duraci\u00f3n aprox. s (med.)", "Herramientas (med.)"),
+    "global_group_single": "Solo hay un conjunto con llamadas en la ventana: no hay con qu\u00e9 comparar.",
+    "global_group_ratio": "Los conjuntos tienen vol\u00famenes muy distintos (de %d a %d llamadas): compararlos es solo"
+                          " indicativo.",
+    "global_sin_meta_note": "`sin-meta` re\u00fane las llamadas sin archivo meta: no es un conjunto de agentes y no"
+                            " entra en el recuento de conjuntos ni en la comparaci\u00f3n.",
+    "global_group_detail": "Detalle por conjunto:",
+    "th_group_detail": ("Conjunto", "Sesiones", "Llamadas/sesi\u00f3n", "n", "Tokens (suma)",
+                        "Duraci\u00f3n aprox. s (p90)", "Herramientas (p90)", "Repeticiones (inferido)",
+                        "Repeticiones (% de llamadas)"),
+    "global_group_ranges": "Tokens por llamada, por conjunto y rango de versi\u00f3n:",
+    "th_group_range": ("Conjunto", "Rango", "Llamadas", "n", "Mediana", "p90", "Nota"),
+    # proyectos (global)
+    "project_n": "proyecto %d",
+    "h_by_project": "## Por proyecto",
+    "global_project_notes": (
+        "Los proyectos van numerados por volumen de llamadas, de m\u00e1s a menos (desempate por sesiones y luego por"
+        " tokens). La numeraci\u00f3n puede cambiar entre ejecuciones y no coincide con el alias del reporte de"
+        " proyecto.",
+        "Un proyecto le\u00eddo con todas sus llamadas fuera de la ventana, o solo con skills, no aparece.",
+    ),
+    "th_project": ("Proyecto", "Sesiones", "Llamadas", "Barra", "Tokens (suma)"),
+    "project_omitted": ("La fila omitida suma", "Las %d filas omitidas suman"),
+    # skills
+    "h_skills": "## Skills",
+    "skills_none": "Sin invocaciones de skills en la ventana.",
+    "skills_total": "Invocaciones: %d en %s (%d en la sesi\u00f3n principal, %d en subagentes).",
+    "skills_by_skill": "Por skill:",
+    "th_skill": ("Skill", "Conjunto", "Invocaciones", "Barra", "Sesiones", "Sesi\u00f3n principal", "Subagente"),
+    "skills_by_group": "Por conjunto de skill:",
+    "th_skill_group": ("Conjunto", "Skills", "Invocaciones", "Sesiones"),
+    "skills_by_agent": "Por agente (skills invocadas dentro de subagentes):",
+    "th_skill_agent": ("Agente", "Conjunto del agente", "Skill", "Invocaciones"),
+    "global_skills_note": "Las skills de usuario se agrupan como `(otra skill)`: el nombre de una skill puede revelar"
+                          " contenido privado. Solo se muestran los nombres de las listas cerradas; el prefijo de"
+                          " plugin (`plugin:<prefijo>`) solo se muestra si tambi\u00e9n apareci\u00f3 como agente, y el"
+                          " resto se agrupa como `plugin:(otro)`. En los conjuntos con nombres agrupados la columna"
+                          " `Skills` no se muestra (`-`).",
+    "skills_no_tokens": "No se atribuyen tokens a una skill: corre en el contexto de la sesi\u00f3n que la invoca.",
+    # versiones de Claude Code
+    "h_versions": "## Versiones de Claude Code",
+    "versions_by_range": "Por rango de versi\u00f3n:",
+    "th_range": ("Rango", "Llamadas", "Tokens/llamada (med.)", "p90", "Nota"),
+    "note_doubtful_range": "dudoso: tokens posiblemente inflados por reintentos (corregido en 2.1.328)",
+    "note_no_range": "sin versi\u00f3n en las l\u00edneas o versi\u00f3n no reconocible",
+    "versions_compare": "Comparar entre rangos es solo indicativo.",
+    "versions_seen": "Versiones vistas:",
+    "th_versions_seen": ("Versi\u00f3n", "Llamadas", "Nota"),
+    "note_version_doubtful": "dudosa: posible conteo doble (2.1.310 a 2.1.327)",
+    "note_version_unverified": "no verificada (mayor que %s)",
+    "versions_omitted": "Solo se muestran las %d versiones m\u00e1s recientes; %s.",
+    "versions_omitted_one": "se omite la versi\u00f3n m\u00e1s antigua",
+    "versions_omitted_many": "se omiten las %d versiones m\u00e1s antiguas",
+    # que compara el global
+    "h_compare": "## Qu\u00e9 compara y qu\u00e9 no",
+    "global_compares": (
+        "Compara entre conjuntos de agentes solo estas cifras: llamadas y llamadas por sesi\u00f3n, tokens por llamada"
+        " (mediana y p90), duraci\u00f3n aproximada, herramientas por llamada, uso de skills (invocaciones y"
+        " sesiones) y repeticiones inferidas.",
+        "No compara la calidad del resultado de un agente, ni el costo real, ni el ahorro de nadie: esas cifras no"
+        " salen de las transcripciones.",
+        "Dos conjuntos hacen trabajos distintos: una cifra menor de tokens por llamada no dice nada sobre el"
+        " resultado.",
+        "Comparar conjuntos con vol\u00famenes muy distintos (pocas llamadas frente a muchas) o con versiones de"
+        " Claude Code distintas es solo indicativo: con n < 10 la mediana y el p90 dicen poco (marca `*`), y los"
+        " tokens de las versiones 2.1.310 a 2.1.327 pueden estar inflados por reintentos.",
+        "Las skills solo se comparan por n\u00famero de invocaciones y de sesiones: corren en el contexto de la"
+        " sesi\u00f3n que las invoca y no se les atribuyen tokens.",
+        "Las repeticiones son inferidas, no un reintento confirmado: salen de las horas de inicio y fin de dos"
+        " llamadas seguidas del mismo agente en una sesi\u00f3n. Pueden ser un reintento, un paso de un plan o un"
+        " encargo nuevo, y la herramienta no puede distinguirlos; por eso se muestran como `Repeticiones"
+        " (inferido)` y como porcentaje de las llamadas.",
+        "Contenido de cada conjunto: `integrado`, los agentes integrados de Claude Code; `SyncLayer`, los agentes de"
+        " este repositorio (un agente de proyecto con el mismo nombre cuenta como SyncLayer); `plugin:<prefijo>`,"
+        " todos los agentes de ese plugin en una sola fila; `otros`, los agentes de usuario; `sin-meta`, las"
+        " llamadas sin archivo meta, que no es un conjunto de agentes y no entra en la comparaci\u00f3n. `Agentes`"
+        " cuenta tipos de agente distintos, no filas, y no se muestra (`-`) en `otros` ni en"
+        " `plugin:(no-valido)`.",
+    ),
+    # calidad de los datos
+    "h_quality": "## Calidad de los datos",
+    "th_quality": ("Concepto", "Cantidad"),
+    "q_base": ("Llamadas le\u00eddas (todas las ventanas)", "Llamadas en la ventana", "Llamadas fuera de la ventana",
+               "Llamadas con estad\u00edsticas de tokens"),
+    # mismo orden que los valores de `_quality_section`; solo salen los distintos de cero
+    "q_problems": (
+        "Llamadas da\u00f1adas (fuera de tokens, duraci\u00f3n y herramientas)",
+        "Llamadas da\u00f1adas por l\u00ednea intermedia corrupta",
+        "Llamadas da\u00f1adas por archivo ilegible",
+        "Llamadas da\u00f1adas por tope de tama\u00f1o",
+        "Llamadas sin hora de inicio",
+        "Llamadas ubicadas por la fecha de modificaci\u00f3n del archivo (aproximada)",
+        "Llamadas sin ninguna hora (le\u00eddas en total)",
+        "Llamadas sin usage",
+        "Llamadas con todos sus `message.id` ya contados en otro archivo",
+        "Llamadas sin meta (agente `(sin-meta)`)",
+        "Llamadas sin versi\u00f3n",
+        "Llamadas con versi\u00f3n no reconocible",
+        "Llamadas con versiones en varios rangos",
+        "Llamadas con una versi\u00f3n posterior a la verificada",
+        "Enlaces duros aceptados (hardlinks)",
+        "L\u00edneas sobredimensionadas descartadas",
+        "Llamadas con modelo distinto del que declara el meta",
+    ),
+    "q_main_read": "Sesiones principales le\u00eddas (solo para contar skills)",
+    "q_skills_read": "Skills: invocaciones le\u00eddas",
+    "q_skills_outside": "Skills: invocaciones fuera de la ventana",
+    "q_skills_no_time": "Skills: invocaciones sin hora (solo cuentan con todo el historial)",
+    "q_skills_other": "Skills: invocaciones con nombre no v\u00e1lido (se muestran como `(otra skill)`)",
+    "q_incidents": "Lectura completa (no solo la ventana), contadores de incidencias distintos de cero:",
+    "q_info": "Lectura completa, contadores informativos (no son incidencias) distintos de cero:",
+    "th_counters": ("Contador", "Cantidad"),
+    "global_alias_limit": "Proyectos: dos carpetas distintas con el mismo alias interno (colisi\u00f3n de 32 bits,"
+                          " improbable) se cuentan como un solo proyecto; la cabecera lo avisa cuando ocurre.",
+    # como leer estos numeros
+    "h_guide": "## C\u00f3mo leer estos n\u00fameros",
+    "how_to_read": _ES_HOW_TO_READ_COMMON + (
+        "Solo se leen las carpetas de transcripciones elegidas para este proyecto: las sesiones abiertas desde"
+        " una subcarpeta o un worktree viven en otra carpeta y no se incluyen salvo que se indique.",
+    ),
+    "how_to_read_global": _ES_HOW_TO_READ_COMMON + (
+        "Se leen todas las carpetas de transcripciones de `projects/`: las sesiones abiertas desde una subcarpeta o un"
+        " worktree viven en otra carpeta y salen como otro proyecto.",
+    ),
+    "h_repeats": "### Repeticiones (inferido)",
+    "repeat_limitations": REPEAT_LIMITATIONS,
+    "h_skills_sub": "### Skills",
+    "skill_limitations": SKILL_LIMITATIONS,
+    # pie
+    "h_footer": "## Pie",
+    "footer_scope_global": "alcance: global (todos los proyectos le\u00eddos)",
+    "privacy_notes": (
+        "Este archivo no copia mensajes, prompts, argumentos de herramientas ni rutas. S\u00ed copia nombres de skill"
+        " que escribe el modelo y ids de modelo que pasan un patr\u00f3n (hasta 64 caracteres por celda, aunque la"
+        " skill no exista): pueden llevar texto elegido por el modelo. Es local y revela volumen de uso: no lo subas"
+        " a git ni lo compartas sin revisarlo.",
+        "El alias `p-<8 hex>` es un hash sin sal del nombre de la carpeta del proyecto: quien conozca o adivine el"
+        " nombre de la carpeta puede recalcularlo. No es anonimato.",
+        "Los nombres de skills de usuario salen tal cual: pueden revelar nombres privados. El prefijo de una skill de"
+        " plugin (`plugin:<prefijo>`) sale de texto que escribe el modelo: puede ser cualquier cadena"
+        " `[a-z0-9-]{1,32}`, no solo un nombre de plugin.",
+        "Los nombres de modelo salen de las transcripciones con un patr\u00f3n amplio (`claude-` y tramos de palabra"
+        " de hasta 12 caracteres): un id de modelo personalizado puede salir tal cual.",
+        "Un agente de proyecto con el mismo nombre que uno de SyncLayer cuenta como SyncLayer.",
+    ),
+    "global_privacy_notes": (
+        "Este archivo es privado por defecto: no copia mensajes, prompts, argumentos, rutas, nombres de carpeta ni"
+        " alias de proyecto, y agrupa como `(otra skill)`, `(otro modelo)` y `(otro agente)` lo que no es de una"
+        " lista conocida, pero revela el volumen de uso de cada proyecto. Comp\u00e1rtelo solo despu\u00e9s de"
+        " revisarlo.",
+        "Los proyectos se numeran por volumen en cada ejecuci\u00f3n: la numeraci\u00f3n puede cambiar entre"
+        " ejecuciones y no se puede cruzar con el alias del reporte de proyecto. Con un alias de 32 bits, dos"
+        " carpetas distintas pueden dar el mismo alias interno (improbable): se cuentan como un solo proyecto y la"
+        " cabecera lo avisa.",
+        "El prefijo de un agente de plugin (`plugin:<prefijo>`) lo escribe Claude Code. El prefijo de una skill de"
+        " plugin sale de texto que escribe el modelo: solo se muestra si ese prefijo tambi\u00e9n apareci\u00f3 como"
+        " agente en esta lectura; el resto se agrupa como `plugin:(otro)`. Los nombres de skills de usuario no"
+        " salen: se agrupan como `(otra skill)`.",
+        "Los nombres de modelo que no son de una lista cerrada (familias conocidas, n\u00fameros y fechas) salen como"
+        " `(otro modelo)`. En los conjuntos `otros` y `plugin:(no-valido)` y en los conjuntos de skills con nombres"
+        " agrupados no se muestra cu\u00e1ntos agentes ni cu\u00e1ntas skills distintos hay (`-`).",
+        "Un agente de proyecto con el mismo nombre que uno de SyncLayer cuenta como SyncLayer.",
+    ),
+}
+CATALOG = types.MappingProxyType({"es": types.MappingProxyType(dict(_ES))})
+UNKNOWN_WARNING = _ES["unknown_warning"]
+LABEL_MAIN_READ = "sesiones principales leidas"
+# Conjuntos de agentes que el reporte conoce (los de classify_agent y `sin-meta`); un conjunto `plugin:<prefijo>`
+# con el prefijo validado tambien se muestra. Cualquier otra etiqueta sale como OTHER_GROUP en las tablas de los
+# dos reportes (defensa uniforme: el lector nunca la produce).
+OTHER_GROUP = "(otro conjunto)"
+NO_META_GROUP = "sin-meta"
+AGENT_GROUPS = frozenset(("SyncLayer", "integrado", "otros", "plugin:(no-valido)", NO_META_GROUP))
+# Conjuntos cuyo numero de agentes (o de skills) distintos el global no muestra: reunen nombres de usuario.
+HIDDEN_COUNT_GROUPS = frozenset(("otros", "plugin:(no-valido)", OTHER_GROUP))
+
+# Alias de compatibilidad para las pruebas existentes (HOW_TO_READ, PRIVACY_NOTES, NOTE_*, LEGEND_SMALL): los
+# generadores leen `t[...]`, no estas constantes.
+HOW_TO_READ = _ES["how_to_read"]
+PRIVACY_NOTES = _ES["privacy_notes"]
 KNOWN_WARNINGS = frozenset((
     WARN_NO_MESSAGE_ID, WARN_ID_REPEATED, WARN_ID_CAP, WARN_SKILL_ID_REPEATED, WARN_SKILL_ID_CAP,
     WARN_MAIN_HARDLINK, WARN_MAIN_CAP, WARN_MAIN_UNREADABLE, WARN_ALIAS_COLLISION,
 ))
-NOTE_DOUBTFUL_RANGE = "dudoso: tokens posiblemente inflados por reintentos (corregido en 2.1.328)"
-NOTE_NO_RANGE = "sin versi\u00f3n en las l\u00edneas o versi\u00f3n no reconocible"
-LEGEND_SMALL = "`*`: n < %d, pocas muestras. La mediana y el p90 dicen poco." % SMALL_N
+NOTE_DOUBTFUL_RANGE = _ES["note_doubtful_range"]
+NOTE_NO_RANGE = _ES["note_no_range"]
+LEGEND_SMALL = _ES["legend_small"] % SMALL_N
 
 # Contadores de la lectura completa, en dos listas CERRADAS (cada etiqueta de READ_QUALITY_LABELS esta en una
 # sola). INFORMATIVOS: dicen que se leyo o se saco a proposito, no que algo fallo. El resto son INCIDENCIAS.
@@ -2628,26 +2864,26 @@ def _raw_table(headers, aligns, rows) -> list:
     return out
 
 
-def _legend(table_lines) -> list:
+def _legend(t, table_lines) -> list:
     """La leyenda de `*` (con una linea en blanco antes) si alguna fila de la tabla lleva la marca; si no, nada.
     Una celda de texto variable termina en comilla invertida (`_code`), nunca en " * |"."""
     if any((SMALL_MARK + " |") in line for line in table_lines[2:]):
-        return ["", LEGEND_SMALL]
+        return ["", t["legend_small"] % SMALL_N]
     return []
 
 
-def _table(headers, aligns, rows) -> list:
+def _table(t, headers, aligns, rows) -> list:
     """Tabla Markdown con su leyenda de `*` si lleva la marca."""
     out = _raw_table(headers, aligns, rows)
-    return out + _legend(out)
+    return out + _legend(t, out)
 
 
-def _capped_table(headers, aligns, rows) -> list:
+def _capped_table(t, headers, aligns, rows) -> list:
     """Como _table, acotada a MAX_TABLE_ROWS filas, con una nota si se omiten (antes de la leyenda)."""
     out = _raw_table(headers, aligns, rows[:MAX_TABLE_ROWS])
-    legend = _legend(out)
+    legend = _legend(t, out)
     if len(rows) > MAX_TABLE_ROWS:
-        out += ["", "Se muestran las %d primeras filas de %d." % (MAX_TABLE_ROWS, len(rows))]
+        out += ["", t["table_capped"] % (MAX_TABLE_ROWS, len(rows))]
     return out + legend
 
 
@@ -2662,28 +2898,28 @@ def _range_calls(metrics, name) -> int:
     return 0
 
 
-def _window_text(window) -> str:
+def _window_text(t, window) -> str:
     if window.is_all:
-        return "todo el historial (sin ventana)"
-    return "%s a %s (UTC, ambos inclusive)" % (window.since.isoformat(), window.until.isoformat())
+        return t["window_all"]
+    return t["window_range"] % (window.since.isoformat(), window.until.isoformat())
 
 
-def _versions_header(seen) -> str:
+def _versions_header(t, seen) -> str:
     # las versiones de las metricas son texto de entrada para este generador: siempre por `_code`
     if not seen:
-        return "sin versiones reconocibles"
+        return t["versions_none"]
     if len(seen) == 1:
-        return "versi\u00f3n %s" % _code(seen[0][0])
-    return "versiones %s a %s (%d versiones)" % (_code(seen[0][0]), _code(seen[-1][0]), len(seen))
+        return t["versions_one"] % _code(seen[0][0])
+    return t["versions_many"] % (_code(seen[0][0]), _code(seen[-1][0]), len(seen))
 
 
-def _recent_codes(labels) -> str:
+def _recent_codes(t, labels) -> str:
     """Hasta MAX_SHOWN_VERSIONS versiones, las mas recientes primero y cada una por `_code`, y cuantas quedan
     fuera. Como `_recent_first` del lector, pero sin confiar en que las etiquetas ya vengan filtradas."""
     ordered = sorted(labels, key=lambda v: (version_key(v), v), reverse=True)
     text = ", ".join(_code(v) for v in ordered[:MAX_SHOWN_VERSIONS])
     if len(ordered) > MAX_SHOWN_VERSIONS:
-        text += " (+%d m\u00e1s)" % (len(ordered) - MAX_SHOWN_VERSIONS)
+        text += t["versions_more"] % (len(ordered) - MAX_SHOWN_VERSIONS)
     return text
 
 
@@ -2710,89 +2946,82 @@ def _read_count(metrics, label) -> int:
     return sum(n for name, n in metrics.read_quality if name == label)
 
 
-def _notices(metrics) -> list:
+def _notices(t, metrics) -> list:
     """Avisos de la cabecera: solo los que valen mas de cero."""
     q = metrics.quality
     out = []
     doubtful = _range_calls(metrics, RANGE_DOUBTFUL)
     if doubtful:
-        out.append("%s con versiones de Claude Code de 2.1.310 a 2.1.327: tokens posiblemente inflados por"
-                   " reintentos (corregido en 2.1.328)." % _plural(doubtful, "llamada", "llamadas"))
+        out.append(t["notice_doubtful"] % _plural(doubtful, *t["w_call"]))
     if metrics.unverified_versions:
-        out.append("hay versiones de Claude Code posteriores a la \u00faltima verificada (%s): %s. El formato"
-                   " interno puede haber cambiado."
-                   % (_code(metrics.verified_max), _recent_codes(metrics.unverified_versions)))
+        out.append(t["notice_unverified"]
+                   % (_code(metrics.verified_max), _recent_codes(t, metrics.unverified_versions)))
     for text in metrics.warnings:
-        out.append(text if text in KNOWN_WARNINGS else UNKNOWN_WARNING)
+        out.append(text if text in KNOWN_WARNINGS else t["unknown_warning"])
     if q.excluded == 1:
-        out.append("1 llamada da\u00f1ada queda fuera de los tokens, la duraci\u00f3n y las herramientas.")
+        out.append(t["notice_excluded_one"])
     elif q.excluded:
-        out.append("%d llamadas da\u00f1adas quedan fuera de los tokens, la duraci\u00f3n y las herramientas."
-                   % q.excluded)
+        out.append(t["notice_excluded_many"] % q.excluded)
     if q.without_start:
-        text = _plural(q.without_start, "llamada sin hora de inicio", "llamadas sin hora de inicio")
+        text = _plural(q.without_start, *t["w_call_no_start"])
         if q.placed_by_fallback:
-            text += "; %s por la fecha de modificaci\u00f3n del archivo (aproximada)" % _plural(
-                q.placed_by_fallback, "ubicada", "ubicadas")
+            text += t["notice_placed"] % _plural(q.placed_by_fallback, *t["w_placed"])
         out.append(text + ".")
     if q.hardlinks == 1:
-        out.append("1 llamada le\u00edda de un enlace duro aceptado.")
+        out.append(t["notice_hardlinks_one"])
     elif q.hardlinks:
-        out.append("%d llamadas le\u00eddas de enlaces duros aceptados." % q.hardlinks)
+        out.append(t["notice_hardlinks_many"] % q.hardlinks)
     incidents = _unwarned_incidents(metrics)
     if incidents:
-        out.append("la lectura tuvo incidencias en %s (detalle en Calidad de los datos)."
-                   % _plural(len(incidents), "contador", "contadores"))
+        out.append(t["notice_incidents"] % _plural(len(incidents), *t["w_counter"]))
     return out
 
 
-def _header_section(metrics, alias, generated) -> list:
-    t = metrics.total
+def _header_section(t, metrics, alias, generated) -> list:
+    tot = metrics.total
     # un dato por linea con `> - `: varias lineas `> ...` seguidas serian un solo parrafo en GFM
     lines = [
         REPORT_MARKER,
-        "# Reporte de uso de subagentes: proyecto " + alias,
+        t["title_project"] % alias,
         "",
-        "> - Ventana: " + _window_text(metrics.window),
-        "> - Llamadas: %d en %s" % (t.calls, _plural(t.sessions, "sesi\u00f3n", "sesiones")),
+        t["hdr_window"] % _window_text(t, metrics.window),
+        t["hdr_calls"] % (tot.calls, _plural(tot.sessions, *t["w_session"])),
     ]
     if metrics.folders_read:   # 0: las metricas no vienen de una lectura (pruebas): no se inventa el dato
-        lines.append("> - Carpetas de transcripciones le\u00eddas: %d" % metrics.folders_read)
+        lines.append(t["hdr_folders"] % metrics.folders_read)
     lines += [
-        "> - Claude Code: " + _versions_header(metrics.versions_seen),
-        "> - Esquema del reporte: %d" % REPORT_SCHEMA,
+        t["hdr_claude"] % _versions_header(t, metrics.versions_seen),
+        t["hdr_schema"] % REPORT_SCHEMA,
     ]
     if generated is not None:
-        lines.append("> - Generado: " + generated.isoformat())
-    lines.append("> - Reporte local: no lo subas a git.")
-    for text in _notices(metrics):
-        lines.append("> - AVISO: " + text)
+        lines.append(t["hdr_generated"] % generated.isoformat())
+    lines.append(t["hdr_local"])
+    for text in _notices(t, metrics):
+        lines.append(t["hdr_notice"] % text)
     return lines + [""]
 
 
-def _summary_section(metrics, extra=()) -> list:
+def _summary_section(t, metrics, extra=()) -> list:
     """`extra`: lineas fijas que el reporte global anade tras la primera (proyectos y conjuntos)."""
-    t = metrics.total
-    lines = ["## Resumen", ""]
-    items = ["Llamadas: %d en %s (%s llamadas por sesi\u00f3n)" % (
-        t.calls, _plural(t.sessions, "sesi\u00f3n", "sesiones"), _tenths(t.calls_per_session_tenths))]
+    tot = metrics.total
+    lines = [t["h_summary"], ""]
+    items = [t["sum_calls"] % (
+        tot.calls, _plural(tot.sessions, *t["w_session"]), _tenths(tot.calls_per_session_tenths))]
     items.extend(extra)
-    if not t.calls:
+    if not tot.calls:
         lines += _bullets(items)
-        return lines + ["", "Sin llamadas a subagentes en la ventana.", ""]
+        return lines + ["", t["sum_none"], ""]
     # pares (nombre, conjunto), que es como T3 agrupa: el numero coincide con las filas de las tablas
-    items.append("Agentes distintos (por nombre y conjunto): %d" % len(metrics.agents))
-    items.append("Tokens (suma de las llamadas con estad\u00edsticas): %s en %s" % (
-        _num(t.tokens.total.total), _plural(t.tokens.n, "llamada", "llamadas")))
-    items.append("Repeticiones consecutivas (inferido): %d" % t.repeats)
+    items.append(t["sum_agents"] % len(metrics.agents))
+    items.append(t["sum_tokens"] % (
+        _num(tot.tokens.total.total), _plural(tot.tokens.n, *t["w_call"])))
+    items.append(t["sum_repeats"] % tot.repeats)
     doubtful = _range_calls(metrics, RANGE_DOUBTFUL)
-    items.append("Llamadas en el rango de versi\u00f3n dudoso (2.1.310 a 2.1.327): %d de %d (%s)" % (
-        doubtful, t.calls, _percent(doubtful, t.calls)))
-    if t.excluded:
-        items.append("Llamadas da\u00f1adas, fuera de tokens, duraci\u00f3n y herramientas: %d de %d (%s)" % (
-            t.excluded, t.calls, _percent(t.excluded, t.calls)))
-    items.append("Skills: %s en %s" % (_plural(metrics.skills.calls, "invocaci\u00f3n", "invocaciones"),
-                                       _plural(metrics.skills.sessions, "sesi\u00f3n", "sesiones")))
+    items.append(t["sum_doubtful"] % (doubtful, tot.calls, _percent(doubtful, tot.calls)))
+    if tot.excluded:
+        items.append(t["sum_excluded"] % (tot.excluded, tot.calls, _percent(tot.excluded, tot.calls)))
+    items.append(t["sum_skills"] % (_plural(metrics.skills.calls, *t["w_invocation"]),
+                                    _plural(metrics.skills.sessions, *t["w_session"])))
     return lines + _bullets(items) + [""]
 
 
@@ -2818,7 +3047,7 @@ def _model_rows(models, label_of) -> list:
     return sorted(merged.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
-def _agent_sections(metrics, model_label=None) -> list:
+def _agent_sections(t, metrics, model_label=None) -> list:
     """`model_label`: None (el reporte de proyecto muestra el modelo que el lector ya filtro) o la funcion que el
     global usa para limitarlo a una lista cerrada (`_global_model_label`)."""
     agents = metrics.agents
@@ -2844,23 +3073,18 @@ def _agent_sections(metrics, model_label=None) -> list:
             _small(m.tools.median, m.tools.small), _small(m.tools.p90, m.tools.small)])
         for model, count in _model_rows(m.models, model_label):
             model_rows.append([name, group, _code(model), _num(count)])
-    out = ["## Llamadas por agente", ""]
-    out += _capped_table(["Agente", "Conjunto", "Llamadas", "Barra", "Sesiones", "Llamadas/sesi\u00f3n",
-                          "Repeticiones (inferido)"], "llrlrrr", calls_rows)
-    out += ["", "## Tokens por llamada", ""]
-    out += _capped_table(
-        ["Agente", "Conjunto", "n", "Tokens (suma)", "Barra", "Mediana", "p90", "Entrada (med.)",
-         "Salida (med.)", "Cach\u00e9 escrita (med.)", "Cach\u00e9 le\u00edda (med.)", "Peticiones (med.)"],
-        "llrrlrrrrrrr", token_rows)
-    out += ["", "## Duraci\u00f3n y herramientas", ""]
-    out += _capped_table(["Agente", "Conjunto", "Duraci\u00f3n aprox. s (med.)", "p90", "Herramientas (med.)",
-                          "p90"], "llrrrr", time_rows)
-    out += ["", "## Modelo real", ""]
-    out += _capped_table(["Agente", "Conjunto", "Modelo", "Llamadas"], "lllr", model_rows)
+    out = [t["h_agent_calls"], ""]
+    out += _capped_table(t, t["th_agent_calls"], "llrlrrr", calls_rows)
+    out += ["", t["h_agent_tokens"], ""]
+    out += _capped_table(t, t["th_agent_tokens"], "llrrlrrrrrrr", token_rows)
+    out += ["", t["h_agent_time"], ""]
+    out += _capped_table(t, t["th_agent_time"], "llrrrr", time_rows)
+    out += ["", t["h_agent_model"], ""]
+    out += _capped_table(t, t["th_agent_model"], "lllr", model_rows)
     return out + [""]
 
 
-def _group_table(metrics, hide_counts=False) -> list:
+def _group_table(t, metrics, hide_counts=False) -> list:
     """`hide_counts`: el global no muestra la columna `Agentes` de los conjuntos de HIDDEN_COUNT_GROUPS (el
     numero revelaria cuantos agentes de usuario distintos hay)."""
     groups = metrics.groups
@@ -2874,151 +3098,137 @@ def _group_table(metrics, hide_counts=False) -> list:
                      _small(m.tokens.total.median, m.tokens.total.small),
                      _small(m.tokens.total.p90, m.tokens.total.small),
                      _small(m.duration.median, m.duration.small), _small(m.tools.median, m.tools.small)])
-    return _capped_table(["Conjunto", "Agentes", "Llamadas", "Barra", "Tokens/llamada (med.)", "p90",
-                          "Duraci\u00f3n aprox. s (med.)", "Herramientas (med.)"], "lrrlrrrr", rows)
+    return _capped_table(t, t["th_group"], "lrrlrrrr", rows)
 
 
-def _group_section(metrics) -> list:
-    return ["## Por conjunto", ""] + _group_table(metrics) + [""]
+def _group_section(t, metrics) -> list:
+    return [t["h_by_group"], ""] + _group_table(t, metrics) + [""]
 
 
-def _skills_section(metrics) -> list:
+def _skills_section(t, metrics) -> list:
     sk = metrics.skills
-    out = ["## Skills", ""]
+    out = [t["h_skills"], ""]
     if sk.calls == 0:
-        out.append("Sin invocaciones de skills en la ventana.")
+        out.append(t["skills_none"])
     else:
-        out.append("Invocaciones: %d en %s (%d en la sesi\u00f3n principal, %d en subagentes)." % (
-            sk.calls, _plural(sk.sessions, "sesi\u00f3n", "sesiones"), sk.main_calls, sk.subagent_calls))
+        out.append(t["skills_total"] % (
+            sk.calls, _plural(sk.sessions, *t["w_session"]), sk.main_calls, sk.subagent_calls))
         rows = [r for r in sk.rows if r.calls > 0]
         max_calls = max([r.calls for r in rows] or [0])
-        out += ["", "Por skill:", ""]
+        out += ["", t["skills_by_skill"], ""]
         out += _capped_table(
-            ["Skill", "Conjunto", "Invocaciones", "Barra", "Sesiones", "Sesi\u00f3n principal", "Subagente"],
+            t, t["th_skill"],
             "llrlrrr",
             [[_code(r.skill), _code(r.group), _num(r.calls), _bar(r.calls, max_calls), _num(r.sessions),
               _num(r.main_calls), _num(r.subagent_calls)] for r in rows])
         groups = [g for g in sk.groups if g.calls > 0]
-        out += ["", "Por conjunto de skill:", ""]
+        out += ["", t["skills_by_group"], ""]
         out += _capped_table(
-            ["Conjunto", "Skills", "Invocaciones", "Sesiones"], "lrrr",
+            t, t["th_skill_group"], "lrrr",
             [[_code(g.group), _num(g.skills), _num(g.calls), _num(g.sessions)] for g in groups])
         linked = [r for r in sk.by_agent if r.calls > 0]
         if linked:
-            out += ["", "Por agente (skills invocadas dentro de subagentes):", ""]
+            out += ["", t["skills_by_agent"], ""]
             out += _capped_table(
-                ["Agente", "Conjunto del agente", "Skill", "Invocaciones"], "lllr",
+                t, t["th_skill_agent"], "lllr",
                 [[_code(r.agent), _code(r.agent_group), _code(r.skill), _num(r.calls)] for r in linked])
-    out += ["", "No se atribuyen tokens a una skill: corre en el contexto de la sesi\u00f3n que la invoca.", ""]
+    out += ["", t["skills_no_tokens"], ""]
     return out
 
 
-def _version_section(metrics) -> list:
+def _version_section(t, metrics) -> list:
     rows = []
     for row in metrics.total.versions:
         if row.range == RANGE_NONE and row.calls == 0:
             continue
-        note = NOTE_DOUBTFUL_RANGE if row.inflated else (NOTE_NO_RANGE if row.range == RANGE_NONE else "")
+        note = t["note_doubtful_range"] if row.inflated else (t["note_no_range"] if row.range == RANGE_NONE else "")
         tk = row.tokens
         rows.append([_code(row.range), _num(row.calls), _small(tk.total.median, tk.total.small),
                      _small(tk.total.p90, tk.total.small), note])
-    out = ["## Versiones de Claude Code", "", "Por rango de versi\u00f3n:", ""]
-    out += _table(["Rango", "Llamadas", "Tokens/llamada (med.)", "p90", "Nota"], "lrrrl", rows)
-    out += ["", "Comparar entre rangos es solo indicativo.", ""]
+    out = [t["h_versions"], "", t["versions_by_range"], ""]
+    out += _table(t, t["th_range"], "lrrrl", rows)
+    out += ["", t["versions_compare"], ""]
     seen = list(metrics.versions_seen)
     omitted = max(0, len(seen) - MAX_VERSION_ROWS)
     version_rows = []
     for version, count in seen[omitted:]:
         if _range_of(version_key(version)) == RANGE_DOUBTFUL:
-            note = "dudosa: posible conteo doble (2.1.310 a 2.1.327)"
+            note = t["note_version_doubtful"]
         elif is_unverified(version):
-            note = "no verificada (mayor que %s)" % _code(metrics.verified_max)
+            note = t["note_version_unverified"] % _code(metrics.verified_max)
         else:
             note = ""
         version_rows.append([_code(version), _num(count), note])
     if version_rows:
-        out += ["Versiones vistas:", ""]
-        out += _table(["Versi\u00f3n", "Llamadas", "Nota"], "lrl", version_rows)
+        out += [t["versions_seen"], ""]
+        out += _table(t, t["th_versions_seen"], "lrl", version_rows)
         if omitted:
-            out += ["", "Solo se muestran las %d versiones m\u00e1s recientes; %s." % (
-                MAX_VERSION_ROWS, "se omite la versi\u00f3n m\u00e1s antigua" if omitted == 1
-                else "se omiten las %d versiones m\u00e1s antiguas" % omitted)]
+            out += ["", t["versions_omitted"] % (
+                MAX_VERSION_ROWS, t["versions_omitted_one"] if omitted == 1
+                else t["versions_omitted_many"] % omitted)]
         out.append("")
     return out
 
 
-def _quality_section(metrics) -> list:
+def _quality_section(t, metrics) -> list:
     q = metrics.quality
-    rows = [["Llamadas le\u00eddas (todas las ventanas)", _num(q.calls_read)],
-            ["Llamadas en la ventana", _num(q.calls_in_window)],
-            ["Llamadas fuera de la ventana", _num(q.calls_outside_window)],
-            ["Llamadas con estad\u00edsticas de tokens", _num(q.tokens_calls)]]
-    # solo si son distintos de cero (los cuatro de arriba van siempre)
+    base = t["q_base"]
+    rows = [[base[0], _num(q.calls_read)], [base[1], _num(q.calls_in_window)],
+            [base[2], _num(q.calls_outside_window)], [base[3], _num(q.tokens_calls)]]
+    # solo si son distintos de cero (los cuatro de arriba van siempre); los rotulos, en el orden de `q_problems`
+    lab = t["q_problems"]
     problems = (
-        ("Llamadas da\u00f1adas (fuera de tokens, duraci\u00f3n y herramientas)", q.excluded),
-        ("Llamadas da\u00f1adas por l\u00ednea intermedia corrupta", q.excluded_corrupt_line),
-        ("Llamadas da\u00f1adas por archivo ilegible", q.excluded_unreadable),
-        ("Llamadas da\u00f1adas por tope de tama\u00f1o", q.excluded_cap),
-        ("Llamadas sin hora de inicio", q.without_start),
-        ("Llamadas ubicadas por la fecha de modificaci\u00f3n del archivo (aproximada)", q.placed_by_fallback),
-        ("Llamadas sin ninguna hora (le\u00eddas en total)", q.without_any_time),
-        ("Llamadas sin usage", q.without_usage),
-        ("Llamadas con todos sus `message.id` ya contados en otro archivo", q.all_ids_repeated),
-        ("Llamadas sin meta (agente `(sin-meta)`)", q.without_meta),
-        ("Llamadas sin versi\u00f3n", q.without_version),
-        ("Llamadas con versi\u00f3n no reconocible", q.unrecognized_version),
-        ("Llamadas con versiones en varios rangos", q.multiple_ranges),
-        ("Llamadas con una versi\u00f3n posterior a la verificada", q.unverified_calls),
-        ("Enlaces duros aceptados (hardlinks)", q.hardlinks),
-        ("L\u00edneas sobredimensionadas descartadas", q.oversize_lines),
-        ("Llamadas con modelo distinto del que declara el meta", q.model_mismatch),
+        (lab[0], q.excluded), (lab[1], q.excluded_corrupt_line), (lab[2], q.excluded_unreadable),
+        (lab[3], q.excluded_cap), (lab[4], q.without_start), (lab[5], q.placed_by_fallback),
+        (lab[6], q.without_any_time), (lab[7], q.without_usage), (lab[8], q.all_ids_repeated),
+        (lab[9], q.without_meta), (lab[10], q.without_version), (lab[11], q.unrecognized_version),
+        (lab[12], q.multiple_ranges), (lab[13], q.unverified_calls), (lab[14], q.hardlinks),
+        (lab[15], q.oversize_lines), (lab[16], q.model_mismatch),
     )
     for label, value in problems:
         if value:
             rows.append([label, _num(value)])
     main_read = _read_count(metrics, LABEL_MAIN_READ)
     if main_read:
-        rows.append(["Sesiones principales le\u00eddas (solo para contar skills)", _num(main_read)])
+        rows.append([t["q_main_read"], _num(main_read)])
     sq = metrics.skills.quality
     if sq.uses_read:
-        rows.append(["Skills: invocaciones le\u00eddas", _num(sq.uses_read)])
+        rows.append([t["q_skills_read"], _num(sq.uses_read)])
         if sq.outside_window:
-            rows.append(["Skills: invocaciones fuera de la ventana", _num(sq.outside_window)])
+            rows.append([t["q_skills_outside"], _num(sq.outside_window)])
         if sq.without_time:
-            rows.append(["Skills: invocaciones sin hora (solo cuentan con todo el historial)",
-                         _num(sq.without_time)])
+            rows.append([t["q_skills_no_time"], _num(sq.without_time)])
         if sq.other_name:
-            rows.append(["Skills: invocaciones con nombre no v\u00e1lido (se muestran como `(otra skill)`)",
-                         _num(sq.other_name)])
-    out = ["## Calidad de los datos", ""] + _table(["Concepto", "Cantidad"], "lr", rows)
+            rows.append([t["q_skills_other"], _num(sq.other_name)])
+    out = [t["h_quality"], ""] + _table(t, t["th_quality"], "lr", rows)
     incidents = _read_incidents(metrics)
     if incidents:
-        out += ["", "Lectura completa (no solo la ventana), contadores de incidencias distintos de cero:", ""]
-        out += _table(["Contador", "Cantidad"], "lr", [[_code(label), _num(n)] for label, n in incidents])
+        out += ["", t["q_incidents"], ""]
+        out += _table(t, t["th_counters"], "lr", [[_code(label), _num(n)] for label, n in incidents])
     info = _read_info(metrics)
     if info:
-        out += ["", "Lectura completa, contadores informativos (no son incidencias) distintos de cero:", ""]
-        out += _table(["Contador", "Cantidad"], "lr", [[_code(label), _num(n)] for label, n in info])
+        out += ["", t["q_info"], ""]
+        out += _table(t, t["th_counters"], "lr", [[_code(label), _num(n)] for label, n in info])
     return out + [""]
 
 
-def _guide_section(how_to_read) -> list:
-    """`how_to_read`: HOW_TO_READ (proyecto) o HOW_TO_READ_GLOBAL; las limitaciones de repeticiones y de
-    skills son las mismas."""
-    out = ["## C\u00f3mo leer estos n\u00fameros", ""] + _bullets(how_to_read)
-    out += ["", "### Repeticiones (inferido)", ""] + _bullets(REPEAT_LIMITATIONS)
-    out += ["", "### Skills", ""] + _bullets(SKILL_LIMITATIONS)
+def _guide_section(t, how_to_read) -> list:
+    """`how_to_read`: `t["how_to_read"]` (proyecto) o `t["how_to_read_global"]`; las limitaciones de repeticiones y
+    de skills son las mismas."""
+    out = [t["h_guide"], ""] + _bullets(how_to_read)
+    out += ["", t["h_repeats"], ""] + _bullets(t["repeat_limitations"])
+    out += ["", t["h_skills_sub"], ""] + _bullets(t["skill_limitations"])
     return out + [""]
 
 
-def _footer_section(metrics, alias) -> list:
-    out = ["## Pie", ""] + _bullets([
+def _footer_section(t, metrics, alias) -> list:
+    out = [t["h_footer"], ""] + _bullets([
         "report_schema: %d" % REPORT_SCHEMA,
         "herramienta: " + TOOL_NAME,
         "ultima_version_verificada: " + _code(metrics.verified_max),
         "proyecto: " + alias,
     ])
-    return out + [""] + _bullets(PRIVACY_NOTES)
+    return out + [""] + _bullets(t["privacy_notes"])
 
 
 def render_project_report(metrics, project_alias, generated=None) -> str:
@@ -3035,17 +3245,18 @@ def render_project_report(metrics, project_alias, generated=None) -> str:
         raise ValueError(MSG_REPORT_ALIAS)
     if generated is not None and not _is_date(generated):
         raise ValueError(MSG_REPORT_DATE)
-    lines = _header_section(metrics, project_alias, generated)
-    lines += _summary_section(metrics)
+    t = CATALOG[DEFAULT_LANG]
+    lines = _header_section(t, metrics, project_alias, generated)
+    lines += _summary_section(t, metrics)
     if metrics.total.calls:
-        lines += _agent_sections(metrics)
-        lines += _group_section(metrics)
-    lines += _skills_section(metrics)
+        lines += _agent_sections(t, metrics)
+        lines += _group_section(t, metrics)
+    lines += _skills_section(t, metrics)
     if metrics.total.calls:
-        lines += _version_section(metrics)
-    lines += _quality_section(metrics)
-    lines += _guide_section(HOW_TO_READ)
-    lines += _footer_section(metrics, project_alias)
+        lines += _version_section(t, metrics)
+    lines += _quality_section(t, metrics)
+    lines += _guide_section(t, t["how_to_read"])
+    lines += _footer_section(t, metrics, project_alias)
     return "\n".join(lines) + "\n"
 
 
@@ -3123,64 +3334,14 @@ GLOBAL_MODEL_RE = re.compile(
     r"(?=.{8,64}\Z)claude-(?:" + _GLOBAL_MODEL_WORD + r"|" + _MODEL_NUM + r")"
     r"(?:-(?:" + _GLOBAL_MODEL_WORD + r"|latest|" + _MODEL_NUM + r"|[0-9]{8})){0,8}(?:@[0-9]{8})?\Z")
 
-HOW_TO_READ_GLOBAL = HOW_TO_READ[:-1] + (
-    "Se leen todas las carpetas de transcripciones de `projects/`: las sesiones abiertas desde una subcarpeta o un"
-    " worktree viven en otra carpeta y salen como otro proyecto.",
-)
-GLOBAL_COMPARES = (
-    "Compara entre conjuntos de agentes solo estas cifras: llamadas y llamadas por sesi\u00f3n, tokens por llamada"
-    " (mediana y p90), duraci\u00f3n aproximada, herramientas por llamada, uso de skills (invocaciones y sesiones) y"
-    " repeticiones inferidas.",
-    "No compara la calidad del resultado de un agente, ni el costo real, ni el ahorro de nadie: esas cifras no salen"
-    " de las transcripciones.",
-    "Dos conjuntos hacen trabajos distintos: una cifra menor de tokens por llamada no dice nada sobre el resultado.",
-    "Comparar conjuntos con vol\u00famenes muy distintos (pocas llamadas frente a muchas) o con versiones de Claude"
-    " Code distintas es solo indicativo: con n < 10 la mediana y el p90 dicen poco (marca `*`), y los tokens de las"
-    " versiones 2.1.310 a 2.1.327 pueden estar inflados por reintentos.",
-    "Las skills solo se comparan por n\u00famero de invocaciones y de sesiones: corren en el contexto de la sesi\u00f3n"
-    " que las invoca y no se les atribuyen tokens.",
-    "Las repeticiones son inferidas, no un reintento confirmado: salen de las horas de inicio y fin de dos llamadas"
-    " seguidas del mismo agente en una sesi\u00f3n. Pueden ser un reintento, un paso de un plan o un encargo nuevo, y la"
-    " herramienta no puede distinguirlos; por eso se muestran como `Repeticiones (inferido)` y como porcentaje de las"
-    " llamadas.",
-    "Contenido de cada conjunto: `integrado`, los agentes integrados de Claude Code; `SyncLayer`, los agentes de este"
-    " repositorio (un agente de proyecto con el mismo nombre cuenta como SyncLayer); `plugin:<prefijo>`, todos los"
-    " agentes de ese plugin en una sola fila; `otros`, los agentes de usuario; `sin-meta`, las llamadas sin archivo"
-    " meta, que no es un conjunto de agentes y no entra en la comparaci\u00f3n. `Agentes` cuenta tipos de agente"
-    " distintos, no filas, y no se muestra (`-`) en `otros` ni en `plugin:(no-valido)`.",
-)
-GLOBAL_PROJECT_NOTES = (
-    "Los proyectos van numerados por volumen de llamadas, de m\u00e1s a menos (desempate por sesiones y luego por"
-    " tokens). La numeraci\u00f3n puede cambiar entre ejecuciones y no coincide con el alias del reporte de proyecto.",
-    "Un proyecto le\u00eddo con todas sus llamadas fuera de la ventana, o solo con skills, no aparece.",
-)
-GLOBAL_SIN_META_NOTE = (
-    "`sin-meta` re\u00fane las llamadas sin archivo meta: no es un conjunto de agentes y no entra en el recuento de"
-    " conjuntos ni en la comparaci\u00f3n.")
-GLOBAL_ALIAS_LIMIT = (
-    "Proyectos: dos carpetas distintas con el mismo alias interno (colisi\u00f3n de 32 bits, improbable) se cuentan como"
-    " un solo proyecto; la cabecera lo avisa cuando ocurre.")
-GLOBAL_SKILLS_NOTE = (
-    "Las skills de usuario se agrupan como `(otra skill)`: el nombre de una skill puede revelar contenido privado."
-    " Solo se muestran los nombres de las listas cerradas; el prefijo de plugin (`plugin:<prefijo>`) solo se muestra"
-    " si tambi\u00e9n apareci\u00f3 como agente, y el resto se agrupa como `plugin:(otro)`. En los conjuntos con nombres"
-    " agrupados la columna `Skills` no se muestra (`-`).")
-GLOBAL_PRIVACY_NOTES = (
-    "Este archivo es privado por defecto: no copia mensajes, prompts, argumentos, rutas, nombres de carpeta ni alias"
-    " de proyecto, y agrupa como `(otra skill)`, `(otro modelo)` y `(otro agente)` lo que no es de una lista"
-    " conocida, pero revela el volumen de uso de cada proyecto. Comp\u00e1rtelo solo despu\u00e9s de revisarlo.",
-    "Los proyectos se numeran por volumen en cada ejecuci\u00f3n: la numeraci\u00f3n puede cambiar entre ejecuciones y no se"
-    " puede cruzar con el alias del reporte de proyecto. Con un alias de 32 bits, dos carpetas distintas pueden dar el"
-    " mismo alias interno (improbable): se cuentan como un solo proyecto y la cabecera lo avisa.",
-    "El prefijo de un agente de plugin (`plugin:<prefijo>`) lo escribe Claude Code. El prefijo de una skill de plugin"
-    " sale de texto que escribe el modelo: solo se muestra si ese prefijo tambi\u00e9n apareci\u00f3 como agente en esta"
-    " lectura; el resto se agrupa como `plugin:(otro)`. Los nombres de skills de usuario no salen: se agrupan como"
-    " `(otra skill)`.",
-    "Los nombres de modelo que no son de una lista cerrada (familias conocidas, n\u00fameros y fechas) salen como"
-    " `(otro modelo)`. En los conjuntos `otros` y `plugin:(no-valido)` y en los conjuntos de skills con nombres"
-    " agrupados no se muestra cu\u00e1ntos agentes ni cu\u00e1ntas skills distintos hay (`-`).",
-    "Un agente de proyecto con el mismo nombre que uno de SyncLayer cuenta como SyncLayer.",
-)
+# Alias de compatibilidad para las pruebas existentes (GLOBAL_*, HOW_TO_READ_GLOBAL): los generadores leen `t[...]`.
+HOW_TO_READ_GLOBAL = _ES["how_to_read_global"]
+GLOBAL_COMPARES = _ES["global_compares"]
+GLOBAL_PROJECT_NOTES = _ES["global_project_notes"]
+GLOBAL_SIN_META_NOTE = _ES["global_sin_meta_note"]
+GLOBAL_ALIAS_LIMIT = _ES["global_alias_limit"]
+GLOBAL_SKILLS_NOTE = _ES["global_skills_note"]
+GLOBAL_PRIVACY_NOTES = _ES["global_privacy_notes"]
 
 
 def _global_model_label(model) -> str:
@@ -3293,7 +3454,7 @@ def _global_agent_skill_rows(sk, plugins) -> list:
     return rows
 
 
-def _group_detail_table(metrics) -> list:
+def _group_detail_table(t, metrics) -> list:
     rows = []
     for g in metrics.groups:
         m = g.metrics
@@ -3302,22 +3463,21 @@ def _group_detail_table(metrics) -> list:
                      _small(tk.n, tk.total.small), _num(tk.total.total),
                      _small(m.duration.p90, m.duration.small), _small(m.tools.p90, m.tools.small),
                      _num(m.repeats), _percent(m.repeats, m.calls)])
-    return _capped_table(["Conjunto", "Sesiones", "Llamadas/sesi\u00f3n", "n", "Tokens (suma)",
-                          "Duraci\u00f3n aprox. s (p90)", "Herramientas (p90)", "Repeticiones (inferido)",
-                          "Repeticiones (% de llamadas)"], "lrrrrrrrr", rows)
+    return _capped_table(t, t["th_group_detail"], "lrrrrrrrr", rows)
 
 
-def _group_range_table(metrics) -> list:
+def _group_range_table(t, metrics) -> list:
     rows = []
     for g in metrics.groups:
         for row in g.metrics.versions:
             if row.calls <= 0:
                 continue
             tk = row.tokens
-            note = NOTE_DOUBTFUL_RANGE if row.inflated else (NOTE_NO_RANGE if row.range == RANGE_NONE else "")
+            note = (t["note_doubtful_range"] if row.inflated
+                    else (t["note_no_range"] if row.range == RANGE_NONE else ""))
             rows.append([_code(_group_label(g.group)), _code(row.range), _num(row.calls), _small(tk.n, tk.total.small),
                          _small(tk.total.median, tk.total.small), _small(tk.total.p90, tk.total.small), note])
-    return _capped_table(["Conjunto", "Rango", "Llamadas", "n", "Mediana", "p90", "Nota"], "llrrrrl", rows)
+    return _capped_table(t, t["th_group_range"], "llrrrrl", rows)
 
 
 def _live_group_calls(metrics) -> list:
@@ -3325,116 +3485,112 @@ def _live_group_calls(metrics) -> list:
     return [g.metrics.calls for g in metrics.groups if g.metrics.calls > 0 and g.group != NO_META_GROUP]
 
 
-def _global_group_section(metrics) -> list:
+def _global_group_section(t, metrics) -> list:
     live = _live_group_calls(metrics)
-    out = ["## Por conjunto", ""]
+    out = [t["h_by_group"], ""]
     if len(live) == 1:
-        out += ["Solo hay un conjunto con llamadas en la ventana: no hay con qu\u00e9 comparar.", ""]
+        out += [t["global_group_single"], ""]
     elif len(live) > 1 and max(live) >= VOLUME_RATIO * min(live):
-        out += ["Los conjuntos tienen vol\u00famenes muy distintos (de %d a %d llamadas): compararlos es solo"
-                " indicativo." % (min(live), max(live)), ""]
+        out += [t["global_group_ratio"] % (min(live), max(live)), ""]
     if any(g.group == NO_META_GROUP and g.metrics.calls > 0 for g in metrics.groups):
-        out += [GLOBAL_SIN_META_NOTE, ""]
-    out += _group_table(metrics, True)
-    out += ["", "Detalle por conjunto:", ""] + _group_detail_table(metrics)
-    out += ["", "Tokens por llamada, por conjunto y rango de versi\u00f3n:", ""] + _group_range_table(metrics)
+        out += [t["global_sin_meta_note"], ""]
+    out += _group_table(t, metrics, True)
+    out += ["", t["global_group_detail"], ""] + _group_detail_table(t, metrics)
+    out += ["", t["global_group_ranges"], ""] + _group_range_table(t, metrics)
     return out + [""]
 
 
-def _global_project_section(metrics) -> list:
+def _global_project_section(t, metrics) -> list:
     # numeracion por valores visibles (llamadas, sesiones, tokens): nunca por alias. El orden es estable y, si dos
     # proyectos empatan en todo, sus filas son identicas
     projects = sorted(metrics.projects, key=lambda p: (-p.metrics.calls, -p.metrics.sessions,
                                                        -p.metrics.tokens.total.total))
     max_calls = max([p.metrics.calls for p in projects] or [0])
-    rows = [[_code("proyecto %d" % n), _num(p.metrics.sessions), _num(p.metrics.calls),
+    rows = [[_code(t["project_n"] % n), _num(p.metrics.sessions), _num(p.metrics.calls),
              _bar(p.metrics.calls, max_calls), _num(p.metrics.tokens.total.total)]
             for n, p in enumerate(projects, 1)]
-    out = ["## Por proyecto", ""]
-    for note in GLOBAL_PROJECT_NOTES:
+    out = [t["h_by_project"], ""]
+    for note in t["global_project_notes"]:
         out += [note, ""]
-    out += _capped_table(["Proyecto", "Sesiones", "Llamadas", "Barra", "Tokens (suma)"], "lrrlr", rows)
+    out += _capped_table(t, t["th_project"], "lrrlr", rows)
     omitted = projects[MAX_TABLE_ROWS:]
     if omitted:
         calls = sum(p.metrics.calls for p in omitted)
-        out += ["", "%s %s %s." % (
-            "La fila omitida suma" if len(omitted) == 1 else "Las %d filas omitidas suman" % len(omitted),
-            _num(calls), "llamada" if calls == 1 else "llamadas")]
+        head = t["project_omitted"][0] if len(omitted) == 1 else t["project_omitted"][1] % len(omitted)
+        out += ["", "%s %s." % (head, _plural(calls, *t["w_call"]))]
     return out + [""]
 
 
-def _global_skills_section(metrics) -> list:
+def _global_skills_section(t, metrics) -> list:
     sk = metrics.skills
     plugins = _plugin_groups_seen(metrics)
-    out = ["## Skills", ""]
+    out = [t["h_skills"], ""]
     if sk.calls == 0:
-        out.append("Sin invocaciones de skills en la ventana.")
+        out.append(t["skills_none"])
     else:
-        out.append("Invocaciones: %d en %s (%d en la sesi\u00f3n principal, %d en subagentes)." % (
-            sk.calls, _plural(sk.sessions, "sesi\u00f3n", "sesiones"), sk.main_calls, sk.subagent_calls))
+        out.append(t["skills_total"] % (
+            sk.calls, _plural(sk.sessions, *t["w_session"]), sk.main_calls, sk.subagent_calls))
         rows = _global_skill_rows(sk, plugins)
         max_calls = max([r[2] for r in rows] or [0])
-        out += ["", "Por skill:", ""]
+        out += ["", t["skills_by_skill"], ""]
         out += _capped_table(
-            ["Skill", "Conjunto", "Invocaciones", "Barra", "Sesiones", "Sesi\u00f3n principal", "Subagente"],
+            t, t["th_skill"],
             "llrlrrr",
             [[_code(r[0]), _code(r[1]), _num(r[2]), _bar(r[2], max_calls), _num(r[5]), _num(r[3]), _num(r[4])]
              for r in rows])
-        out += ["", "Por conjunto de skill:", ""]
+        out += ["", t["skills_by_group"], ""]
         out += _capped_table(
-            ["Conjunto", "Skills", "Invocaciones", "Sesiones"], "lrrr",
+            t, t["th_skill_group"], "lrrr",
             [[_code(r[0]), _num(r[1]), _num(r[2]), _num(r[3])] for r in _global_skill_groups(sk, plugins)])
         linked = _global_agent_skill_rows(sk, plugins)
         if linked:
-            out += ["", "Por agente (skills invocadas dentro de subagentes):", ""]
+            out += ["", t["skills_by_agent"], ""]
             out += _capped_table(
-                ["Agente", "Conjunto del agente", "Skill", "Invocaciones"], "lllr",
+                t, t["th_skill_agent"], "lllr",
                 [[_code(r[0]), _code(r[1]), _code(r[2]), _num(r[3])] for r in linked])
-        out += ["", GLOBAL_SKILLS_NOTE]
-    out += ["", "No se atribuyen tokens a una skill: corre en el contexto de la sesi\u00f3n que la invoca.", ""]
+        out += ["", t["global_skills_note"]]
+    out += ["", t["skills_no_tokens"], ""]
     return out
 
 
-def _global_compare_section() -> list:
-    return ["## Qu\u00e9 compara y qu\u00e9 no", ""] + _bullets(GLOBAL_COMPARES) + [""]
+def _global_compare_section(t) -> list:
+    return [t["h_compare"], ""] + _bullets(t["global_compares"]) + [""]
 
 
-def _global_quality_section(metrics) -> list:
+def _global_quality_section(t, metrics) -> list:
     """La calidad de T5 y, tras sus tablas, el limite de la agrupacion de proyectos por alias."""
-    return _quality_section(metrics)[:-1] + ["", GLOBAL_ALIAS_LIMIT, ""]
+    return _quality_section(t, metrics)[:-1] + ["", t["global_alias_limit"], ""]
 
 
-def _global_header_section(metrics, generated) -> list:
-    t = metrics.total
+def _global_header_section(t, metrics, generated) -> list:
+    tot = metrics.total
     lines = [
         REPORT_MARKER,
-        "# Reporte global de uso de subagentes",
+        t["title_global"],
         "",
-        "> - Ventana: " + _window_text(metrics.window),
-        "> - Llamadas: %d en %s en %s" % (t.calls, _plural(t.sessions, "sesi\u00f3n", "sesiones"),
-                                         _plural(len(metrics.projects), "proyecto", "proyectos")),
-        "> - Claude Code: " + _versions_header(metrics.versions_seen),
-        "> - Esquema del reporte: %d" % REPORT_SCHEMA,
+        t["hdr_window"] % _window_text(t, metrics.window),
+        t["hdr_calls_global"] % (tot.calls, _plural(tot.sessions, *t["w_session"]),
+                                 _plural(len(metrics.projects), *t["w_project"])),
+        t["hdr_claude"] % _versions_header(t, metrics.versions_seen),
+        t["hdr_schema"] % REPORT_SCHEMA,
     ]
     if generated is not None:
-        lines.append("> - Generado: " + generated.isoformat())
-    lines.append("> - Alcance: todos los proyectos le\u00eddos; proyectos numerados por volumen, sin nombres ni rutas"
-                 " ni alias.")
-    lines.append("> - Reporte privado por defecto: lleva el volumen de uso de cada proyecto; no lo subas a git y"
-                 " comp\u00e1rtelo solo despu\u00e9s de revisarlo.")
-    for text in _notices(metrics):
-        lines.append("> - AVISO: " + text)
+        lines.append(t["hdr_generated"] % generated.isoformat())
+    lines.append(t["hdr_scope_global"])
+    lines.append(t["hdr_private_global"])
+    for text in _notices(t, metrics):
+        lines.append(t["hdr_notice"] % text)
     return lines + [""]
 
 
-def _global_footer_section(metrics) -> list:
-    out = ["## Pie", ""] + _bullets([
+def _global_footer_section(t, metrics) -> list:
+    out = [t["h_footer"], ""] + _bullets([
         "report_schema: %d" % REPORT_SCHEMA,
         "herramienta: " + TOOL_NAME,
         "ultima_version_verificada: " + _code(metrics.verified_max),
-        "alcance: global (todos los proyectos le\u00eddos)",
+        t["footer_scope_global"],
     ])
-    return out + [""] + _bullets(GLOBAL_PRIVACY_NOTES)
+    return out + [""] + _bullets(t["global_privacy_notes"])
 
 
 def render_global_report(metrics, generated=None) -> str:
@@ -3448,21 +3604,22 @@ def render_global_report(metrics, generated=None) -> str:
         raise ValueError(MSG_GLOBAL_METRICS)
     if generated is not None and not _is_date(generated):
         raise ValueError(MSG_REPORT_DATE)
-    extra = ["Proyectos con llamadas en la ventana: %d" % len(metrics.projects),
-             "Conjuntos con llamadas: %d" % len(_live_group_calls(metrics))]
-    lines = _global_header_section(metrics, generated)
-    lines += _summary_section(metrics, extra)
+    t = CATALOG[DEFAULT_LANG]
+    extra = [t["global_sum_projects"] % len(metrics.projects),
+             t["global_sum_groups"] % len(_live_group_calls(metrics))]
+    lines = _global_header_section(t, metrics, generated)
+    lines += _summary_section(t, metrics, extra)
     if metrics.total.calls:
-        lines += _global_group_section(metrics)
-        lines += _agent_sections(metrics, _global_model_label)
-        lines += _global_project_section(metrics)
-    lines += _global_skills_section(metrics)
+        lines += _global_group_section(t, metrics)
+        lines += _agent_sections(t, metrics, _global_model_label)
+        lines += _global_project_section(t, metrics)
+    lines += _global_skills_section(t, metrics)
     if metrics.total.calls:
-        lines += _version_section(metrics)
-    lines += _global_compare_section()
-    lines += _global_quality_section(metrics)
-    lines += _guide_section(HOW_TO_READ_GLOBAL)
-    lines += _global_footer_section(metrics)
+        lines += _version_section(t, metrics)
+    lines += _global_compare_section(t)
+    lines += _global_quality_section(t, metrics)
+    lines += _guide_section(t, t["how_to_read_global"])
+    lines += _global_footer_section(t, metrics)
     return "\n".join(lines) + "\n"
 
 

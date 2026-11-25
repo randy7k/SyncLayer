@@ -6,7 +6,8 @@
 
 Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
 con los valores por defecto de P1 a P14; rama `feat/configuraciones-dinamicas`. 9 unidades (T1 a T8 y el
-cierre), 4 cerradas (T1 a T4, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar.
+cierre), 5 cerradas (T1 a T5, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar, y
+los textos del reporte de uso salen de un catálogo (sin `--lang` todavía).
 
 - Candidatas que entran: carpeta de planes configurable (clave `plans_dir` de `synclayer-config.json`,
   aplicada al instalar; sin la clave, bytes y salida idénticos a los de hoy); idioma del reporte de uso
@@ -21,6 +22,32 @@ cierre), 4 cerradas (T1 a T4, ver más abajo); la carpeta de planes se lee, se v
   editarla a mano o un agente de proyecto. (e) estrictez de la guarda: exige transformar el bloque `hooks:`,
   hoy prohibido, y un modo sin guarda contradice la falla cerrada; no se ofrece nada.
 - Pendiente del propietario, fuera del conteo: G1 de la Fase 5 (no bloquea), V1 y V2.
+
+### Añadido (Fase 5, T5)
+
+- Catálogo de textos del reporte de uso en `tools/usage_report.py`: `LANGS = ("es",)`, `DEFAULT_LANG = "es"` y
+  `CATALOG` inmutable (`MappingProxyType` en dos capas; unas 150 claves por idioma, mismo juego de claves, tuplas
+  y marcadores `%d`/`%s`/`%%` con la misma forma). Los 28 generadores internos, de `_legend` a
+  `render_global_report`, reciben el catálogo ya resuelto `t` y leen `t["clave"]`. Las constantes de texto del
+  módulo (`HOW_TO_READ`, `PRIVACY_NOTES`, `NOTE_*`, `LEGEND_SMALL`, `UNKNOWN_WARNING`, `GLOBAL_*`) quedan como
+  alias de compatibilidad. Sin estado global mutable; firmas públicas sin cambio; sin `--lang` ni parámetro
+  `lang` (es de T6). El reporte en español no cambia.
+- Golden `tests/usage_golden_es.json` (5 escenarios, proyecto y global), generado con la herramienta anterior al
+  refactor y comparado byte a byte; se construye con `VERIFIED_MAX` fijado en `2.1.326` mediante `mock.patch`,
+  así subir `VERIFIED_MAX` no lo rompe. La receta de regeneración está en `tests/test_usage_report.py`.
+- Pruebas nuevas: `ReportGoldenEs`, `ReportCatalog`, `ReportTextsOutsideCatalog` (caso 33, con `ast`: ningún texto
+  fijo fuera del catálogo salvo 10 excepciones justificadas), `ReportCatalogCoverage` (paridad entre idiomas,
+  toda clave se usa, cada texto cambia algún escenario del golden) y una más. Se modificó una prueba existente
+  por necesidad: la lista blanca `ReportPurity.REACHABLE` (cinco nombres quitados; `CATALOG`, `DEFAULT_LANG`,
+  `_ES` y `_ES_HOW_TO_READ_COMMON` agregados) y se podaron entradas muertas de `GlobalPurity`.
+- Mutaciones: 16 de `forge` y 10 de `auditor` murieron. `auditor`: sin Critical; 2 Important (el golden dependía
+  de `VERIFIED_MAX`; documentación de cierre) resueltos; Minor corregidos. `shield`: no aplica (sin entrada de
+  usuario nueva; interviene en T6, que agrega `--lang`).
+- Pendiente para T6: las etiquetas del lector que van por `_code` (`(otro agente)`, `integrado`, `sin-meta`,
+  `WARN_*`, `RANGE_*`, `READ_QUALITY_LABELS`, `OTHER_*`, `(vacio)`/`(no cadena)`) no están en el catálogo y se
+  traducirán con tabla cerrada; `REPEAT_LIMITATIONS` y `SKILL_LIMITATIONS` se referencian, no se copian; el
+  catálogo `en` debe tener las mismas 17 entradas y el mismo orden en `q_problems`.
+- Pruebas: 1735 pruebas, 367 saltadas (365 contra pwsh y 2 de la rama POSIX del reporte de uso); unos 48 minutos.
 
 ### Añadido (Fase 5, T4)
 

@@ -9,8 +9,8 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1715 pruebas, 367 saltadas (365 contra pwsh, que no está instalado, y 2 de
-la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), más de una hora (unos 70 minutos). No la
+`__pycache__`. La suite: 1735 pruebas, 367 saltadas (365 contra pwsh, que no está instalado, y 2 de
+la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), entre unos 48 y 70 minutos. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
 
@@ -345,6 +345,14 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     al esquema 2) y la configuración nunca escrita ni respaldada. Abiertos a propósito (Minor, aserciones
     opcionales): respaldo del estado y de los otros nueve archivos en K1 a K3 del repo real, aserto redundante
     del esquema 2 y respaldo del estado ilegible con `-Force` final en K5.
+- Idioma del reporte de uso (Fase 5, mismo plan; T5 hecha, T6 pendiente): T5 solo reúne los textos en un
+  catálogo, sin `--lang` ni parámetro `lang` (eso es T6). Detalle en «Reporte de uso», bullet «Catálogo de
+  textos». Pendiente para T6: (a) las etiquetas del lector que salen por `_code` (`(otro agente)`, `integrado`,
+  `sin-meta`, `WARN_*`, `RANGE_*`, `READ_QUALITY_LABELS`, `OTHER_*`, `(vacio)`/`(no cadena)`) NO están en el
+  catálogo: T6 las traduce con tabla cerrada; (b) `REPEAT_LIMITATIONS` y `SKILL_LIMITATIONS` se referencian, no
+  se copian; (c) el catálogo `en` debe tener las mismas 17 entradas y el mismo orden en `q_problems`; (d)
+  `test_public_signatures_do_not_change_in_t5` y la prueba de pureza (`ReportPurity.REACHABLE`) cambian en T6.
+  `shield` interviene en T6 (agrega `--lang`, entrada de usuario).
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
   cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
@@ -395,7 +403,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (365 en la última corrida; las otras 2 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (365 en la última corrida de 1735 pruebas y 367 saltadas; las otras 2 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los
@@ -438,6 +446,28 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   - Las pruebas «sin aviso de git» suben carpetas padre reales: fallarían en una máquina con `.git`
     en el home o en `%TEMP%`. Las pruebas pasan siempre `--claude-dir` a una carpeta temporal.
   - El instalador no instala la herramienta ni toca `synclayer-usage.md` ni `settings.json`.
+  - Catálogo de textos (Fase 5, T5): `LANGS = ("es",)`, `DEFAULT_LANG = "es"` y `CATALOG`, inmutable
+    (`MappingProxyType` en dos capas: idioma y claves). Un diccionario por idioma con el mismo juego de claves
+    (unas 150 por idioma); por clave, mismo tipo (tupla o cadena), misma longitud de tupla y mismos marcadores
+    `%d`/`%s`/`%%`. Los 28 generadores internos, de `_legend` a `render_global_report`, reciben el catálogo ya
+    resuelto `t` como primer argumento y leen `t["clave"]`. No hay estado global mutable que decida el texto. Las
+    firmas públicas no cambian. Las constantes de texto del módulo (`HOW_TO_READ`, `PRIVACY_NOTES`, `NOTE_*`,
+    `LEGEND_SMALL`, `UNKNOWN_WARNING`, `GLOBAL_*`) quedan como ALIAS de compatibilidad: los generadores ya no las
+    leen, así que editarlas no cambia el reporte; edita el catálogo. Las claves estables del pie (las que
+    consume quien lee el reporte) no se traducen.
+  - Todo texto nuevo del reporte va a `CATALOG`. La prueba `ReportTextsOutsideCatalog` (caso 33, con `ast`) falla
+    si un generador trae un texto fijo fuera del catálogo, salvo una lista cerrada de 10 excepciones justificadas
+    (`plugin:`, `SyncLayer`, `integrado`, las 4 claves estables del pie, los marcadores de `_code` y el error
+    interno de `_raw_table`). `ReportCatalogCoverage` exige paridad de claves, tipos y marcadores entre idiomas,
+    que toda clave se use y que cada texto cambie algún escenario del golden.
+  - Golden del español: `tests/usage_golden_es.json` (5 escenarios: wide, empty, singular, volumes, all_time;
+    proyecto y global). Se generó con la herramienta ANTERIOR al refactor; es ASCII, `indent=1`, `sort_keys` y LF
+    final. Se construye y renderiza con `VERIFIED_MAX` fijado en `2.1.326` mediante `mock.patch`
+    (`GOLDEN_ES_VERIFIED_MAX`): subir `VERIFIED_MAX` no lo rompe. Receta de regeneración: comentario de
+    `golden_es_outputs()` en `tests/test_usage_report.py`; regenéralo sólo si el español cambia a propósito.
+  - Pureza: la lista blanca `ReportPurity.REACHABLE` de `tests/test_usage_report.py` enumera los nombres del
+    módulo alcanzables desde los generadores; T5 quitó cinco ya no alcanzados y agregó `CATALOG`, `DEFAULT_LANG`,
+    `_ES` y `_ES_HOW_TO_READ_COMMON`. Un nombre nuevo alcanzado desde un generador se agrega ahí.
 
 ## Cierre de un cambio
 

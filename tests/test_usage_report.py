@@ -6040,18 +6040,21 @@ class ReportPurity(unittest.TestCase):
         "_notices", "_window_text", "_versions_header", "_read_incidents", "_read_count", "_range_calls",
         "_bar", "_num", "_tenths", "_percent", "_plural", "_code", "_small", "_table",
         "_capped_table", "_raw_table", "_legend", "_read_info", "_unwarned_incidents", "_bullets", "_is_date",
-        "_range_of", "_recent_codes", "is_unverified", "version_key", "LEGEND_SMALL", "READ_INCIDENT_LABELS",
+        "_range_of", "_recent_codes", "is_unverified", "version_key", "READ_INCIDENT_LABELS",
         "READ_INFO_LABELS", "READ_WARNED",
-        "ALIAS_RE", "BAR_EMPTY", "BAR_FULL", "BAR_WIDTH", "HOW_TO_READ", "KNOWN_WARNINGS", "LABEL_MAIN_READ",
+        "ALIAS_RE", "BAR_EMPTY", "BAR_FULL", "BAR_WIDTH", "KNOWN_WARNINGS", "LABEL_MAIN_READ",
         "MAX_CELL_CHARS", "MAX_SHOWN_VERSIONS", "MAX_TABLE_ROWS", "MAX_VERSION_ROWS", "MSG_REPORT_ALIAS",
-        "MSG_REPORT_DATE", "MSG_REPORT_METRICS", "MSG_WINDOW_INVALID", "NOTE_DOUBTFUL_RANGE", "NOTE_NO_RANGE",
-        "PRIVACY_NOTES", "REPORT_MARKER", "REPORT_SCHEMA", "SMALL_MARK", "TOOL_NAME", "UNKNOWN_WARNING",
+        "MSG_REPORT_DATE", "MSG_REPORT_METRICS", "MSG_WINDOW_INVALID",
+        "REPORT_MARKER", "REPORT_SCHEMA", "SMALL_MARK", "TOOL_NAME",
         "REPEAT_LIMITATIONS", "SKILL_LIMITATIONS", "READ_QUALITY_LABELS", "SMALL_N", "VERIFIED_MAX",
         "RANGE_AFTER", "RANGE_BEFORE", "RANGE_DOUBTFUL", "RANGE_NONE", "_DOUBTFUL_FROM", "_DOUBTFUL_TO",
         "_VERSION_PARTS_RE", "WARN_ID_CAP", "WARN_ID_REPEATED", "WARN_NO_MESSAGE_ID",
         "WARN_SKILL_ID_CAP", "WARN_SKILL_ID_REPEATED", "WARN_MAIN_HARDLINK", "WARN_MAIN_CAP",
         "WARN_MAIN_UNREADABLE", "WARN_ALIAS_COLLISION", "_group_table", "_group_label", "_model_rows",
         "AGENT_GROUPS", "OTHER_GROUP", "NO_META_GROUP", "HIDDEN_COUNT_GROUPS", "PLUGIN_PREFIX_RE",
+        # Fase 5, T5: el catalogo de textos (los textos fijos salen de `CATALOG[DEFAULT_LANG]`; HOW_TO_READ,
+        # PRIVACY_NOTES, NOTE_*, LEGEND_SMALL y UNKNOWN_WARNING dejan de alcanzarse: son alias del catalogo)
+        "CATALOG", "DEFAULT_LANG", "_ES", "_ES_HOW_TO_READ_COMMON",
         # tipos de las metricas (isinstance)
         "UsageMetrics", "ScopeMetrics", "DataQuality", "Dist", "TokenStats", "SkillMetrics", "SkillQuality",
         "Window",
@@ -7319,20 +7322,18 @@ class GlobalGolden(unittest.TestCase):
 class GlobalPurity(unittest.TestCase):
     """Todo lo que `render_global_report` puede alcanzar: lista BLANCA y cerrada, como ReportPurity."""
     PROJECT_ONLY = frozenset((
-        "render_project_report", "_header_section", "_skills_section", "_footer_section", "PRIVACY_NOTES",
-        "MSG_REPORT_ALIAS",
+        "render_project_report", "_header_section", "_skills_section", "_footer_section", "MSG_REPORT_ALIAS",
     ))
     GLOBAL_EXTRA = frozenset((
         "render_global_report", "_global_header_section", "_global_group_section", "_global_project_section",
         "_global_skills_section", "_global_compare_section", "_global_footer_section", "_group_table",
         "_group_detail_table", "_group_range_table", "_skill_shown", "_skill_group_label",
-        "_global_skill_rows", "_global_skill_groups", "_global_agent_skill_rows", "GLOBAL_COMPARES",
-        "GLOBAL_PRIVACY_NOTES", "HOW_TO_READ_GLOBAL", "MSG_GLOBAL_METRICS", "VOLUME_RATIO", "OTHER_GROUP",
+        "_global_skill_rows", "_global_skill_groups", "_global_agent_skill_rows",
+        "MSG_GLOBAL_METRICS", "VOLUME_RATIO", "OTHER_GROUP",
         "OTHER_SKILL", "SYNCLAYER_SKILLS", "BUILTIN_SKILLS", "PLUGIN_PREFIX_RE", "SKILL_GROUPS",
         "_global_model_label", "_plugin_groups_seen", "_live_group_calls", "_global_quality_section",
         "GLOBAL_MODEL_RE", "_GLOBAL_MODEL_WORD", "_MODEL_NUM", "MODEL_ALIASES", "OTHER_LABELS", "OTHER_MODEL",
-        "OTHER_PLUGIN_GROUP", "GLOBAL_PROJECT_NOTES", "GLOBAL_SIN_META_NOTE", "GLOBAL_ALIAS_LIMIT",
-        "GLOBAL_SKILLS_NOTE",
+        "OTHER_PLUGIN_GROUP",
     ))
 
     def test_global_report_reaches_only_pure_code(self):
@@ -7382,6 +7383,462 @@ class GlobalPurity(unittest.TestCase):
                         n.func.attr if isinstance(n.func, ast.Attribute) else None)
                     self.assertIsNotNone(callee, name)
                     self.assertIn(callee, seen | callable_ok | set(ReportPurity.REACHABLE), "%s llama a %s" % (name, callee))
+
+
+# --- Fase 5, T5: catalogo de textos. Golden del espanol (generado ANTES del refactor) ---
+GOLDEN_ES_PATH = os.path.join(ROOT, "tests", "usage_golden_es.json")
+
+
+def _pid(n):
+    return "p-%08x" % n
+
+
+def _golden_wide():
+    """Conjunto amplio: todos los conjuntos de agentes y de skills, tablas por encima de MAX_TABLE_ROWS,
+    mas de MAX_VERSION_ROWS versiones, versiones dudosas y no verificadas (mas de MAX_SHOWN_VERSIONS), llamadas
+    danadas, sin hora, hardlinks, todos los contadores de la lectura y los nueve avisos."""
+    calls, n = [], 0
+
+    def add(**kw):
+        nonlocal n
+        n += 1
+        calls.append(mk(n, **kw))
+
+    for i in range(46):   # 46 agentes de usuario en 46 proyectos: pasa de MAX_TABLE_ROWS y de proyectos
+        add(project=_pid(i), session="s%02d" % i, agent="u%02d" % i, agent_group="otros",
+            input_tokens=10 + 7 * i, output_tokens=3 + i, tools=i % 5,
+            models=("claude-opus-4-1",) if i % 3 else ("claude-sonnet-4-5", "claude-zzcustom-9"),
+            model="claude-opus-4-1" if i % 3 else "claude-zzcustom-9", **span(5 + 3 * i, day=1 + i % 28))
+    add(project=_pid(0), session="s00", agent="forge", agent_group="SyncLayer", versions=("2.1.315",),
+        tools=4, **span(40))
+    add(project=_pid(0), session="s00", agent="forge", agent_group="SyncLayer", versions=("2.1.330",),
+        tools=2, **span(30, hour=11))
+    add(project=_pid(1), session="s01", agent="scout", agent_group="SyncLayer", versions=("2.1.300", "2.1.330"),
+        model_mismatch=True, **span(12, hour=12))
+    add(project=_pid(1), session="s01", agent="general-purpose", agent_group="integrado", versions=("2.1.340",),
+        models=("<synthetic>",), model="<synthetic>", **span(9, hour=13))
+    add(project=_pid(2), session="s02", agent="plugin:pl", agent_group="plugin:pl", versions=("2.1.320",),
+        **span(8, hour=14))
+    add(project=_pid(2), session="s02", agent="x", agent_group="plugin:(no-valido)", versions=("sin-version",),
+        **span(8, hour=15))
+    add(project=_pid(3), session="s03", agent="(sin-meta)", agent_group="sin-meta", has_meta=False,
+        versions=(), **span(7, hour=16))
+    add(project=_pid(3), session="s03", agent="rara", agent_group="ZZ conjunto raro", **span(7, hour=17))
+    add(project=_pid(4), session="s04", agent="d1", agent_group="otros", status="danada",
+        damage="linea intermedia corrupta", input_tokens=0, output_tokens=0, cache_creation_tokens=0,
+        cache_read_tokens=0, requests=0, **span(6, hour=8))
+    add(project=_pid(4), session="s04", agent="d2", agent_group="otros", status="danada", damage="ilegible",
+        input_tokens=0, output_tokens=0, cache_creation_tokens=0, cache_read_tokens=0, requests=0,
+        **span(6, hour=9))
+    add(project=_pid(4), session="s04", agent="d3", agent_group="otros", status="danada",
+        damage="tope", input_tokens=0, output_tokens=0, cache_creation_tokens=0,
+        cache_read_tokens=0, requests=0, **span(6, hour=7))
+    add(project=_pid(5), session="s05", agent="nu", agent_group="otros", status="sin_usage", has_usage=False,
+        input_tokens=0, output_tokens=0, cache_creation_tokens=0, cache_read_tokens=0, requests=0,
+        **span(6, hour=6))
+    add(project=_pid(5), session="s05", agent="ns", agent_group="otros", start=None, end=None,
+        fallback_time=dt(10, 5))
+    add(project=_pid(5), session="s05", agent="ns2", agent_group="otros", start=None, end=None,
+        fallback_time=dt(11, 5))
+    add(project=_pid(5), session="s05", agent="nt", agent_group="otros", start=None, end=None)
+    add(project=_pid(6), session="s06", agent="hl", agent_group="otros", hardlink=True, oversize_lines=2,
+        **span(6, hour=5))
+    add(project=_pid(6), session="s06", agent="hl", agent_group="otros", hardlink=True, **span(6, hour=4))
+    add(project=_pid(6), session="s06", agent="rp", agent_group="otros", requests=0, **span(6, hour=3))
+    for k in range(50):   # 50 versiones numericas: pasa de MAX_VERSION_ROWS; las mayores quedan sin verificar
+        add(project=_pid(7), session="sv", agent="vv", agent_group="otros",
+            versions=(("2.1.%d" % (250 + k)) if k < 38 else ("9.0.%d" % (k - 37)),), **span(4, day=2, hour=k % 20))
+    res = ur.ReadResult()
+    res.calls.extend(calls)
+    for i, label in enumerate(ur.READ_QUALITY_LABELS):
+        res.quality[label] = i + 1
+    res.quality["carpetas de proyecto leidas"] = 3
+    uses = []
+    for i in range(44):   # 44 skills de usuario: pasa de MAX_TABLE_ROWS en "Por skill"
+        uses.append(su(i, skill="sk%02d" % i, session="s%02d" % (i % 9), moment=dt(5, 8, i % 60)))
+    uses += [
+        su(100, skill="x", group="SyncLayer", origin="subagente", agent="forge", agent_group="SyncLayer"),
+        su(101, skill="i", group="integrado", origin="subagente", agent="general-purpose",
+           agent_group="integrado", session="s2"),
+        su(102, skill="plugin:pl", group="plugin:pl", origin="subagente", agent="plugin:pl",
+           agent_group="plugin:pl", session="s3"),
+        su(103, skill="plugin:zz", group="plugin:zz", session="s4"),
+        su(104, skill=ur.OTHER_SKILL, group="otros", session="s5"),
+        su(105, skill="sk01", group="plugin:(no-valido)", origin="subagente", agent="u01", agent_group="otros"),
+        su(106, skill="fuera", moment=dt(5, 8, month=1)),
+    ]
+    metrics = agg(res, skill_uses=uses)
+    return dataclasses.replace(metrics, warnings=metrics.warnings + ("ZZ aviso libre que no esta en la lista",))
+
+
+def _golden_empty():
+    return agg([])
+
+
+def _golden_singular():
+    """Las formas en singular y los avisos sueltos: una llamada danada, un hardlink, una sin hora ubicada por
+    fallback, una dudosa, 41 versiones (una omitida), 41 proyectos (una fila omitida), un solo conjunto."""
+    calls = [mk(1, project=_pid(0), session="a", versions=("2.1.315",), hardlink=True, **span(10)),
+             damaged(2, project=_pid(0), session="a", versions=("2.1.315",)),
+             mk(3, project=_pid(0), session="a", start=None, end=None, fallback_time=dt(10, 5), versions=("2.1.315",))]
+    for i in range(40):
+        calls.append(mk(10 + i, project=_pid(1 + i), session="q%02d" % i, agent="vv", agent_group="otros",
+                        versions=("2.1.%d" % (200 + i),), **span(3, day=3)))
+    uses = [su(1, skill="solo", session="a", moment=dt(10, 10))]
+    res = ur.ReadResult()
+    res.calls.extend(calls)
+    res.quality["lineas corruptas"] = 1
+    res.quality["lineas synthetic excluidas"] = 1
+    return agg(res, skill_uses=uses)
+
+
+def _golden_volumes():
+    """Dos conjuntos con volumenes que difieren 10 veces o mas, y `sin-meta` con llamadas."""
+    calls = [mk(i, project=_pid(i % 2), session="v%d" % (i % 3), agent="o%d" % (i % 4), agent_group="otros",
+                **span(5 + i)) for i in range(1, 21)]
+    calls.append(mk(100, project=_pid(0), session="v0", agent="forge", agent_group="SyncLayer", **span(9, hour=12)))
+    calls.append(mk(101, project=_pid(0), session="v0", agent="(sin-meta)", agent_group="sin-meta", has_meta=False,
+                    **span(9, hour=13)))
+    return agg(calls)
+
+
+def _golden_all_time():
+    uses = [su(1, skill="a", moment=None), su(2, skill="b", moment=dt(10, 10)), su(3, skill="c", moment=None)]
+    return agg([mk(1, project=_pid(0))], window=ur.make_window(TODAY, all_time=True), skill_uses=uses)
+
+
+GOLDEN_ES_BUILDERS = (("wide", _golden_wide), ("empty", _golden_empty), ("singular", _golden_singular),
+                      ("volumes", _golden_volumes), ("all_time", _golden_all_time))
+GOLDEN_ES_DAY = datetime.date(2026, 4, 1)
+
+
+GOLDEN_ES_VERIFIED_MAX = "2.1.326"     # el golden se genero con este VERIFIED_MAX; no sigue al de la herramienta
+
+
+def golden_es_outputs():
+    """{escenario: {"project": texto, "global": texto}} con el catalogo es.
+
+    Receta para regenerar `tests/usage_golden_es.json`: con el catalogo es y esta funcion,
+    `json.dumps(golden_es_outputs(), indent=1, sort_keys=True)` mas un LF final, escrito en ASCII (json.dumps
+    escapa lo demas). Solo si el espanol cambia a proposito."""
+    out = {}
+    # VERIFIED_MAX se lee al renderizar (is_unverified): se parchea al construir Y al renderizar
+    with mock.patch.object(ur, "VERIFIED_MAX", GOLDEN_ES_VERIFIED_MAX):
+        for name, build in GOLDEN_ES_BUILDERS:
+            metrics = build()
+            out[name] = {"project": ur.render_project_report(metrics, ALIAS, generated=GOLDEN_ES_DAY),
+                         "global": ur.render_global_report(metrics, generated=GOLDEN_ES_DAY)}
+    return out
+
+
+def _read_golden_es():
+    with open(GOLDEN_ES_PATH, "rb") as f:
+        raw = f.read()
+    raw.decode("ascii")          # el golden es JSON ASCII: sobrevive a autocrlf y a cualquier codificacion
+    return json.loads(raw.decode("ascii"))
+
+
+class ReportGoldenEs(unittest.TestCase):
+    """Caso 32: el espanol de los dos reportes es, byte a byte, el que generaba la herramienta ANTES de extraer
+    el catalogo (golden de `tests/usage_golden_es.json`, generado con la version anterior)."""
+
+    def test_golden_scenarios_are_the_closed_list(self):
+        self.assertEqual(sorted(_read_golden_es()), sorted(name for name, _ in GOLDEN_ES_BUILDERS))
+        for name, texts in _read_golden_es().items():
+            self.assertEqual(sorted(texts), ["global", "project"], name)
+
+    def test_project_and_global_reports_match_the_golden_byte_for_byte(self):
+        golden = _read_golden_es()
+        current = golden_es_outputs()
+        for name in golden:
+            for kind in ("project", "global"):
+                with self.subTest(scenario=name, report=kind):
+                    self.assertEqual(current[name][kind], golden[name][kind])
+                    self.assertEqual(current[name][kind].encode("utf-8"), golden[name][kind].encode("utf-8"))
+
+    def test_golden_covers_the_sections_the_plan_asks_for(self):
+        golden = _read_golden_es()
+        wide = golden["wide"]["project"]
+        self.assertGreater(wide.count("\n"), 400)
+        for needle in ("Se muestran las %d primeras filas de" % ur.MAX_TABLE_ROWS, "Solo se muestran las",
+                       "(+6 más)", "dudosa: posible conteo doble", "no verificada (mayor que",
+                       "contadores informativos", "Lectura completa (no solo la ventana)", "(otro conjunto)"):
+            self.assertIn(needle, wide)
+        self.assertEqual(wide.count("> - AVISO: "), 16)
+        self.assertIn("Sin llamadas a subagentes en la ventana.", golden["empty"]["project"])
+        self.assertIn("Sin llamadas a subagentes en la ventana.", golden["empty"]["global"])
+        self.assertIn("La fila omitida suma 1 llamada.", golden["singular"]["global"])
+        self.assertIn("se omite la versión más antigua", golden["singular"]["project"])
+        self.assertIn("Los conjuntos tienen volúmenes muy distintos", golden["volumes"]["global"])
+        self.assertIn("todo el historial (sin ventana)", golden["all_time"]["project"])
+
+    def test_golden_does_not_depend_on_the_current_verified_max(self):
+        golden = _read_golden_es()
+        with mock.patch.object(ur, "VERIFIED_MAX", "9.9.9"):
+            current = golden_es_outputs()
+        self.assertEqual(current, golden)
+
+    def test_two_runs_give_the_same_bytes_and_the_marker_is_the_first_line(self):
+        first, second = golden_es_outputs(), golden_es_outputs()
+        self.assertEqual(first, second)
+        for name, texts in first.items():
+            for kind, text in texts.items():
+                self.assertEqual(text.split("\n", 1)[0], ur.REPORT_MARKER, (name, kind))
+                self.assertEqual(ur.REPORT_MARKER, "<!-- synclayer-usage-report v1 -->")
+
+
+_MARKER_RE = re.compile(r"%[%ds]")
+
+
+def _catalog_leaves(entry):
+    """(clave, indice o None, texto) de todo lo que lleva un idioma del catalogo."""
+    for key in sorted(entry):
+        value = entry[key]
+        if isinstance(value, str):
+            yield key, None, value
+        else:
+            for i, item in enumerate(value):
+                yield key, i, item
+
+
+class ReportCatalog(unittest.TestCase):
+    """T5: el catalogo cerrado de textos del reporte (solo `es`; `en` llega en T6)."""
+
+    def test_languages_default_and_one_entry_per_language(self):
+        self.assertIsInstance(ur.LANGS, tuple)
+        self.assertEqual(ur.DEFAULT_LANG, "es")
+        self.assertIn(ur.DEFAULT_LANG, ur.LANGS)
+        self.assertEqual(set(ur.CATALOG), set(ur.LANGS))
+        self.assertEqual(len(set(ur.LANGS)), len(ur.LANGS))
+
+    def test_catalog_is_immutable_and_made_of_text_and_tuples_of_text(self):
+        import types
+        self.assertIsInstance(ur.CATALOG, types.MappingProxyType)
+        for lang, entry in ur.CATALOG.items():
+            self.assertIsInstance(entry, types.MappingProxyType, lang)
+            for key, value in entry.items():
+                self.assertIsInstance(key, str)
+                if isinstance(value, tuple):
+                    self.assertGreater(len(value), 0, (lang, key))
+                    for item in value:
+                        self.assertIsInstance(item, str, (lang, key))
+                else:
+                    self.assertIsInstance(value, str, (lang, key))
+
+    def test_every_language_has_the_same_keys_markers_and_tuple_lengths(self):
+        base = ur.CATALOG[ur.DEFAULT_LANG]
+        for lang, entry in ur.CATALOG.items():
+            self.assertEqual(set(entry), set(base), lang)
+            for key in base:
+                with self.subTest(lang=lang, key=key):
+                    self.assertEqual(type(entry[key]), type(base[key]))
+                    if isinstance(base[key], tuple):
+                        self.assertEqual(len(entry[key]), len(base[key]))
+                        for mine, theirs in zip(entry[key], base[key]):
+                            self.assertEqual(_MARKER_RE.findall(mine), _MARKER_RE.findall(theirs))
+                    else:
+                        self.assertEqual(_MARKER_RE.findall(entry[key]), _MARKER_RE.findall(base[key]))
+
+    # textos que NO pasan por `%` y llevan un porcentaje literal ("Repeticiones (% de llamadas)", "`<1 %`")
+    LITERAL_PERCENT_KEYS = frozenset(("how_to_read", "how_to_read_global", "th_group_detail"))
+
+    def test_percent_signs_in_the_catalog_are_only_the_closed_markers(self):
+        for lang, entry in ur.CATALOG.items():
+            for key, index, text in _catalog_leaves(entry):
+                with self.subTest(lang=lang, key=key, index=index):
+                    if key in self.LITERAL_PERCENT_KEYS:
+                        # texto literal: ningun `%` puede parecer un marcador de formato
+                        self.assertEqual(_MARKER_RE.findall(text), [], text)
+                    else:
+                        self.assertEqual(re.sub(r"%[%ds]", "", text).count("%"), 0, text)
+
+    def test_spanish_texts_are_ascii_or_accented_and_survive_utf8(self):
+        for key, index, text in _catalog_leaves(ur.CATALOG["es"]):
+            for ch in text:
+                self.assertTrue(" " <= ch <= "~" or ch in ACCENTED, (key, index, ch))
+            self.assertEqual(text.encode("utf-8").decode("utf-8"), text)
+
+    def test_marker_schema_and_bars_stay_outside_the_catalog(self):
+        for lang, entry in ur.CATALOG.items():
+            for key, index, text in _catalog_leaves(entry):
+                self.assertNotIn("synclayer-usage-report", text, (lang, key))
+                self.assertNotIn(ur.BAR_FULL, text, (lang, key))
+                self.assertNotIn(ur.BAR_EMPTY, text, (lang, key))
+        self.assertEqual(ur.REPORT_SCHEMA, 1)
+
+    def test_module_constants_with_text_are_the_catalog_values(self):
+        es = ur.CATALOG["es"]
+        self.assertIs(ur.HOW_TO_READ, es["how_to_read"])
+        self.assertIs(ur.HOW_TO_READ_GLOBAL, es["how_to_read_global"])
+        self.assertIs(ur.PRIVACY_NOTES, es["privacy_notes"])
+        self.assertIs(ur.GLOBAL_PRIVACY_NOTES, es["global_privacy_notes"])
+        self.assertIs(ur.GLOBAL_COMPARES, es["global_compares"])
+        self.assertIs(ur.GLOBAL_PROJECT_NOTES, es["global_project_notes"])
+        self.assertEqual(ur.GLOBAL_SIN_META_NOTE, es["global_sin_meta_note"])
+        self.assertEqual(ur.GLOBAL_ALIAS_LIMIT, es["global_alias_limit"])
+        self.assertEqual(ur.GLOBAL_SKILLS_NOTE, es["global_skills_note"])
+        self.assertEqual(ur.NOTE_DOUBTFUL_RANGE, es["note_doubtful_range"])
+        self.assertEqual(ur.NOTE_NO_RANGE, es["note_no_range"])
+        self.assertEqual(ur.UNKNOWN_WARNING, es["unknown_warning"])
+        self.assertEqual(ur.LEGEND_SMALL, es["legend_small"] % ur.SMALL_N)
+        # las listas del lector (identificadores) no cambian de valor ni de lugar: el catalogo las referencia
+        self.assertIs(es["repeat_limitations"], ur.REPEAT_LIMITATIONS)
+        self.assertIs(es["skill_limitations"], ur.SKILL_LIMITATIONS)
+
+    def test_the_reader_identifier_constants_keep_their_values(self):
+        self.assertEqual(ur.OTHER_AGENT, "(otro agente)")
+        self.assertEqual(ur.OTHER_SKILL, "(otra skill)")
+        self.assertEqual(ur.OTHER_GROUP, "(otro conjunto)")
+        self.assertEqual(ur.NO_META_GROUP, "sin-meta")
+        self.assertEqual(ur.OTHER_PLUGIN_GROUP, "plugin:(otro)")
+        self.assertEqual(ur.LABEL_MAIN_READ, "sesiones principales leidas")
+        self.assertEqual(ur.RANGE_NONE, "sin version reconocible")
+        self.assertEqual(ur.UNKNOWN_WARNING, "aviso no reconocido")
+        self.assertEqual(len(ur.KNOWN_WARNINGS), 9)
+        self.assertEqual(ur.TOOL_NAME, "tools/usage_report.py")
+
+    def test_public_signatures_do_not_change_in_t5(self):
+        import inspect
+        self.assertEqual(list(inspect.signature(ur.render_project_report).parameters),
+                         ["metrics", "project_alias", "generated"])
+        self.assertEqual(list(inspect.signature(ur.render_global_report).parameters), ["metrics", "generated"])
+
+
+class ReportTextsOutsideCatalog(unittest.TestCase):
+    """Caso 33: ningun texto fijo visible fuera del catalogo. Criterio sobre las funciones de `_bar` a
+    `render_global_report` (sin docstrings): un literal de cadena es texto fijo si tiene dos o mas palabras
+    alfabeticas, algun caracter no ASCII (salvo los bloques de barra) o una palabra de tres o mas letras (un
+    identificador o una clave). Solo sobreviven los de esta lista CERRADA, cada uno con su motivo."""
+    ALLOWED = {
+        # identificadores de las listas cerradas del lector (se comparan, no se muestran como texto)
+        "plugin:": "prefijo de conjunto `plugin:<prefijo>` que produce el lector (startswith)",
+        "SyncLayer": "nombre de conjunto del lector (comparacion en `_skill_shown`)",
+        "integrado": "nombre de conjunto del lector (comparacion en `_skill_shown`)",
+        # claves del pie: identificadores estables que no se traducen (3.2.3 del plan, P10)
+        "report_schema: %d": "clave estable del pie",
+        "herramienta: ": "clave estable del pie",
+        "ultima_version_verificada: ": "clave estable del pie",
+        "proyecto: ": "clave estable del pie (el valor es el alias)",
+        # marcadores de `_code` para un valor que no es texto o esta vacio: `_code` no recibe catalogo (lo usan
+        # las pruebas y todas las tablas con un solo argumento); T6 decide si los traduce
+        "`(no cadena)`": "marcador de `_code`; sin acceso al catalogo",
+        "`(vacio)`": "marcador de `_code`; sin acceso al catalogo",
+        # error interno de programacion, nunca llega al reporte
+        "fila con columnas de mas o de menos": "ValueError interno de `_raw_table`: no es texto del reporte",
+    }
+    WORD_RE = re.compile(r"[^\W\d_]{2,}")
+
+    @classmethod
+    def generator_functions(cls):
+        with open(SCRIPT, "rb") as f:
+            tree = ast.parse(f.read().decode("ascii"))
+        funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+        names = [n.name for n in funcs]
+        return funcs[names.index("_bar"):names.index("render_global_report") + 1]
+
+    @classmethod
+    def fixed_literals(cls, func):
+        docstring = None
+        if func.body and isinstance(func.body[0], ast.Expr) and isinstance(func.body[0].value, ast.Constant) \
+                and isinstance(func.body[0].value.value, str):
+            docstring = func.body[0].value
+        keys = {id(n.slice) for n in ast.walk(func)
+                if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id == "t"}
+        for node in ast.walk(func):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str) and node is not docstring
+                    and id(node) not in keys):
+                yield node.value
+
+    @classmethod
+    def catalog_keys_used(cls, func):
+        """Claves `t["clave"]` que pide una funcion."""
+        return [n.slice.value for n in ast.walk(func)
+                if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id == "t"
+                and isinstance(n.slice, ast.Constant) and isinstance(n.slice.value, str)]
+
+    @classmethod
+    def is_fixed_text(cls, value):
+        if re.fullmatch(r"[lr]+", value):          # alineaciones de columna ("llrlrrr")
+            return False
+        if any(ord(ch) > 126 and ch not in (ur.BAR_FULL, ur.BAR_EMPTY) for ch in value):
+            return True
+        words = cls.WORD_RE.findall(value)
+        return len(words) >= 2 or any(len(w) >= 3 for w in words)
+
+    def test_the_range_of_generator_functions_is_the_expected_one(self):
+        names = [f.name for f in self.generator_functions()]
+        self.assertEqual(names[0], "_bar")
+        self.assertEqual(names[-1], "render_global_report")
+        for expected in ("_notices", "_header_section", "_quality_section", "_guide_section",
+                         "_footer_section", "render_project_report", "_global_header_section",
+                         "_global_footer_section", "_global_compare_section", "_global_project_section"):
+            self.assertIn(expected, names)
+
+    def test_no_fixed_text_outside_the_catalog_except_the_closed_list(self):
+        seen_allowed = set()
+        for func in self.generator_functions():
+            for value in self.fixed_literals(func):
+                if self.is_fixed_text(value):
+                    self.assertIn(value, self.ALLOWED, "%s: texto fijo fuera del catalogo: %r" % (func.name, value))
+                    seen_allowed.add(value)
+        # la lista cerrada no lleva entradas muertas
+        self.assertEqual(seen_allowed, set(self.ALLOWED))
+
+    def test_every_key_a_generator_asks_for_exists_in_the_catalog(self):
+        used = set()
+        for func in self.generator_functions():
+            for key in self.catalog_keys_used(func):
+                used.add(key)
+                for lang, entry in ur.CATALOG.items():
+                    self.assertIn(key, entry, "%s pide %r y %s no lo tiene" % (func.name, key, lang))
+        self.assertGreater(len(used), 100)
+
+    def test_the_criterion_catches_what_it_should(self):
+        for text in ("Reporte de uso", "sesiones", "versión", "AVISO", "Hola mundo"):
+            self.assertTrue(self.is_fixed_text(text), text)
+        for text in ("llrlrrr", "-", ", ", "", "| ", " |", "|", "---:", "---", "%d.%d", "0 %", "<1 %", "%d %%",
+                     "..", "?", "`", "\\|", "\n", "> - ", ur.BAR_FULL, "r", "l"):
+            self.assertFalse(self.is_fixed_text(text), repr(text))
+
+    def test_every_catalog_text_is_actually_used_by_a_generator(self):
+        # una clave del catalogo se pide con `t["clave"]`: ninguna queda sin leer en el codigo
+        with open(SCRIPT, "rb") as f:
+            source = f.read().decode("ascii")
+        for key in ur.CATALOG["es"]:
+            self.assertIn('t["%s"]' % key, source, key)
+
+
+class ReportCatalogCoverage(unittest.TestCase):
+    """Cada texto del catalogo se ve en alguno de los reportes del golden: cambiar cualquier texto (o cualquier
+    elemento de una tupla) cambia al menos un reporte. Es una mutacion de todo el catalogo, texto por texto."""
+
+    def mutated(self, key, index):
+        import types
+        entry = dict(ur.CATALOG["es"])
+        value = entry[key]
+        if index is None:
+            entry[key] = "ZZ" + value
+        else:
+            items = list(value)
+            items[index] = "ZZ" + items[index]
+            entry[key] = tuple(items)
+        return types.MappingProxyType({"es": types.MappingProxyType(entry)})
+
+    def test_each_catalog_text_changes_some_golden_report(self):
+        golden = _read_golden_es()
+        silent = []
+        for key, index, _text in _catalog_leaves(ur.CATALOG["es"]):
+            with mock.patch.object(ur, "CATALOG", self.mutated(key, index)):
+                changed = False
+                for name, build in GOLDEN_ES_BUILDERS:
+                    metrics = build()
+                    if (ur.render_project_report(metrics, ALIAS, generated=GOLDEN_ES_DAY) != golden[name]["project"]
+                            or ur.render_global_report(metrics, generated=GOLDEN_ES_DAY) != golden[name]["global"]):
+                        changed = True
+                        break
+            if not changed:
+                silent.append((key, index))
+        self.assertEqual(silent, [], "textos del catalogo que ningun escenario del golden muestra")
 
 
 if __name__ == "__main__":
