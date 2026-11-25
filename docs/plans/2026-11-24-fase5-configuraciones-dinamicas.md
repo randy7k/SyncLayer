@@ -10,7 +10,10 @@ suite de 1695 pruebas, 357 saltadas. T4 cerrada (2026-11-24): sólo pruebas (10 
 de uso (`LANGS`, `DEFAULT_LANG`, `CATALOG`; generadores con `t["clave"]`; español idéntico byte a byte contra
 `tests/usage_golden_es.json`), sin `--lang` (es de T6); suite de 1735 pruebas, 367 saltadas. T6 cerrada (2026-11-25):
 catálogo `en` (137 claves por idioma), parámetro `lang` de los dos generadores y `--lang es|en` en `project` y `global`;
-golden `tests/usage_golden_en.json`; suite de 1790 pruebas, 367 saltadas.
+golden `tests/usage_golden_en.json`; suite de 1790 pruebas, 367 saltadas. T7 cerrada (2026-11-25): sección «Perfiles
+por proyecto» del `README.md` y ampliación de «Adaptar un agente a un proyecto» en `docs/agentes.md`; 13 pruebas
+nuevas en `tests/test_phase5_docs.py` (casos 44 a 46), manifiesto regenerado, suite de 1803 pruebas, 367 saltadas
+(suite completa: 1803 pruebas, OK, 367 saltadas).
 
 Fuentes: [`2026-11-19-backlog-configuracion-y-reportes.md`](2026-11-19-backlog-configuracion-y-reportes.md)
 (Fase 5 y «Restricción de diseño: simple»),

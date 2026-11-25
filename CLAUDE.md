@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1790 pruebas, 367 saltadas (365 contra pwsh, que no está instalado, y 2 de
+`__pycache__`. La suite: 1803 pruebas, 367 saltadas (365 contra pwsh, que no está instalado, y 2 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), entre unos 43 y 70 minutos.
 Las pruebas de `install.ps1` corren en esta máquina contra Windows PowerShell 5.1. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
@@ -364,6 +364,17 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   - El efecto con un `~/.claude` real no se verificó (V2 del propietario: una corrida de `global --lang en
     --stdout`). No lo documentes como probado.
   `shield` interviene en T6 (agrega `--lang`, entrada de usuario).
+- Perfiles por proyecto (Fase 5, T7 hecha; solo documentación, sin código): `README.md`, sección «Perfiles por
+  proyecto» (tabla con la certeza de cada afirmación, «Desactivar un agente», «Lo que no se configura y por qué») y
+  `docs/agentes.md`, «Adaptar un agente a un proyecto». Documentado por Claude Code: un `.claude/agents/<nombre>.md`
+  con el mismo `name:` reemplaza al global solo en ese proyecto; prioridad gestionado, `--agents`, proyecto, usuario,
+  plugin; `permissions.deny` con `Agent(<nombre>)` (o `--disallowedTools`) impide usar un agente. NO verificado, no lo
+  escribas como hecho: qué pasa con la guarda si la copia de proyecto no trae `hooks:`; que con alias el nombre a
+  igualar sea el alias; el efecto real de `permissions.deny` (G1 del propietario). No hay fusión de campos documentada.
+  SyncLayer no escribe `settings.json` ni comprueba la regla. El texto nuevo de `docs/agentes.md` (archivo
+  gestionado y transformado al instalar) usa `<nombre>` y `<alias>`, sin nombres de rol ni el literal de la carpeta
+  de planes por defecto; `rules/agentes.md` no cambió. Las secciones nuevas del README no llevan porcentajes ni
+  promesas de ahorro (`promise_hits`). Candidatas descartadas con motivo: ver la tabla del README y `HISTORY.md`.
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
   cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
@@ -414,7 +425,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (365 en la última corrida de 1790 pruebas y 367 saltadas; las otras 2 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (365 en la última corrida de 1803 pruebas y 367 saltadas; las otras 2 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

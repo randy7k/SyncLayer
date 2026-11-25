@@ -144,6 +144,19 @@ decidir si delega. Las reglas generales están en `~/.claude/rules/agentes.md`.
 **Adaptar un agente a un proyecto.** Creá `.claude/agents/<nombre>.md` dentro del
 repo con el mismo `name`. Reemplaza al global sólo ahí. No copies los nueve.
 
+- **Reemplazo por nombre.** Claude Code resuelve por `name:`. La documentación no describe
+  fusión de campos: la copia de proyecto debe traer todo lo que necesite.
+- **Copiá también el bloque `hooks:`.** No está documentado qué pasa con la guarda si la copia de
+  proyecto no lo trae. No verificado: tratalo como riesgo, no como hecho.
+- **Con alias, igualá el alias.** El nombre a igualar es el alias instalado, no el rol. No verificado
+  en un Claude Code real.
+- **El nivel no llega.** El nivel de `synclayer-config.json` sólo se aplica a lo que el instalador
+  escribe en `-Target`; una copia de proyecto conserva lo que tenga escrito.
+- **Desactivar un agente.** La vía oficial es `permissions.deny` con `Agent(<nombre>)` (o
+  `--disallowedTools`). SyncLayer no lo configura ni lo comprueba; las reglas siguen nombrando al
+  agente y la sesión principal puede intentar delegar y recibir la negativa. No verificado en un Claude
+  Code real.
+
 **Agregar un agente.** Archivo nuevo en `~/.claude/agents/` con `name` y
 `description` en el frontmatter, más una fila en el catálogo de las reglas y de esta
 guía. Antes de agregarlo, comprobá que no se pueda resolver ampliando uno existente.

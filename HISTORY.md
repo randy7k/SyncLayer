@@ -6,7 +6,7 @@
 
 Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
 con los valores por defecto de P1 a P14; rama `feat/configuraciones-dinamicas`. 9 unidades (T1 a T8 y el
-cierre), 6 cerradas (T1 a T6, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar, y
+cierre), 7 cerradas (T1 a T7, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar, y
 el reporte de uso sale en español o en inglés con `--lang`.
 
 - Candidatas que entran: carpeta de planes configurable (clave `plans_dir` de `synclayer-config.json`,
@@ -22,6 +22,21 @@ el reporte de uso sale en español o en inglés con `--lang`.
   editarla a mano o un agente de proyecto. (e) estrictez de la guarda: exige transformar el bloque `hooks:`,
   hoy prohibido, y un modo sin guarda contradice la falla cerrada; no se ofrece nada.
 - Pendiente del propietario, fuera del conteo: G1 de la Fase 5 (no bloquea), V1 y V2.
+
+### Añadido (Fase 5, T7)
+
+- Documentación de perfiles por proyecto (sin código): sección «Perfiles por proyecto» del `README.md` con una
+  tabla de lo documentado por Claude Code (reemplazo por `name:` solo en ese proyecto, prioridad gestionado,
+  `--agents`, proyecto, usuario, plugin; `permissions.deny` con `Agent(<nombre>)` o `--disallowedTools`) y de lo
+  marcado como no verificado (guarda sin el bloque `hooks:`, alias como nombre a igualar, efecto real de la
+  negativa; G1 del propietario). No hay fusión de campos documentada y el nivel no llega a una copia de proyecto.
+- «Desactivar un agente» y «Lo que no se configura y por qué» (activar o desactivar por usuario, `tools:` por
+  agente, estrictez de la guarda, convención de commits), con su motivo y lo que se ofrece a cambio.
+- `docs/agentes.md`: «Adaptar un agente a un proyecto» ampliado (texto con `<nombre>` y `<alias>`). Cambia un
+  archivo gestionado: hay que regenerar el manifiesto (`python -B tools/build_manifest.py`). `rules/agentes.md` no
+  cambia.
+- Pruebas: `tests/test_phase5_docs.py` (13 pruebas, casos 44 a 46). Suite: 1803 pruebas, 367 saltadas (365
+  contra pwsh y 2 de la rama POSIX); suite completa: 1803 pruebas, OK, 367 saltadas.
 
 ### Añadido (Fase 5, T6)
 
