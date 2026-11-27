@@ -519,8 +519,9 @@ gestionado, se regenera el manifiesto (`python -B tools/build_manifest.py`). Si 
 catálogo, la guía `docs/agentes.md` y el catálogo de `rules/agentes.md` también.
 
 Al cerrar una sub-fase del plan en curso (instalador y backlog), actualiza en el mismo
-commit la sección «Línea de tiempo y avance» al final de `README.md`: suma la unidad a
-«Hecho», recalcula frente, fase y global (un cuadro = 10 %, redondeando al más cercano),
-mueve el 🔄 y cambia la fecha. Muestra la aritmética en el resumen del cierre. «Cerrada»
+commit el avance en dos sitios: `PLAN.md` (detalle: «Hecho» por frente, línea de tiempo,
+«Avance global») y el resumen de la sección «Línea de tiempo y avance» al final de `README.md`
+(fecha, frase del global, tabla por fase y «Ahora»). Suma la unidad a «Hecho», recalcula frente,
+fase y global (un cuadro = 10 %, redondeando al más cercano), mueve el 🔄 y cambia la fecha. Muestra la aritmética en el resumen del cierre. «Cerrada»
 aquí = commiteada en la rama de la fase con la suite verde y `auditor` sin Critical ni
 Important. Al desglosar una fase del backlog, «sin desglosar» pasa a sus unidades.

@@ -4,6 +4,8 @@
 
 ### Planificado (Fase 6)
 
+_Cambio de documentación (2026-11-27): el detalle de «Línea de tiempo y avance» (frentes por fase, línea de tiempo completa y «Cómo se mantiene») pasó del `README.md` a `PLAN.md`; el README conserva un resumen y el enlace._
+
 Plan `docs/plans/2026-11-27-fase6-renombrado-de-agentes.md`, aprobado por el propietario el 2026-11-27 con los
 valores por defecto de P1 a P16; rama `feat/renombrado-de-agentes`, creada desde `main` tras integrar la Fase 5.
 11 unidades (T1 a T10 y el cierre), 4 cerradas (T1 a T4). Los nombres de los agentes pasan a ser `heimdall` (oracle),
