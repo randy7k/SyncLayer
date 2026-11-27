@@ -762,6 +762,9 @@ VERIFIED_MAX = "2.1.326"
 SYNCLAYER_AGENTS = frozenset((
     "oracle", "scout", "atlas", "forge", "sentinel", "auditor", "shield", "debugger", "scribe",
 ))
+# Lista cerrada de nombres ANTERIORES de los agentes de SyncLayer (las transcripciones ya escritas traen el
+# agentType viejo): se clasifican como SyncLayer junto con los actuales. Vacia hasta el cambio de nombres.
+SYNCLAYER_LEGACY_AGENTS = frozenset()
 BUILTIN_AGENTS = frozenset((
     "general-purpose", "Explore", "Plan", "statusline-setup", "output-style-setup",
     "claude-code-guide",
@@ -887,7 +890,7 @@ def classify_agent(raw):
     if isinstance(raw, str):
         if raw == "":
             return DEFAULT_AGENT, "integrado"
-        if raw in SYNCLAYER_AGENTS:
+        if raw in SYNCLAYER_AGENTS or raw in SYNCLAYER_LEGACY_AGENTS:
             return raw, "SyncLayer"
         if raw in BUILTIN_AGENTS:
             return raw, "integrado"

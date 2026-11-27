@@ -487,6 +487,9 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   - Las pruebas «sin aviso de git» suben carpetas padre reales: fallarían en una máquina con `.git`
     en el home o en `%TEMP%`. Las pruebas pasan siempre `--claude-dir` a una carpeta temporal.
   - El instalador no instala la herramienta ni toca `synclayer-usage.md` ni `settings.json`.
+  - Nombres anteriores (Fase 6, T6): `SYNCLAYER_LEGACY_AGENTS` (`frozenset` cerrado, vacío hasta T7) se suma a
+    `SYNCLAYER_AGENTS` en `classify_agent`; sin solape con los actuales ni con `BUILTIN_AGENTS`, sin `:`. Una
+    prueba lo ata a `names.LEGACY`: se llena en T7 a la vez. El nombre inyectado de las pruebas es de fantasía.
   - Catálogo de textos (Fase 5, T5 y T6): `LANGS = ("es", "en")`, `DEFAULT_LANG = "es"` y `CATALOG`, inmutable
     (`MappingProxyType` en dos capas: idioma y claves). Un diccionario por idioma (`_ES`, `_EN`) con el mismo
     juego de claves (136 por idioma); por clave, mismo tipo (tupla o cadena), misma longitud de tupla y mismos marcadores

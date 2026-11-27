@@ -1254,6 +1254,41 @@ class ReaderAgentAndModel(ReaderBase):
         self.assertEqual(sorted(ur.SYNCLAYER_AGENTS), names)
         self.assertEqual(sorted(ur.SYNCLAYER_AGENTS), role_names.ROLES)
 
+    def test_legacy_agent_list_is_a_closed_empty_frozenset(self):
+        # Caso 15: con la lista vacia la clasificacion y los goldens no cambian (los goldens ya los fijan).
+        self.assertIsInstance(ur.SYNCLAYER_LEGACY_AGENTS, frozenset)
+        self.assertEqual(ur.SYNCLAYER_LEGACY_AGENTS, frozenset(role_names.LEGACY))
+        self.assertFalse(ur.SYNCLAYER_LEGACY_AGENTS & ur.SYNCLAYER_AGENTS)
+        self.assertFalse(ur.SYNCLAYER_LEGACY_AGENTS & ur.BUILTIN_AGENTS)
+        self.assertFalse([n for n in ur.SYNCLAYER_LEGACY_AGENTS if ":" in n])
+        self.assertEqual(ur.classify_agent("zeta-uno"), ("(otro agente)", "otros"))
+
+    def test_injected_legacy_names_classify_as_synclayer(self):
+        # Caso 16: nombres de fantasia inyectados con mock.patch.
+        with mock.patch.object(ur, "SYNCLAYER_LEGACY_AGENTS", frozenset(("zeta-uno", "zeta-dos"))):
+            self.assertEqual(ur.classify_agent("zeta-uno"), ("zeta-uno", "SyncLayer"))
+            self.assertEqual(ur.classify_agent("zeta-dos"), ("zeta-dos", "SyncLayer"))
+            self.assertEqual(ur.classify_agent(role_names.DEVELOPER), (role_names.DEVELOPER, "SyncLayer"))
+            self.assertEqual(ur.classify_agent("zeta-tres"), ("(otro agente)", "otros"))
+            self.assertEqual(ur.classify_agent("Zeta-uno"), ("(otro agente)", "otros"))
+            self.assertEqual(ur.classify_agent("Explore"), ("Explore", "integrado"))
+        self.assertEqual(ur.classify_agent("zeta-uno"), ("(otro agente)", "otros"))
+
+    def test_injected_legacy_name_gets_its_row_in_the_project_report(self):
+        # Caso 16, "con su fila": el nombre anterior sale en el conjunto SyncLayer del reporte de proyecto.
+        tree = us.Tree(self.base)
+        tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")], meta={"agentType": "zeta-uno"})
+        tree.subagent("c--p", "s1", "a2", [us.assistant("m2", T0 + "1Z")], meta={"agentType": "zeta-tres"})
+        with mock.patch.object(ur, "SYNCLAYER_LEGACY_AGENTS", frozenset(("zeta-uno",))):
+            res = self.read(tree)
+            self.assertEqual(sorted((c.agent, c.agent_group) for c in res.calls),
+                             [("(otro agente)", "otros"), ("zeta-uno", "SyncLayer")])
+            text = ur.render_project_report(agg(res, window=ur.make_window(TODAY, all_time=True)), "p-0a1b2c3d")
+        rows = [l for l in text.split("\n") if l.startswith("|") and "zeta-uno" in l]
+        self.assertTrue(rows)
+        self.assertTrue(any("SyncLayer" in l for l in rows), rows)
+        self.assertNotIn("zeta-tres", text)
+
     def test_agent_from_meta_and_default_agent_without_subagent_type(self):
         tree = us.Tree(self.base)
         tree.subagent("c--p", "s1", "a1", [us.assistant("m1", T0 + "1Z")],
