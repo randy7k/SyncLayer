@@ -121,7 +121,7 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | A. Preparación | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 4 de 4 (T1, T2, T3, T4) |
 | B. Compatibilidad | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T5, T6) |
 | C. Cambio atómico | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 1 de 1 (T7) |
-| D. Documentación, marca y cierre | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **25%** | 1 de 4 (T8) de 4 (T8, T9, T10, cierre) |
+| D. Documentación, marca y cierre | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **25%** | 1 de 4 (T8; faltan T9, T10, cierre) |
 
 - **A. Preparación**
   - ✅ Hecho: T1 referencia del renombrado (`tests/rename_ref.py`, `tests/test_rename.py`, `tests/rename_expected.json`: tabla `RENAME` de ocho pares, once textos gestionados esperados con la transformación de alias y sus hashes canónicos, 34 pruebas de los casos 1 a 6 y 18 parte previa). Sólo pruebas: ningún código de producción ni texto gestionado cambió. Revisada por `auditor` en dos rondas (un Important de CRLF del fixture corregido) sin Critical ni Important abiertos.
