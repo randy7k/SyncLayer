@@ -89,6 +89,13 @@ $AliasRoles = @('atlas', 'auditor', 'debugger', 'forge', 'oracle', 'scout', 'scr
 $ReservedAliases = @('explore', 'plan', 'general-purpose', 'claude', 'statusline-setup', 'claude-code-guide', 'web-fetch', 'fork', 'output-style-setup')
 $YamlWords = @('true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n')
 
+# Nombres anteriores de los agentes (Fase 6): pares 'viejo|nuevo', una definicion por linea (contrato con las pruebas, que
+# inyectan pares con patch_script tras la linea que empieza por la variable). Dato del script, no entrada. Los usan
+# Get-LegacyNewName (el huerfano de un nombre anterior sale como cambio de nombre, con su aviso) y Get-AliasTableProblem (una
+# clave de aliases con un nombre anterior da un motivo fijo). Get-LegacyTableProblem la valida al arrancar. Vacia = el
+# mecanismo no hace nada.
+$LegacyRoles = @()
+
 # Datos de la carpeta de planes (Fase 5, clave plans_dir). Los usa Get-PlansDirProblem (validacion) y ConvertTo-PlansBytes
 # (T3, aplicacion a los textos; $PlansDirDefault es el literal que se reemplaza): una definicion por linea. Contrato con
 # tests/test_plans.py y tests/plans_ref.py: son los mismos que los de la referencia. $PlansDirPattern: de una a cuatro
@@ -164,6 +171,35 @@ function Get-LevelTableProblem {
             return ('fila repetida: nivel ' + $parts[0] + ' agente ' + $parts[1])
         }
         $seen[$key] = $true
+    }
+    return $null
+}
+
+# Devuelve el primer problema de la tabla de nombres anteriores (motivo fijo) o $null si es coherente: cada fila
+# 'viejo|nuevo' con dos partes que casan [a-z][a-z0-9_-]{0,63}, viejos unicos, ningun viejo en $AliasRoles y todo nuevo
+# en $AliasRoles. Comparaciones ordinales y expresiones sin IgnoreCase. Vacia es valida.
+function Get-LegacyTableProblem {
+    $opts = [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($row in $LegacyRoles) {
+        $parts = ([string]$row).Split('|')
+        if ($parts.Count -ne 2) { return 'fila mal formada' }
+        foreach ($part in $parts) {
+            if (-not [regex]::IsMatch($part, '^[a-z][a-z0-9_-]{0,63}\z', $opts)) { return 'nombre con formato invalido' }
+        }
+        if (-not $seen.Add($parts[0])) { return 'nombre anterior repetido' }
+        if (Test-OrdinalIn $AliasRoles $parts[0]) { return 'un nombre anterior es un agente vigente' }
+        if (-not (Test-OrdinalIn $AliasRoles $parts[1])) { return 'un nombre nuevo no es un agente vigente' }
+    }
+    return $null
+}
+
+# Nombre nuevo (sin ruta) de un nombre anterior de $LegacyRoles, o $null si no esta. Comparacion ordinal; solo lee la lista.
+function Get-LegacyNewName($Old) {
+    if (-not ($Old -is [string])) { return $null }
+    foreach ($row in $LegacyRoles) {
+        $parts = ([string]$row).Split('|')
+        if ($parts.Count -eq 2 -and (Test-OrdinalEqual $parts[0] $Old)) { return $parts[1] }
     }
     return $null
 }
@@ -740,12 +776,18 @@ function Get-AliasEffective($Pairs) {
 }
 
 # Devuelve el motivo del primer problema de la tabla (texto fijo: nombra el rol, que es una clave de la lista
-# cerrada, y nunca el valor del alias; una clave desconocida va por Format-SafeShort) o $null si es valida.
+# cerrada, y nunca el valor del alias; una clave desconocida va por Format-SafeShort; un nombre anterior de
+# $LegacyRoles da un motivo con los dos nombres por Format-Safe) o $null si es valida.
 # Orden: claves; por cada rol, tipo y V1 a V4; sobre la tabla efectiva V5 y V7; V6; V8 (si se pasan las rutas del
 # manifiesto). Comparaciones ordinales y expresiones sin IgnoreCase.
 function Get-AliasTableProblem($Pairs, $ManifestPaths) {
     foreach ($pair in $Pairs) {
         if (-not (Test-OrdinalIn $AliasRoles $pair.Key)) {
+            # Un nombre anterior (Fase 6): motivo fijo con los dos nombres de la lista cerrada, nunca el valor.
+            $legacyNew = Get-LegacyNewName $pair.Key
+            if ($null -ne $legacyNew) {
+                return ('el rol ' + (Format-Safe ([string]$pair.Key)) + ' ahora se llama ' + (Format-Safe $legacyNew) + ': cambia la clave en aliases')
+            }
             return ('rol desconocido en aliases: ' + (Format-SafeShort ([string]$pair.Key)))
         }
     }
@@ -1423,6 +1465,12 @@ try {
         Stop-Install 1 ('error: la tabla de niveles de install.ps1 no es valida: ' + $levelProblem + '. No se escribio nada.')
     }
 
+    # Validacion de la tabla de nombres anteriores (Fase 6): dato del script, antes de leer el origen y sin escribir nada.
+    $legacyProblem = Get-LegacyTableProblem
+    if ($null -ne $legacyProblem) {
+        Stop-Install 1 ('error: la tabla de nombres anteriores de install.ps1 no es valida: ' + $legacyProblem + '. No se escribio nada.')
+    }
+
     # Paso 1: cargar y validar el manifiesto.
     $manifestPath = Join-Path $Source $ManifestName
     if (-not [System.IO.File]::Exists($manifestPath)) {
@@ -1745,6 +1793,16 @@ try {
                 $counts['HUERFANO']++
                 $renamedTo = $null
                 if ($destRel.ContainsKey($rel)) { $renamedTo = $destRel[$rel] }
+                else {
+                    # Nombre anterior (Fase 6): agents/<viejo>.md con <viejo> en $LegacyRoles es el archivo de un agente que
+                    # hoy se llama <nuevo>: mismo tratamiento que un cambio de alias (aviso por stderr; nunca se toca).
+                    if ($rel.StartsWith('agents/', [System.StringComparison]::Ordinal) -and $rel.EndsWith('.md', [System.StringComparison]::Ordinal) -and $rel.Length -gt 10) {
+                        $legacyNew = Get-LegacyNewName $rel.Substring(7, $rel.Length - 10)
+                        if ($null -ne $legacyNew -and $destRel.ContainsKey('agents/' + $legacyNew + '.md')) {
+                            $renamedTo = $destRel['agents/' + $legacyNew + '.md']
+                        }
+                    }
+                }
                 $rows.Add(@{ State = 'HUERFANO'; Path = $null; Dest = $prevDest; RenamedTo = $renamedTo })
             }
         }

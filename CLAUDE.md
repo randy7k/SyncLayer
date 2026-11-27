@@ -279,6 +279,15 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
       comentario `# Alias:` (la línea «# Alias: fin del bloque...», que no tiene la forma `# Paso N:`) y
       `function ConvertTo-AliasBytes`. No renombres ni muevas nada de esto sin ajustar `tests/test_install.py` y
       `tests/test_aliases.py`.
+    - Nombres anteriores (Fase 6, T5): `$LegacyRoles` (lista de pares `viejo|nuevo`, una definición por línea,
+      vacía hasta T7) se lee con `read_ps_list` y su línea es el ancla de `patch_script` de los casos 9 a 14:
+      ningún comentario puede empezar por `$LegacyRoles`, y no la renombres ni la muevas sin ajustar
+      `tests/test_install.py`. `Get-LegacyTableProblem` (al arrancar, exit 1 también con `-DryRun`) y
+      `Get-LegacyNewName` (ordinal, sólo lectura). Un huérfano `agents/<viejo>.md` lleva `RenamedTo` y sale el
+      aviso de la Fase 4; el archivo viejo nunca se abre, respalda ni borra. Una clave vieja en `aliases` da un
+      motivo fijo (los dos nombres, sin el valor); un nombre viejo como valor de alias es válido. Con estado
+      ausente o ilegible los archivos viejos quedan sin aviso. `nm.LEGACY` (`tests/names.py`) se llena en T7 a la
+      vez que `$LegacyRoles`; los casos 11 a 14 inyectan sus propios pares de fantasía.
     - Diccionarios y conjuntos ordinales (`Dictionary[string,string]` y `HashSet[string]` con
       `StringComparer.Ordinal`) para formas, `$destRel`, `$dests`, `$prevByDest` y la validación de `dest`; un
       `@{}` de PowerShell compara sin distinguir mayúsculas. Las expresiones regulares van sin `IgnoreCase`.

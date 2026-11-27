@@ -50,6 +50,11 @@ def yaml_words():
     return lr.read_ps_list("YamlWords")
 
 
+def legacy():
+    """Nombres anteriores (Fase 6): {viejo: nuevo}, de $LegacyRoles ('viejo|nuevo', una definicion por linea)."""
+    return dict(item.split("|") for item in lr.read_ps_list("LegacyRoles"))
+
+
 # --- formas y transformacion de texto ---
 
 def effective(table):
@@ -95,14 +100,18 @@ def role_hits(text, table):
 
 # --- validacion de la tabla (3.2) ---
 
-def validate_table(aliases, manifest_paths=None):
+def validate_table(aliases, manifest_paths=None, legacy_table=None):
     """Primer problema de la tabla rol -> alias (texto) o None. Reglas V1 a V7 (V8 solo si se pasa la
-    lista de rutas del manifiesto). Nunca nombra el valor del alias."""
+    lista de rutas del manifiesto). Nunca nombra el valor del alias. Una clave que es un nombre anterior
+    ($LegacyRoles; `legacy_table` {viejo: nuevo} lo sustituye en las pruebas) da un motivo fijo con los dos nombres."""
     known = roles()
+    old_names = legacy() if legacy_table is None else legacy_table
     if not isinstance(aliases, dict):
         return "aliases debe ser un objeto"
     for key in aliases:
         if key not in known:
+            if key in old_names:
+                return "el rol %s ahora se llama %s: cambia la clave en aliases" % (key, old_names[key])
             return "rol desconocido en aliases: " + key
     for role in known:
         if role not in aliases:

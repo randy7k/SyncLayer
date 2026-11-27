@@ -90,6 +90,27 @@ class ClosedLists(unittest.TestCase):
         self.assertEqual(lr.read_ps_list("AliasRoles"), ROLES)
         self.assertEqual(ar.roles(), ROLES)
 
+    def test_f6t5_legacy_roles_list(self):
+        # Fase 6, T5: $LegacyRoles es una lista de una linea ('viejo|nuevo'); la refleja names.LEGACY; cada nuevo es un
+        # rol vigente, ningun viejo lo es y los viejos son unicos. La lista vacia es valida (mecanismo inactivo).
+        values = lr.read_ps_list("LegacyRoles")
+        self.assertEqual(values, ["%s|%s" % (o, n) for o, n in names.LEGACY.items()])
+        self.assertEqual(len(re.findall(r"^\$LegacyRoles\b", lr.script_text(), re.M)), 1)
+        pairs = [v.split("|") for v in values]
+        self.assertTrue(all(len(p) == 2 for p in pairs))
+        self.assertEqual(len({p[0] for p in pairs}), len(pairs))
+        self.assertTrue(all(p[1] in ROLES and p[0] not in ROLES for p in pairs))
+        self.assertEqual(ar.legacy(), dict(names.LEGACY))
+
+    def test_f6t5_old_key_reason_names_both_roles_and_not_the_value(self):
+        reason = ar.validate_table({"zeta-uno": "secreto"}, legacy_table={"zeta-uno": ROLES[0]})
+        self.assertEqual(reason, "el rol zeta-uno ahora se llama %s: cambia la clave en aliases" % ROLES[0])
+        self.assertNotIn("secreto", reason)
+        self.assertEqual(ar.validate_table({"zeta-dos": "x"}, legacy_table={"zeta-uno": ROLES[0]}),
+                         "rol desconocido en aliases: zeta-dos")
+        # un nombre anterior como valor es valido
+        self.assertIsNone(ar.validate_table({ROLES[0]: "zeta-uno"}, legacy_table={"zeta-uno": ROLES[0]}))
+
     def test_case1_roles_cover_the_level_agents(self):
         self.assertTrue(set(lr.read_ps_list("LevelAgents")) <= set(ar.roles()))
 
@@ -103,12 +124,12 @@ class ClosedLists(unittest.TestCase):
 
     def test_case2_each_list_is_assigned_once_and_in_one_line(self):
         text = lr.script_text()
-        for name in ("AliasRoles", "ReservedAliases", "YamlWords"):
+        for name in ("AliasRoles", "ReservedAliases", "YamlWords", "LegacyRoles"):
             self.assertEqual(len(re.findall(r"^\$" + name + r"\b", text, re.M)), 1, name)
 
     def test_reader_handles_crlf(self):
         crlf = lr.script_text().replace("\n", "\r\n")
-        for name in ("AliasRoles", "ReservedAliases", "YamlWords"):
+        for name in ("AliasRoles", "ReservedAliases", "YamlWords", "LegacyRoles"):
             self.assertEqual(lr.read_ps_list(name, crlf), lr.read_ps_list(name))
 
 

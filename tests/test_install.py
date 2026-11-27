@@ -7066,6 +7066,289 @@ class InstallCases:
         self.assertNotIn(self.CONFIG, self.f4_tree(backup2))
         self.assertTrue(self.f4_tree(backup2))
 
+    # --- Fase 6, T5: nombres anteriores de los agentes (casos 9 a 14 del plan) ---
+    # Los pares se inyectan con patch_script tras la linea de $LegacyRoles (el ancla es esa linea: una sola definicion por
+    # linea, que empieza por $LegacyRoles). Nombres de fantasia como nombre anterior; el nombre actual es un rol real
+    # (nm.*), porque la tabla exige que todo nombre nuevo este en $AliasRoles.
+
+    F6T5_OLD = "zeta-uno"
+    F6T5_OLD2 = "zeta-dos"
+    F6T5_PREV = b"de una version anterior\n"
+    F6T5_CLASSIC = "agents/viejo.md"
+
+    def f6t5_legacy(self, *pairs):
+        items = ", ".join("'%s'" % p for p in pairs)
+        self.patch_script("$LegacyRoles", "$LegacyRoles = @(%s)" % items)
+
+    def f6t5_old_install(self, old_rel, schema=2, dest=None, with_files=True, classic=False):
+        """Estado previo con un agente de un nombre anterior (y su archivo en disco). Con with_files, sobre una
+        instalacion real sin alias del origen ALIAS_SAMPLE."""
+        if with_files:
+            files = self.f4t7_start()
+        else:
+            files = self.f4t5_source()
+        extra = dict(files) if with_files else {}
+        extra[old_rel] = self.F6T5_PREV
+        if classic:
+            extra[self.F6T5_CLASSIC] = self.F6T5_PREV
+            write(self.target, self.F6T5_CLASSIC, self.F6T5_PREV)
+        dests = {old_rel: dest} if dest else None
+        self.write_state(extra, schema=schema, dests=dests)
+        write(self.target, dest or old_rel, self.F6T5_PREV)
+        return files
+
+    def test_f6t5_static_legacy_roles_is_one_line_and_mirrors_names(self):
+        text = lr.script_text()
+        self.assertEqual(len(re.findall(r"^\$LegacyRoles\b", text, re.M)), 1)
+        self.assertEqual(lr.read_ps_list("LegacyRoles"), ["%s|%s" % (o, n) for o, n in nm.LEGACY.items()])
+        self.assertEqual(len(re.findall(r"^function Get-LegacyTableProblem\b", text, re.M)), 1)
+        self.assertEqual(lr.read_ps_list("LegacyRoles", text.replace("\n", "\r\n")), lr.read_ps_list("LegacyRoles"))
+        # la tabla se evalua al arrancar, antes de leer el manifiesto
+        self.assertIn("$legacyProblem = Get-LegacyTableProblem", text)
+        self.assertLess(text.index("$legacyProblem = Get-LegacyTableProblem"), text.index("# Paso 1:"))
+
+    def test_f6t5_case9_empty_table_changes_nothing(self):
+        # Con la tabla vacia (inyectada a proposito: no depende de la lista real) un archivo con un nombre anterior es un
+        # huerfano clasico (nota, sin aviso) y una clave de aliases con ese nombre es una clave desconocida.
+        self.f6t5_old_install(f"agents/{self.F6T5_OLD}.md")
+        self.patch_script("$LegacyRoles", "$LegacyRoles = @()")
+        self.f4t7_config(None)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("nota: los HUERFANO los instalo una version anterior", out)
+        self.assertEqual(self.f4t7_avisos(err), [])
+        self.f4t7_config({self.F6T5_OLD: "dev"})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("rol desconocido en aliases: " + self.F6T5_OLD, err)
+        self.assertNotIn("ahora se llama", err)
+
+    def test_f6t5_case10_invalid_legacy_table_exit1_in_both_modes_and_writes_nothing(self):
+        d, q = nm.DEVELOPER, nm.QA
+        fmt = "nombre con formato invalido"
+        bad = {
+            "sin barra": (["zeta-uno"], "fila mal formada"),
+            "tres partes": (["zeta-uno|%s|x" % d], "fila mal formada"),
+            "viejo con mayuscula": (["Zeta-uno|%s" % d], fmt),
+            "viejo vacio": (["|%s" % d], fmt),
+            "viejo con espacio": (["zeta uno|%s" % d], fmt),
+            "viejo empieza por digito": (["1zeta|%s" % d], fmt),
+            "viejo de 65 caracteres": (["z" * 65 + "|" + d], fmt),
+            "nuevo con mayuscula": (["zeta-uno|" + d.capitalize()], fmt),
+            "nuevo vacio": (["zeta-uno|"], fmt),
+            "viejos repetidos": (["zeta-uno|" + d, "zeta-uno|" + q], "nombre anterior repetido"),
+            "viejo es un rol vigente": (["%s|%s" % (d, q)], "un nombre anterior es un agente vigente"),
+            "viejo igual al nuevo": (["%s|%s" % (d, d)], "un nombre anterior es un agente vigente"),
+            "nuevo fuera de AliasRoles": (["zeta-uno|zeta-dos"], "un nombre nuevo no es un agente vigente"),
+        }
+        for label, (pairs, reason) in bad.items():
+            with self.subTest(table=label):
+                shutil.rmtree(self.src, ignore_errors=True)
+                shutil.rmtree(self.target, ignore_errors=True)
+                os.makedirs(self.src)
+                shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
+                self.make_source()
+                self.f6t5_legacy(*pairs)
+                write(self.target, "settings.json", b"{}")
+                before = snapshot(self.target)
+                listing = sorted(os.listdir(self.tmp))
+                for mode in (["-DryRun"], []):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 1, out + err)
+                    self.assertIn("error: la tabla de nombres anteriores de install.ps1 no es valida: %s. "
+                                  "No se escribio nada." % reason, err)
+                    self.assertIn("No se escribio nada", err)
+                    self.assertTrue(err.isascii(), repr(err))
+                    self.assertNotIn("Copiado", out)
+                    self.assertEqual(snapshot(self.target), before)
+                    self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+
+    def test_f6t5_case10_a_valid_table_is_accepted(self):
+        self.make_source()
+        # incluye el borde aceptado: un nombre anterior de 64 caracteres (el limite de la regex)
+        self.f6t5_legacy("%s|%s" % (self.F6T5_OLD, nm.DEVELOPER), "%s|%s" % (self.F6T5_OLD2, nm.QA),
+                         "z" * 64 + "|" + nm.PLANNER)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+
+    def test_f6t5_case11_legacy_orphan_warns_only_if_the_file_exists_and_is_never_touched(self):
+        old_rel = f"agents/{self.F6T5_OLD}.md"
+        new_rel = f"agents/{nm.DEVELOPER}.md"
+        self.f4t5_source()
+        self.f6t5_legacy("%s|%s" % (self.F6T5_OLD, nm.DEVELOPER))
+        for exists in (True, False):
+            for dry in (True, False):
+                with self.subTest(file_exists=exists, dry_run=dry):
+                    shutil.rmtree(self.target, ignore_errors=True)
+                    shutil.rmtree(os.path.join(self.tmp, "respaldo"), ignore_errors=True)
+                    self.f6t5_old_install(old_rel)
+                    if not exists:
+                        os.remove(os.path.join(self.target, "agents", f"{self.F6T5_OLD}.md"))
+                    old = self.f4t7_file(old_rel) if exists else None
+                    backup = os.path.join(self.tmp, "respaldo")
+                    flags = ["-DryRun"] if dry else []
+                    code, out, err = self.run_install(*flags, "-BackupDir", backup)
+                    self.assertEqual(code, 0, out + err)
+                    self.f4t7_assert_one_rename_orphan(out, err, old_rel, new_rel, exists=exists)
+                    self.assertTrue(err.isascii(), repr(err))
+                    if exists:
+                        self.assertEqual(self.f4t7_file(old_rel), old)
+                    else:
+                        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", f"{self.F6T5_OLD}.md")))
+                    if dry:
+                        self.assertFalse(os.path.exists(backup))
+                    else:
+                        self.assertNotIn(old_rel, self.f4_tree(backup))
+                        self.assertNotIn(self.F6T5_OLD.encode(), read(self.target, self.STATE))
+
+    def test_f6t5_case11_two_legacy_orphans_one_warning_each_and_the_exit_code_is_the_same(self):
+        self.f4t5_source()
+        self.f6t5_legacy("%s|%s" % (self.F6T5_OLD, nm.DEVELOPER), "%s|%s" % (self.F6T5_OLD2, nm.QA))
+        files = self.f4t7_start()
+        extra = dict(files)
+        extra[f"agents/{self.F6T5_OLD}.md"] = self.F6T5_PREV
+        extra[f"agents/{self.F6T5_OLD2}.md"] = self.F6T5_PREV
+        self.write_state(extra)
+        write(self.target, f"agents/{self.F6T5_OLD}.md", self.F6T5_PREV)
+        write(self.target, f"agents/{self.F6T5_OLD2}.md", self.F6T5_PREV)
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("HUERFANO=2", out)
+        self.assertNotIn(self.F4T7_NOTE, out)
+        self.assertEqual(sorted(self.f4t7_avisos(err)),
+                         sorted([self.f4t7_aviso(f"agents/{self.F6T5_OLD}.md", f"agents/{nm.DEVELOPER}.md"),
+                                 self.f4t7_aviso(f"agents/{self.F6T5_OLD2}.md", f"agents/{nm.QA}.md")]))
+
+    def test_f6t5_case11_mixed_legacy_and_classic_orphans_print_the_note_and_the_warning(self):
+        self.f4t5_source()
+        self.f6t5_legacy("%s|%s" % (self.F6T5_OLD, nm.DEVELOPER))
+        self.f6t5_old_install(f"agents/{self.F6T5_OLD}.md", classic=True)
+        for flags in (["-DryRun"], []):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.f4t7_by_state(out, "HUERFANO"),
+                                 sorted([f"agents/{self.F6T5_OLD}.md", self.F6T5_CLASSIC]))
+                self.assertEqual(out.count("nota: los HUERFANO los instalo una version anterior"), 1)
+                self.assertEqual(self.f4t7_avisos(err),
+                                 [self.f4t7_aviso(f"agents/{self.F6T5_OLD}.md", f"agents/{nm.DEVELOPER}.md")])
+                self.assertEqual(read(self.target, self.F6T5_CLASSIC), self.F6T5_PREV)
+                self.assertEqual(read(self.target, f"agents/{self.F6T5_OLD}.md"), self.F6T5_PREV)
+
+    def test_f6t5_case11_a_legacy_name_that_is_not_in_the_table_stays_a_classic_orphan(self):
+        self.f4t5_source()
+        self.f6t5_legacy("%s|%s" % (self.F6T5_OLD, nm.DEVELOPER))
+        self.f6t5_old_install(f"agents/{self.F6T5_OLD2}.md")
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("nota: los HUERFANO los instalo una version anterior", out)
+        self.assertEqual(self.f4t7_avisos(err), [])
+
+    def test_f6t5_case12_legacy_orphan_with_a_schema3_state(self):
+        # El estado previo es de esquema 3: la entrada del nombre anterior tenia el alias dev (dest agents/dev.md).
+        old_rel, dest = f"agents/{self.F6T5_OLD}.md", "agents/dev.md"
+        self.f4t5_source()
+        self.f6t5_legacy("%s|%s" % (self.F6T5_OLD, nm.DEVELOPER))
+        # a) sin aliases ahora: agents/dev.md es el nombre anterior de agents/<nuevo>.md
+        for exists in (True, False):
+            with self.subTest(case="sin aliases", file_exists=exists):
+                shutil.rmtree(self.target, ignore_errors=True)
+                self.f6t5_old_install(old_rel, schema=3, dest=dest, with_files=False)
+                if not exists:
+                    os.remove(os.path.join(self.target, "agents", "dev.md"))
+                code, out, err = self.run_install("-DryRun")
+                self.assertEqual(code, 0, out + err)
+                self.f4t7_assert_one_rename_orphan(out, err, dest, f"agents/{nm.DEVELOPER}.md", exists=exists)
+        # b) aliases ya corregido (<nuevo> a dev): agents/dev.md es el destino actual, sin huerfano
+        shutil.rmtree(self.target, ignore_errors=True)
+        self.f6t5_old_install(old_rel, schema=3, dest=dest, with_files=False)
+        self.f4t7_config({nm.DEVELOPER: "dev"})
+        for flags in (["-DryRun"], []):
+            with self.subTest(case="alias corregido", flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), [])
+                self.assertIn(dest, self.f4t7_by_state(out, "ACTUALIZAR"))
+                self.assertEqual(self.f4t7_avisos(err), [])
+                self.assertNotIn(self.F4T7_NOTE, out)
+                if flags:
+                    self.assertEqual(read(self.target, dest), self.F6T5_PREV)
+
+    def assert_legacy_key_rejected(self, aliases, old, new):
+        self.f4t5_source()
+        self.f6t5_legacy("%s|%s" % (old, new))
+        self.f4t7_config(aliases)
+        before = snapshot(self.target)
+        listing = sorted(os.listdir(self.tmp))
+        for mode in (["-DryRun"], []):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_install(*mode)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("error: synclayer-config.json no es valido: el rol %s ahora se llama %s: "
+                              "cambia la clave en aliases. No se escribio nada." % (old, new), err)
+                self.assertNotIn("rol desconocido", err)
+                self.assertNotIn("Copiado", out)
+                self.assertEqual(snapshot(self.target), before)
+                self.assertEqual(sorted(os.listdir(self.tmp)), listing)
+        return err
+
+    def test_f6t5_case13_old_key_in_aliases_exit1_with_both_names_and_never_the_value(self):
+        value = "secreto-qa"
+        err = self.assert_legacy_key_rejected({self.F6T5_OLD: value}, self.F6T5_OLD, nm.DEVELOPER)
+        self.assertNotIn(value, err)
+        # misma respuesta que la referencia independiente
+        self.assertEqual(ar.validate_table({self.F6T5_OLD: value}, legacy_table={self.F6T5_OLD: nm.DEVELOPER}),
+                         "el rol %s ahora se llama %s: cambia la clave en aliases" % (self.F6T5_OLD, nm.DEVELOPER))
+
+    def test_f6t5_case13_the_old_key_is_reported_even_with_a_valid_new_key_before_and_a_bad_value(self):
+        # El valor invalido esta en OTRA clave (nm.QA) y la clave vieja trae un valor valido: el recorrido de claves va
+        # antes de V1 a V4, asi que gana la clave vieja, y nunca se acepta como sinonimo de la nueva.
+        err = self.assert_legacy_key_rejected({nm.QA: "Mal", self.F6T5_OLD: "dev"}, self.F6T5_OLD, nm.DEVELOPER)
+        self.assertNotIn("Mal", err)
+
+    def test_f6t5_case13_an_unknown_key_keeps_the_old_message(self):
+        self.f4t5_source()
+        self.f6t5_legacy("%s|%s" % (self.F6T5_OLD, nm.DEVELOPER))
+        self.f4t7_config({self.F6T5_OLD2: "dev"})
+        code, out, err = self.run_install("-DryRun")
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("rol desconocido en aliases: " + self.F6T5_OLD2, err)
+        self.assertNotIn("ahora se llama", err)
+
+    def test_f6t5_case14_an_old_name_as_alias_value_is_valid_and_its_destination_is_not_an_orphan(self):
+        self.f4t5_source()
+        self.f6t5_legacy("%s|%s" % (self.F6T5_OLD, nm.DEVELOPER))
+        self.f4t7_config({nm.DEVELOPER: self.F6T5_OLD})
+        for flags in (["-DryRun"], []):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 0, out + err)
+                self.assertIn("Alias:", out)
+        # reinstalar lo mismo: todo IGUAL, ningun huerfano ni aviso
+        code, out, err = self.run_install()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), [])
+        self.assertEqual(self.f4t7_avisos(err), [])
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertTrue(os.path.exists(os.path.join(self.target, "agents", f"{self.F6T5_OLD}.md")))
+
+    def test_f6t5_case14_conserving_the_old_name_over_an_install_made_with_it(self):
+        # La instalacion previa dejo agents/<viejo>.md con estado esquema 2; el usuario configura <nuevo> -> <viejo>:
+        # ese destino es el actual (ACTUALIZAR, no huerfano) y no sale aviso.
+        old_rel = f"agents/{self.F6T5_OLD}.md"
+        self.f4t5_source()
+        self.f6t5_legacy("%s|%s" % (self.F6T5_OLD, nm.DEVELOPER))
+        self.f6t5_old_install(old_rel, with_files=False)
+        self.f4t7_config({nm.DEVELOPER: self.F6T5_OLD})
+        for flags in (["-DryRun"], []):
+            with self.subTest(flags=flags):
+                code, out, err = self.run_install(*flags)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), [])
+                self.assertIn(old_rel, self.f4t7_by_state(out, "ACTUALIZAR"))
+                self.assertEqual(self.f4t7_avisos(err), [])
+                self.assertNotIn(self.F4T7_NOTE, out)
+
     # --- Fase 4, cierre C1: bordes entre alias, nivel, estado esquema 3, -Force y configuracion invalida ---
 
     def test_f4c1_invalid_level_with_valid_aliases_exit1_in_both_modes_and_no_alias_line(self):
