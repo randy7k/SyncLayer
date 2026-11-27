@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aliases_ref as ar  # noqa: E402
 import build_manifest as bm  # noqa: E402
 import levels_ref as lr  # noqa: E402
+import names as nm  # noqa: E402
 import plans_ref as pr  # noqa: E402
 
 SCRIPT = os.path.join(ROOT, "install.ps1")
@@ -82,22 +83,23 @@ def agent_md(name, model, before=(), after=()):
     return "\n".join(lines).encode("latin-1")
 
 
-# Bloque hooks: de sentinel, con un model: indentado dentro (no cuenta como la linea model: del frontmatter).
-SENTINEL_HOOKS = ["hooks:", "  PreToolUse:", '    - matcher: "Write|Edit"', "      hooks:", "        - type: command",
-                  '          command: "python guard.py"', "          model: dentro-de-hooks"]
+# Bloque hooks: del agente de pruebas (nm.QA), con un model: indentado dentro (no cuenta como la linea model: del
+# frontmatter).
+QA_HOOKS = ["hooks:", "  PreToolUse:", '    - matcher: "Write|Edit"', "      hooks:", "        - type: command",
+            '          command: "python guard.py"', "          model: dentro-de-hooks"]
 
 # Fixture de los niveles (Fase 3, T4): los seis agentes modificables, los tres agentes fijos y las tres
 # rutas fijas, con el model: del repositorio (nivel 5).
 LEVEL_SAMPLE = {
-    "agents/atlas.md": agent_md("atlas", "claude-fable-5-2"),
-    "agents/forge.md": agent_md("forge", "sonnet"),
-    "agents/sentinel.md": agent_md("sentinel", "sonnet", after=SENTINEL_HOOKS),
-    "agents/scribe.md": agent_md("scribe", "sonnet"),
-    "agents/scout.md": agent_md("scout", "sonnet"),
-    "agents/oracle.md": agent_md("oracle", "haiku"),
-    "agents/auditor.md": agent_md("auditor", "opus"),
-    "agents/shield.md": agent_md("shield", "opus"),
-    "agents/debugger.md": agent_md("debugger", "opus"),
+    f"agents/{nm.PLANNER}.md": agent_md(nm.PLANNER, "claude-fable-5-2"),
+    f"agents/{nm.DEVELOPER}.md": agent_md(nm.DEVELOPER, "sonnet"),
+    f"agents/{nm.QA}.md": agent_md(nm.QA, "sonnet", after=QA_HOOKS),
+    f"agents/{nm.WRITER}.md": agent_md(nm.WRITER, "sonnet"),
+    f"agents/{nm.RESEARCHER}.md": agent_md(nm.RESEARCHER, "sonnet"),
+    f"agents/{nm.ANALYST}.md": agent_md(nm.ANALYST, "haiku"),
+    f"agents/{nm.REVIEWER}.md": agent_md(nm.REVIEWER, "opus"),
+    f"agents/{nm.SECURITY}.md": agent_md(nm.SECURITY, "opus"),
+    f"agents/{nm.DEBUGGER}.md": agent_md(nm.DEBUGGER, "opus"),
     "rules/agentes.md": b"reglas\n",
     "hooks/agent_guard.py": b"print('guard')\n",
     "docs/agentes.md": b"guia\n",
@@ -113,62 +115,62 @@ def alias_agent(role, description, body, after=()):
     return "\n".join(lines).encode("utf-8")
 
 
-# Fixture de los alias (Fase 4, T5): cuatro de los nueve agentes (sentinel con hooks:), las reglas y la guia (UTF-8, con
-# "escribe", "describe", @agent-forge, `Forge (Sonnet):`, una tabla en mayusculas, roles entre las comillas angulares,
+# Fixture de los alias (Fase 4, T5): cuatro de los nueve agentes (el de pruebas, con hooks:), las reglas y la guia (UTF-8, con
+# "escribe", "describe", @agent-<desarrollador>, `<Desarrollador> (Sonnet):`, una tabla en mayusculas, roles entre las comillas angulares,
 # tras la apertura de interrogacion y pegados a una letra acentuada, y un bloque cercado sin roles), el hook (que nombra
 # roles y no se transforma) y un agente que no es de los nueve (tampoco se transforma). Los bytes altos son UTF-8 valido.
 ALIAS_SAMPLE = {
-    "agents/atlas.md": alias_agent("atlas", "Plans the work and hands it to FORGE.",
-                                   "Eres ATLAS. Pide a forge que implemente y a SENTINEL que pruebe.\n"),
-    "agents/forge.md": alias_agent(
-        "forge", "Implements one unit of the ATLAS plan.",
-        "Eres FORGE. Usa `forge`, Forge (Sonnet): tarea, @agent-forge, agents/forge.md y ~/.claude/agents/forge.md.\n"
-        "«FORGE» y ¿forge? y Forgeé.\n"),
-    "agents/scribe.md": alias_agent(
-        "scribe", "Writes the docs.",
-        "Eres SCRIBE. Quien escribe, describe, reescribe o sobrescribe; escriben. Describe. scribe.\n"),
-    "agents/sentinel.md": alias_agent(
-        "sentinel", "Runs the tests.",
-        "Eres SENTINEL. «SENTINEL sólo escribe tests». Sentinelé y ñforge no cambian.\n",
-        after=SENTINEL_HOOKS),
-    "agents/alfa.md": "agente alfa que nombra a forge y a SENTINEL\n".encode("utf-8"),
+    f"agents/{nm.PLANNER}.md": alias_agent(nm.PLANNER, f"Plans the work and hands it to {nm.DEVELOPER.upper()}.",
+                                   f"Eres {nm.PLANNER.upper()}. Pide a {nm.DEVELOPER} que implemente y a {nm.QA.upper()} que pruebe.\n"),
+    f"agents/{nm.DEVELOPER}.md": alias_agent(
+        nm.DEVELOPER, f"Implements one unit of the {nm.PLANNER.upper()} plan.",
+        f"Eres {nm.DEVELOPER.upper()}. Usa `{nm.DEVELOPER}`, {nm.DEVELOPER.capitalize()} (Sonnet): tarea, @agent-{nm.DEVELOPER}, agents/{nm.DEVELOPER}.md y ~/.claude/agents/{nm.DEVELOPER}.md.\n"
+        f"«{nm.DEVELOPER.upper()}» y ¿{nm.DEVELOPER}? y {nm.DEVELOPER.capitalize()}é.\n"),
+    f"agents/{nm.WRITER}.md": alias_agent(
+        nm.WRITER, "Writes the docs.",
+        f"Eres {nm.WRITER.upper()}. Quien escribe, describe, reescribe o sobrescribe; escriben. Describe. {nm.WRITER}.\n"),
+    f"agents/{nm.QA}.md": alias_agent(
+        nm.QA, "Runs the tests.",
+        f"Eres {nm.QA.upper()}. «{nm.QA.upper()} sólo escribe tests». {nm.QA.capitalize()}é y ñ{nm.DEVELOPER} no cambian.\n",
+        after=QA_HOOKS),
+    "agents/alfa.md": f"agente alfa que nombra a {nm.DEVELOPER} y a {nm.QA.upper()}\n".encode("utf-8"),
     "rules/agentes.md": (
-        "# Reglas\n\n| Agente | Uso |\n|---|---|\n| FORGE | implementar |\n| SENTINEL | pruebas |\n"
-        "| ATLAS | planes |\n| SCRIBE | docs |\n\n"
-        "`forge`, `sentinel`, `atlas` y `scribe`. Forge (Sonnet): corregir. @agent-forge y @agent-scribe. "
-        "agents/forge.md.\n"
-        "«SENTINEL sólo escribe tests». ¿scribe escribe o describe? Sentinelé, ñforge, "
-        "éSCRIBE y SCRIBEÁ no cambian. Sobrescribe y reescribe: igual.\n\n"
+        f"# Reglas\n\n| Agente | Uso |\n|---|---|\n| {nm.DEVELOPER.upper()} | implementar |\n| {nm.QA.upper()} | pruebas |\n"
+        f"| {nm.PLANNER.upper()} | planes |\n| {nm.WRITER.upper()} | docs |\n\n"
+        f"`{nm.DEVELOPER}`, `{nm.QA}`, `{nm.PLANNER}` y `{nm.WRITER}`. {nm.DEVELOPER.capitalize()} (Sonnet): corregir. @agent-{nm.DEVELOPER} y @agent-{nm.WRITER}. "
+        f"agents/{nm.DEVELOPER}.md.\n"
+        f"«{nm.QA.upper()} sólo escribe tests». ¿{nm.WRITER} escribe o describe? {nm.QA.capitalize()}é, ñ{nm.DEVELOPER}, "
+        f"é{nm.WRITER.upper()} y {nm.WRITER.upper()}Á no cambian. Sobrescribe y reescribe: igual.\n\n"
         "```text\nbloque cercado sin roles\n```\n").encode("utf-8"),
     "docs/agentes.md": (
-        "# Guia\n\nCada agente tiene un rol: FORGE implementa, SENTINEL prueba y ATLAS planifica.\n"
-        "«SENTINEL sólo escribe tests» y «FORGE, SCRIBE y ATLAS… forge — sentinel.\n"
-        "Describe lo que escribe `scribe` (Forge (Sonnet)).\n").encode("utf-8"),
-    "hooks/agent_guard.py": b"# forge sentinel SCRIBE ATLAS no se transforman\nprint('guard')\n",
+        f"# Guia\n\nCada agente tiene un rol: {nm.DEVELOPER.upper()} implementa, {nm.QA.upper()} prueba y {nm.PLANNER.upper()} planifica.\n"
+        f"«{nm.QA.upper()} sólo escribe tests» y «{nm.DEVELOPER.upper()}, {nm.WRITER.upper()} y {nm.PLANNER.upper()}… {nm.DEVELOPER} — {nm.QA}.\n"
+        f"Describe lo que escribe `{nm.WRITER}` ({nm.DEVELOPER.capitalize()} (Sonnet)).\n").encode("utf-8"),
+    "hooks/agent_guard.py": (b"# " + nm.DEVELOPER.encode() + b" " + nm.QA.encode() + b" " + nm.WRITER.upper().encode() + b" " + nm.PLANNER.upper().encode() + b" no se transforman\nprint('guard')\n"),
 }
-ALIAS_ONE = {"sentinel": "amigo-qa"}
-ALIAS_FOUR = {"atlas": "mapa", "forge": "dev", "scribe": "redactor", "sentinel": "amigo-qa"}
+ALIAS_ONE = {nm.QA: "amigo-qa"}
+ALIAS_FOUR = {nm.PLANNER: "mapa", nm.DEVELOPER: "dev", nm.WRITER: "redactor", nm.QA: "amigo-qa"}
 
 # Fixture de la carpeta de planes (Fase 5, T3; no cambia los bytes de ALIAS_SAMPLE): los mismos archivos, con el literal
-# `docs/plans/` en el cuerpo de atlas, en las reglas y en la guia (con coincidencias que no deben casar: mydocs/plans/,
+# `docs/plans/` en el cuerpo del planificador, en las reglas y en la guia (con coincidencias que no deben casar: mydocs/plans/,
 # x/docs/plans/, .docs/plans/ y docs/plans sin barra final; y una pegada a una comilla angular, que si casa) y en el hook
 # (que no se transforma).
 PLANS_SAMPLE = dict(ALIAS_SAMPLE)
-PLANS_SAMPLE["agents/atlas.md"] = alias_agent(
-    "atlas", "Plans the work and hands it to FORGE.",
+PLANS_SAMPLE[f"agents/{nm.PLANNER}.md"] = alias_agent(
+    nm.PLANNER, f"Plans the work and hands it to {nm.DEVELOPER.upper()}.",
     "docs/plans/inicio.md va al inicio de la linea.\n"
-    "Eres ATLAS. Guarda el plan en `docs/plans/AAAA-MM-DD-<tema>.md` y pide a forge que lo implemente.\n"
+    f"Eres {nm.PLANNER.upper()}. Guarda el plan en `docs/plans/AAAA-MM-DD-<tema>.md` y pide a {nm.DEVELOPER} que lo implemente.\n"
     "No toques mydocs/plans/x.md ni x/docs/plans/y.md ni .docs/plans/z.md; docs/plans sin barra tampoco. (docs/plans/z.md)\n"
     "Tampoco DOCS/PLANS/a.md ni Docs/plans/b.md ni _docs/plans/c.md ni -docs/plans/d.md; docs/plans//e.md si cambia.\n")
 PLANS_SAMPLE["rules/agentes.md"] = ALIAS_SAMPLE["rules/agentes.md"] + (
-    "El plan de `atlas` vive en `docs/plans/AAAA-MM-DD-<tema>.md`; «docs/plans/x.md» también. mydocs/plans/ no.\n"
+    f"El plan de `{nm.PLANNER}` vive en `docs/plans/AAAA-MM-DD-<tema>.md`; «docs/plans/x.md» también. mydocs/plans/ no.\n"
 ).encode("utf-8")
 PLANS_SAMPLE["docs/agentes.md"] = ALIAS_SAMPLE["docs/agentes.md"] + (
     "Los planes van en docs/plans/ (ver [plan](otro/docs/plans/x.md)). Ningún x/docs/plans/ cambia.\n"
 ).encode("utf-8")
-PLANS_SAMPLE["agents/forge.md"] = ALIAS_SAMPLE["agents/forge.md"] + b"Lee el plan en docs/plans/ antes de empezar.\n"
-PLANS_SAMPLE["agents/alfa.md"] = "agente alfa que nombra a forge y a SENTINEL; docs/plans/ no se transforma\n".encode("utf-8")
-PLANS_SAMPLE["hooks/agent_guard.py"] = b"# forge sentinel SCRIBE ATLAS y docs/plans/ no se transforman\nprint('guard')\n"
+PLANS_SAMPLE[f"agents/{nm.DEVELOPER}.md"] = ALIAS_SAMPLE[f"agents/{nm.DEVELOPER}.md"] + b"Lee el plan en docs/plans/ antes de empezar.\n"
+PLANS_SAMPLE["agents/alfa.md"] = f"agente alfa que nombra a {nm.DEVELOPER} y a {nm.QA.upper()}; docs/plans/ no se transforma\n".encode("utf-8")
+PLANS_SAMPLE["hooks/agent_guard.py"] = (b"# " + nm.DEVELOPER.encode() + b" " + nm.QA.encode() + b" " + nm.WRITER.upper().encode() + b" " + nm.PLANNER.upper().encode() + b" y docs/plans/ no se transforman\nprint('guard')\n")
 PLANS_DIR = "docs/planes"
 
 
@@ -286,8 +288,8 @@ class StaticChecks(unittest.TestCase):
     def test_real_agents_pass_the_structural_rules_of_the_renderer(self):
         # Los nueve agents/*.md del repositorio no quedan rechazados por la referencia (misma forma que el instalador)
         # en ninguna celda de la tabla: las reglas de falla cerrada no rompen a los agentes reales.
-        names = ["atlas", "auditor", "debugger", "forge", "oracle", "scout", "scribe", "sentinel", "shield"]
-        self.assertEqual(sorted(os.listdir(os.path.join(ROOT, "agents"))), [n + ".md" for n in names])
+        names = nm.ROLES
+        self.assertEqual(sorted(os.listdir(os.path.join(ROOT, "agents"))), sorted(n + ".md" for n in names))
         for name in names:
             data = read(ROOT, "agents/%s.md" % name)
             for model in ("opus", "sonnet", "haiku"):
@@ -2826,8 +2828,8 @@ class InstallCases:
         return files
 
     def test_t4_case20_clean_install_levels_1_to_4(self):
-        spots = {1: ("atlas", b"model: sonnet\neffort: medium\n"), 3: ("atlas", b"model: opus\neffort: medium\n"),
-                 4: ("atlas", b"model: opus\n")}
+        spots = {1: (nm.PLANNER, b"model: sonnet\neffort: medium\n"), 3: (nm.PLANNER, b"model: opus\neffort: medium\n"),
+                 4: (nm.PLANNER, b"model: opus\n")}
         for level in (1, 2, 3, 4):
             with self.subTest(level=level):
                 files = self.make_level_source()
@@ -2848,7 +2850,7 @@ class InstallCases:
                 shutil.rmtree(self.target)
 
     def test_t4_case21_only_model_and_effort_lines_change(self):
-        hooks_block = "\n".join(SENTINEL_HOOKS).encode("ascii") + b"\n"
+        hooks_block = "\n".join(QA_HOOKS).encode("ascii") + b"\n"
         for level in (1, 2, 3, 4):
             with self.subTest(level=level):
                 files = self.make_level_source()
@@ -2867,14 +2869,14 @@ class InstallCases:
                     self.assertEqual(rest_out, rest_in, rel)
                     self.assertIn(len(front_out) - len(front_in), (0, 1), rel)
                     self.assertEqual(got.count(b"\nmodel: linea del cuerpo, no se toca\n"), 1, rel)
-                self.assertIn(hooks_block, read(self.target, "agents/sentinel.md"))
+                self.assertIn(hooks_block, read(self.target, f"agents/{nm.QA}.md"))
                 shutil.rmtree(self.target)
 
     def test_t4_case22_crlf_source_gives_the_same_result_as_lf(self):
         for level in (2, 3):
             with self.subTest(level=level):
                 files = self.make_level_source(crlf=True)
-                self.assertIn(b"\r\n", read(self.src, "agents/atlas.md"))
+                self.assertIn(b"\r\n", read(self.src, f"agents/{nm.PLANNER}.md"))
                 self.set_level(level)
                 self.install_ok()
                 self.assert_level_installed(files, level)
@@ -2884,9 +2886,9 @@ class InstallCases:
 
     def test_t4_case23_existing_effort_is_replaced_or_kept(self):
         files = dict(LEVEL_SAMPLE)
-        files["agents/atlas.md"] = agent_md("atlas", "claude-fable-5-2", before=["effort: max"])
-        files["agents/forge.md"] = agent_md("forge", "sonnet", after=["effort: xhigh"])
-        files["agents/scout.md"] = agent_md("scout", "sonnet", before=["effort: low"])
+        files[f"agents/{nm.PLANNER}.md"] = agent_md(nm.PLANNER, "claude-fable-5-2", before=["effort: max"])
+        files[f"agents/{nm.DEVELOPER}.md"] = agent_md(nm.DEVELOPER, "sonnet", after=["effort: xhigh"])
+        files[f"agents/{nm.RESEARCHER}.md"] = agent_md(nm.RESEARCHER, "sonnet", before=["effort: low"])
         for level in (2, 3):
             with self.subTest(level=level):
                 self.make_level_source(files)
@@ -2894,7 +2896,7 @@ class InstallCases:
                 self.install_ok()
                 self.assert_level_installed(files, level)
                 table = lr.read_script_table()
-                for agent in ("atlas", "forge", "scout"):
+                for agent in (nm.PLANNER, nm.DEVELOPER, nm.RESEARCHER):
                     front, _rest = split_front(read(self.target, "agents/%s.md" % agent))
                     efforts = [l for l in front if l.startswith("effort:")]
                     self.assertEqual(len(efforts), 1, agent)
@@ -2902,83 +2904,83 @@ class InstallCases:
                     if effort != "-":
                         self.assertEqual(efforts, ["effort: " + effort], agent)
                     else:
-                        self.assertEqual(efforts, [{"forge": "effort: xhigh", "scout": "effort: low"}[agent]], agent)
-                # en su sitio: la linea de atlas sigue antes de model:
-                front, _rest = split_front(read(self.target, "agents/atlas.md"))
+                        self.assertEqual(efforts, [{nm.DEVELOPER: "effort: xhigh", nm.RESEARCHER: "effort: low"}[agent]], agent)
+                # en su sitio: la linea del planificador sigue antes de model:
+                front, _rest = split_front(read(self.target, f"agents/{nm.PLANNER}.md"))
                 self.assertLess([l.split(":")[0] for l in front].index("effort"), [l.split(":")[0] for l in front].index("model"))
                 shutil.rmtree(self.target)
 
     DEFECTS = [
-        ("sin model:", agent_md("atlas", None), "debe haber exactamente una linea model:"),
-        ("model: duplicado", agent_md("atlas", "claude-fable-5-2", after=["model: opus"]),
+        ("sin model:", agent_md(nm.PLANNER, None), "debe haber exactamente una linea model:"),
+        ("model: duplicado", agent_md(nm.PLANNER, "claude-fable-5-2", after=["model: opus"]),
          "debe haber exactamente una linea model:"),
-        ("effort: duplicado", agent_md("atlas", "claude-fable-5-2", before=["effort: low", "effort: high"]),
+        ("effort: duplicado", agent_md(nm.PLANNER, "claude-fable-5-2", before=["effort: low", "effort: high"]),
          "hay mas de una linea effort:"),
-        ("sin cierre", agent_md("atlas", "claude-fable-5-2").replace(b"\n---\n", b"\n", 1), "frontmatter sin cierre"),
-        ("primera linea en blanco", b"\n" + agent_md("atlas", "claude-fable-5-2"), "la primera linea no es ---"),
-        ("BOM", b"\xef\xbb\xbf" + agent_md("atlas", "claude-fable-5-2"), "la primera linea no es ---"),
-        # Renderizado estructural (auditor y shield): un origen manipulado que pasa el Paso 2 no puede dejar YAML distinto.
-        ("CR suelto tras model:", agent_md("atlas", "sonnet\rhooks:", after=["  PreToolUse: x"]), "retorno de carro"),
-        ("CR suelto antes de model:", agent_md("atlas", "claude-fable-5-2", before=["color: green\rmodel: opus"]),
+        ("sin cierre", agent_md(nm.PLANNER, "claude-fable-5-2").replace(b"\n---\n", b"\n", 1), "frontmatter sin cierre"),
+        ("primera linea en blanco", b"\n" + agent_md(nm.PLANNER, "claude-fable-5-2"), "la primera linea no es ---"),
+        ("BOM", b"\xef\xbb\xbf" + agent_md(nm.PLANNER, "claude-fable-5-2"), "la primera linea no es ---"),
+        # Renderizado estructural (revisor y seguridad): un origen manipulado que pasa el Paso 2 no puede dejar YAML distinto.
+        ("CR suelto tras model:", agent_md(nm.PLANNER, "sonnet\rhooks:", after=["  PreToolUse: x"]), "retorno de carro"),
+        ("CR suelto antes de model:", agent_md(nm.PLANNER, "claude-fable-5-2", before=["color: green\rmodel: opus"]),
          "retorno de carro"),
-        ("CR suelto antes de effort:", agent_md("atlas", "claude-fable-5-2", before=["color: green\reffort: max"]),
+        ("CR suelto antes de effort:", agent_md(nm.PLANNER, "claude-fable-5-2", before=["color: green\reffort: max"]),
          "retorno de carro"),
-        ("tabulador", agent_md("atlas", "claude-fable-5-2", before=["extra:\tvalor"]), "tabulador"),
-        ("model: bloque literal", agent_md("atlas", "|", after=["  claude-fable-5-2"]), "indicador YAML"),
-        ("model: bloque plegado", agent_md("atlas", ">", after=["  claude-fable-5-2"]), "indicador YAML"),
-        ("model: lista", agent_md("atlas", None, after=["model:", "  - x"]), "linea model: del origen"),
-        ("model: ancla", agent_md("atlas", "&m sonnet"), "indicador YAML"),
-        ("model: comentario", agent_md("atlas", "sonnet # nota"), "linea model: del origen"),
-        ("model: comilla sin cerrar", agent_md("atlas", "'sonnet"), "indicador YAML"),
-        ("effort: comentario", agent_md("atlas", "claude-fable-5-2", before=["effort: max # c"]), "linea effort: del origen"),
-        ("model: continuacion", agent_md("atlas", "sonnet", after=["  mas"]), "continuacion"),
-        ("effort: continuacion", agent_md("atlas", "claude-fable-5-2", before=["effort: max", "  mas"]), "continuacion"),
-        ("segundo hooks:", agent_md("atlas", "claude-fable-5-2", after=["hooks:", "  a: b", "hooks:", "  c: d"]),
+        ("tabulador", agent_md(nm.PLANNER, "claude-fable-5-2", before=["extra:\tvalor"]), "tabulador"),
+        ("model: bloque literal", agent_md(nm.PLANNER, "|", after=["  claude-fable-5-2"]), "indicador YAML"),
+        ("model: bloque plegado", agent_md(nm.PLANNER, ">", after=["  claude-fable-5-2"]), "indicador YAML"),
+        ("model: lista", agent_md(nm.PLANNER, None, after=["model:", "  - x"]), "linea model: del origen"),
+        ("model: ancla", agent_md(nm.PLANNER, "&m sonnet"), "indicador YAML"),
+        ("model: comentario", agent_md(nm.PLANNER, "sonnet # nota"), "linea model: del origen"),
+        ("model: comilla sin cerrar", agent_md(nm.PLANNER, "'sonnet"), "indicador YAML"),
+        ("effort: comentario", agent_md(nm.PLANNER, "claude-fable-5-2", before=["effort: max # c"]), "linea effort: del origen"),
+        ("model: continuacion", agent_md(nm.PLANNER, "sonnet", after=["  mas"]), "continuacion"),
+        ("effort: continuacion", agent_md(nm.PLANNER, "claude-fable-5-2", before=["effort: max", "  mas"]), "continuacion"),
+        ("segundo hooks:", agent_md(nm.PLANNER, "claude-fable-5-2", after=["hooks:", "  a: b", "hooks:", "  c: d"]),
          "autocomprobacion"),
-        ("--- con espacio final", agent_md("atlas", "claude-fable-5-2", before=["--- "]), "forma clave"),
-        ("linea ...", agent_md("atlas", "claude-fable-5-2", before=["..."]), "forma clave"),
-        # Regla comun (shield y auditor): ASCII imprimible, lineas de primer nivel con forma `clave:` y valores sin indicador.
-        ("NEL (U+0085) entre dos claves", agent_md("atlas", "claude-fable-5-2", before=["color: green\x85model: opus"]),
+        ("--- con espacio final", agent_md(nm.PLANNER, "claude-fable-5-2", before=["--- "]), "forma clave"),
+        ("linea ...", agent_md(nm.PLANNER, "claude-fable-5-2", before=["..."]), "forma clave"),
+        # Regla comun (seguridad y revisor): ASCII imprimible, lineas de primer nivel con forma `clave:` y valores sin indicador.
+        ("NEL (U+0085) entre dos claves", agent_md(nm.PLANNER, "claude-fable-5-2", before=["color: green\x85model: opus"]),
          "retorno de carro"),
-        ("U+2028 en una linea", agent_md("atlas", "claude-fable-5-2", before=["color: green\xe2\x80\xa8x: y"]),
+        ("U+2028 en una linea", agent_md(nm.PLANNER, "claude-fable-5-2", before=["color: green\xe2\x80\xa8x: y"]),
          "retorno de carro"),
-        ("--- seguido de NBSP", agent_md("atlas", "claude-fable-5-2", before=["---\xc2\xa0"]), "retorno de carro"),
-        ("--- seguido de U+2028", agent_md("atlas", "claude-fable-5-2", before=["---\xe2\x80\xa8"]), "retorno de carro"),
-        ("... seguido de NBSP", agent_md("atlas", "claude-fable-5-2", before=["...\xc2\xa0"]), "retorno de carro"),
-        ("BOM interior delante de hooks: x", agent_md("atlas", "claude-fable-5-2", before=["\xef\xbb\xbfhooks: x"]),
+        ("--- seguido de NBSP", agent_md(nm.PLANNER, "claude-fable-5-2", before=["---\xc2\xa0"]), "retorno de carro"),
+        ("--- seguido de U+2028", agent_md(nm.PLANNER, "claude-fable-5-2", before=["---\xe2\x80\xa8"]), "retorno de carro"),
+        ("... seguido de NBSP", agent_md(nm.PLANNER, "claude-fable-5-2", before=["...\xc2\xa0"]), "retorno de carro"),
+        ("BOM interior delante de hooks: x", agent_md(nm.PLANNER, "claude-fable-5-2", before=["\xef\xbb\xbfhooks: x"]),
          "retorno de carro"),
-        ("hooks : x", agent_md("atlas", "claude-fable-5-2", before=["hooks : x"]), "forma clave"),
-        ('"hooks": x', agent_md("atlas", "claude-fable-5-2", before=['"hooks": x']), "forma clave"),
-        ("? hooks / : x", agent_md("atlas", "claude-fable-5-2", before=["? hooks", ": x"]), "forma clave"),
-        ("{hooks: none}", agent_md("atlas", "claude-fable-5-2", before=["{hooks: none}"]), "forma clave"),
-        ("model : opus", agent_md("atlas", "claude-fable-5-2", before=["model : opus"]), "forma clave"),
-        ("lista de flujo abierta con model: dentro", agent_md("atlas", "sonnet", before=["flow: [Read, Write,"],
+        ("hooks : x", agent_md(nm.PLANNER, "claude-fable-5-2", before=["hooks : x"]), "forma clave"),
+        ('"hooks": x', agent_md(nm.PLANNER, "claude-fable-5-2", before=['"hooks": x']), "forma clave"),
+        ("? hooks / : x", agent_md(nm.PLANNER, "claude-fable-5-2", before=["? hooks", ": x"]), "forma clave"),
+        ("{hooks: none}", agent_md(nm.PLANNER, "claude-fable-5-2", before=["{hooks: none}"]), "forma clave"),
+        ("model : opus", agent_md(nm.PLANNER, "claude-fable-5-2", before=["model : opus"]), "forma clave"),
+        ("lista de flujo abierta con model: dentro", agent_md(nm.PLANNER, "sonnet", before=["flow: [Read, Write,"],
                                                               after=["Grep]"]), "forma clave"),
-        ("lista de flujo abierta con la continuacion sangrada", agent_md("atlas", "sonnet", before=["flow: [Read, Write,"],
+        ("lista de flujo abierta con la continuacion sangrada", agent_md(nm.PLANNER, "sonnet", before=["flow: [Read, Write,"],
                                                                          after=["  Grep]"]), "indicador YAML"),
-        ("comillas abiertas de otra clave", agent_md("atlas", "sonnet", before=['zz: "a'], after=['b: c"']),
+        ("comillas abiertas de otra clave", agent_md(nm.PLANNER, "sonnet", before=['zz: "a'], after=['b: c"']),
          "indicador YAML"),
-        ("valor con corchete", agent_md("atlas", "claude-fable-5-2", before=["k: [a]"]), "indicador YAML"),
-        ("valor con llave", agent_md("atlas", "claude-fable-5-2", before=["k: {a: b}"]), "indicador YAML"),
-        ("valor con ancla de alias", agent_md("atlas", "claude-fable-5-2", before=["k: *a"]), "indicador YAML"),
-        ("valor con etiqueta", agent_md("atlas", "claude-fable-5-2", before=["k: !tag x"]), "indicador YAML"),
-        ("valor con porcentaje", agent_md("atlas", "claude-fable-5-2", before=["k: %x"]), "indicador YAML"),
-        ("valor con arroba", agent_md("atlas", "claude-fable-5-2", before=["k: @x"]), "indicador YAML"),
-        ("valor con acento grave", agent_md("atlas", "claude-fable-5-2", before=["k: `x"]), "indicador YAML"),
-        ("valor con comilla doble", agent_md("atlas", "claude-fable-5-2", before=['k: "x']), "indicador YAML"),
-        # Hueco envolvente (shield y auditor): una linea con sangria antes de model: o de effort: podria ser la
+        ("valor con corchete", agent_md(nm.PLANNER, "claude-fable-5-2", before=["k: [a]"]), "indicador YAML"),
+        ("valor con llave", agent_md(nm.PLANNER, "claude-fable-5-2", before=["k: {a: b}"]), "indicador YAML"),
+        ("valor con ancla de alias", agent_md(nm.PLANNER, "claude-fable-5-2", before=["k: *a"]), "indicador YAML"),
+        ("valor con etiqueta", agent_md(nm.PLANNER, "claude-fable-5-2", before=["k: !tag x"]), "indicador YAML"),
+        ("valor con porcentaje", agent_md(nm.PLANNER, "claude-fable-5-2", before=["k: %x"]), "indicador YAML"),
+        ("valor con arroba", agent_md(nm.PLANNER, "claude-fable-5-2", before=["k: @x"]), "indicador YAML"),
+        ("valor con acento grave", agent_md(nm.PLANNER, "claude-fable-5-2", before=["k: `x"]), "indicador YAML"),
+        ("valor con comilla doble", agent_md(nm.PLANNER, "claude-fable-5-2", before=['k: "x']), "indicador YAML"),
+        # Hueco envolvente (seguridad y revisor): una linea con sangria antes de model: o de effort: podria ser la
         # continuacion de un valor abierto que model: cierra. Se rechaza cualquier sangria hasta la mayor de las dos.
-        ("comilla abierta que model: envuelve", agent_md("atlas", "sonnet", before=["xq:", '  "abc'], after=['q: r"']),
+        ("comilla abierta que model: envuelve", agent_md(nm.PLANNER, "sonnet", before=["xq:", '  "abc'], after=['q: r"']),
          "con sangria antes de"),
-        ("corchete abierto que model: envuelve", agent_md("atlas", "sonnet", before=["xf:", "  [a,"], after=["b: ]"]),
+        ("corchete abierto que model: envuelve", agent_md(nm.PLANNER, "sonnet", before=["xf:", "  [a,"], after=["b: ]"]),
          "con sangria antes de"),
-        ("llave abierta que model: envuelve", agent_md("atlas", "sonnet", before=["xf:", "  {a: 1,"], after=["b: c}"]),
+        ("llave abierta que model: envuelve", agent_md(nm.PLANNER, "sonnet", before=["xf:", "  {a: 1,"], after=["b: c}"]),
          "con sangria antes de"),
-        ("lista de flujo en hooks: antes de model:", agent_md("atlas", "sonnet", before=["hooks:", "  PreToolUse: [ {a: 1},"],
+        ("lista de flujo en hooks: antes de model:", agent_md(nm.PLANNER, "sonnet", before=["hooks:", "  PreToolUse: [ {a: 1},"],
                                                              after=["b: 2 ]"]), "con sangria antes de"),
-        ("hooks: con hijos antes de model:", agent_md("atlas", "sonnet", before=["hooks:", "  PreToolUse:", "    - x"]),
+        ("hooks: con hijos antes de model:", agent_md(nm.PLANNER, "sonnet", before=["hooks:", "  PreToolUse:", "    - x"]),
          "con sangria antes de"),
-        ("sangria entre model: y effort:", agent_md("atlas", "sonnet", after=["hooks:", "  a: b", "effort: max"]),
+        ("sangria entre model: y effort:", agent_md(nm.PLANNER, "sonnet", after=["hooks:", "  a: b", "effort: max"]),
          "con sangria antes de"),
     ]
 
@@ -2995,7 +2997,7 @@ class InstallCases:
             for level in (3, 1):
                 with self.subTest(case=name, level=level):
                     files = dict(LEVEL_SAMPLE)
-                    files["agents/atlas.md"] = data
+                    files[f"agents/{nm.PLANNER}.md"] = data
                     self.make_level_source(files)
                     self.set_level(level)
                     before = snapshot(self.target)
@@ -3003,7 +3005,7 @@ class InstallCases:
                     for mode in (["-DryRun"], []):
                         code, out, err = self.run_install(*mode)
                         self.assertEqual(code, 1, out + err)
-                        self.assertIn("error: no se puede aplicar el nivel %d a agents/atlas.md: " % level, err)
+                        self.assertIn(f"error: no se puede aplicar el nivel %d a agents/{nm.PLANNER}.md: " % level, err)
                         self.assertIn(motivo, err)
                         self.assertIn(". No se escribio nada.", err)
                         self.assertTrue(err.isascii(), repr(err))
@@ -3013,34 +3015,34 @@ class InstallCases:
                     shutil.rmtree(self.target)
 
     def test_t4_case24_a_defect_only_matters_where_the_agent_is_rendered(self):
-        # Nivel 5 no renderiza; auditor no es modificable: el mismo defecto no detiene la instalacion.
+        # Nivel 5 no renderiza; el revisor no es modificable: el mismo defecto no detiene la instalacion.
         for name, data, _motivo in self.DEFECTS:
             with self.subTest(case=name, level=5):
                 files = dict(LEVEL_SAMPLE)
-                files["agents/atlas.md"] = data
+                files[f"agents/{nm.PLANNER}.md"] = data
                 self.make_level_source(files)
                 self.install_ok()
-                self.assertEqual(read(self.target, "agents/atlas.md"), data.replace(b"\r\n", b"\n"))
+                self.assertEqual(read(self.target, f"agents/{nm.PLANNER}.md"), data.replace(b"\r\n", b"\n"))
                 shutil.rmtree(self.target)
             with self.subTest(case=name, fixed_agent_at_level=3):
                 files = dict(LEVEL_SAMPLE)
-                files["agents/auditor.md"] = data
+                files[f"agents/{nm.REVIEWER}.md"] = data
                 self.make_level_source(files)
                 self.set_level(3)
                 self.install_ok()
-                self.assertEqual(read(self.target, "agents/auditor.md"), data)
+                self.assertEqual(read(self.target, f"agents/{nm.REVIEWER}.md"), data)
                 shutil.rmtree(self.target)
 
     def test_t4_case25_indented_model_and_body_model_are_not_touched(self):
         files = dict(LEVEL_SAMPLE)
         # Las lineas con sangria van DESPUES de model: (antes se rechazan: hueco envolvente).
-        files["agents/atlas.md"] = agent_md("atlas", "claude-fable-5-2",
+        files[f"agents/{nm.PLANNER}.md"] = agent_md(nm.PLANNER, "claude-fable-5-2",
                                             after=["meta:", "  model: indentado-despues", "  effort: indentado-despues"])
         self.make_level_source(files)
         self.set_level(3)
         self.install_ok()
         self.assert_level_installed(files, 3)
-        got = read(self.target, "agents/atlas.md")
+        got = read(self.target, f"agents/{nm.PLANNER}.md")
         self.assertIn(b"\nmodel: opus\neffort: medium\nmeta:\n  model: indentado-despues\n  effort: indentado-despues\ncolor: blue\n", got)
         self.assertIn(b"\nmodel: linea del cuerpo, no se toca\n", got)
         self.assertEqual(got.count(b"effort: medium"), 1)
@@ -3055,9 +3057,9 @@ class InstallCases:
         expected = level_expected(files, 4)
         for rel, data in files.items():
             self.assertEqual(states[rel], "IGUAL" if expected[rel] == data else "ACTUALIZAR", rel)
-        self.assertEqual(states["agents/forge.md"], "IGUAL")
-        self.assertEqual(states["agents/atlas.md"], "ACTUALIZAR")
-        self.assertEqual(read(self.target, "agents/forge.md"), files["agents/forge.md"])
+        self.assertEqual(states[f"agents/{nm.DEVELOPER}.md"], "IGUAL")
+        self.assertEqual(states[f"agents/{nm.PLANNER}.md"], "ACTUALIZAR")
+        self.assertEqual(read(self.target, f"agents/{nm.DEVELOPER}.md"), files[f"agents/{nm.DEVELOPER}.md"])
         self.assert_level_installed(files, 4)
         self.assertEqual(sorted(self.tree(backup)),
                          sorted([os.path.join(*r.split("/")) for r in files if expected[r] != files[r]] + ["synclayer-manifest.json"]))
@@ -3089,7 +3091,7 @@ class InstallCases:
         files = self.make_level_source()
         self.set_level(1)
         self.install_ok()
-        self.assertNotEqual(read(self.target, "agents/atlas.md"), files["agents/atlas.md"])
+        self.assertNotEqual(read(self.target, f"agents/{nm.PLANNER}.md"), files[f"agents/{nm.PLANNER}.md"])
         self.set_level(5)
         out, err = self.install_ok()
         for rel, data in files.items():
@@ -3113,15 +3115,15 @@ class InstallCases:
                 shutil.rmtree(self.target)
 
     def test_t4_case27_modifiable_agent_missing_from_the_manifest_is_not_an_error(self):
-        files = {rel: data for rel, data in LEVEL_SAMPLE.items() if rel not in ("agents/oracle.md", "agents/scout.md")}
+        files = {rel: data for rel, data in LEVEL_SAMPLE.items() if rel not in (f"agents/{nm.ANALYST}.md", f"agents/{nm.RESEARCHER}.md")}
         self.make_level_source(files)
         self.set_level(2)
         out, err = self.install_ok()
-        self.assertNotIn("oracle", out)
-        self.assertNotIn("scout", out)
+        self.assertNotIn(nm.ANALYST, out)
+        self.assertNotIn(nm.RESEARCHER, out)
         self.assertEqual(len([l for l in out.splitlines() if l.startswith("Ajuste:")]), 4)
         self.assert_level_installed(files, 2)
-        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "oracle.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", f"{nm.ANALYST}.md")))
 
     def test_t4_case28_dryrun_level_3_prints_nivel_and_ajuste_lines_and_writes_nothing(self):
         self.make_level_source()
@@ -3137,8 +3139,8 @@ class InstallCases:
                 for a in sorted(lr.read_ps_list("LevelAgents"))]
         got = [l for l in lines if l.startswith("Ajuste:")]
         self.assertEqual(got, want)
-        self.assertIn("Ajuste: agents/atlas.md  model: opus  effort: medium", got)
-        self.assertIn("Ajuste: agents/sentinel.md  model: sonnet  effort: -", got)
+        self.assertIn(f"Ajuste: agents/{nm.PLANNER}.md  model: opus  effort: medium", got)
+        self.assertIn(f"Ajuste: agents/{nm.QA}.md  model: sonnet  effort: -", got)
         self.assertGreater(lines.index(got[0]), [i for i, l in enumerate(lines) if l.startswith("Resumen:")][0])
         self.assertEqual(self.states(out), {rel: "NUEVO" for rel in LEVEL_SAMPLE})
         self.assertEqual(snapshot(self.target), before)
@@ -3166,19 +3168,19 @@ class InstallCases:
                     else:
                         self.assertEqual(bm.canonical_sha256(read(self.target, rel)), manifest[rel], rel)
                 self.assert_level_installed(files, level)
-                self.assertIn(b"hooks:", read(self.target, "agents/sentinel.md"))
+                self.assertIn(b"hooks:", read(self.target, f"agents/{nm.QA}.md"))
                 self.assertFalse(os.path.exists(os.path.join(self.target, "docs", "brand")))
                 shutil.rmtree(self.target)
 
     def test_t4_case30_post_verification_catches_an_altered_file_at_level_3(self):
         self.make_level_source()
         self.set_level(3)
-        atlas = os.path.join(self.target, "agents", "atlas.md").replace("'", "''")
-        self.patch_script("# Paso 8:", "[System.IO.File]::AppendAllText('%s', 'x')" % atlas)
+        planner_path = os.path.join(self.target, "agents", f"{nm.PLANNER}.md").replace("'", "''")
+        self.patch_script("# Paso 8:", "[System.IO.File]::AppendAllText('%s', 'x')" % planner_path)
         code, out, err = self.run_install()
         self.assertEqual(code, 4, out + err)
         self.assertIn("la verificacion posterior fallo", err)
-        self.assertIn("agents/atlas.md", err)
+        self.assertIn(f"agents/{nm.PLANNER}.md", err)
         self.assertFalse(os.path.exists(os.path.join(self.target, "synclayer-manifest.json")))
 
     def test_t4_the_renderer_runs_only_for_the_six_agents_and_never_at_level_5(self):
@@ -3245,25 +3247,25 @@ class InstallCases:
     def test_t4_case25_variants(self):
         base = "claude-fable-5-2"
         ok = [
-            ("sin salto final", agent_md("atlas", base).rstrip(b"\n")),
-            ("--- y model: en el cuerpo", agent_md("atlas", base) + b"---\nmodel: otro\neffort: low\nmas texto\n"),
-            ("Model: en mayusculas", agent_md("atlas", base, before=["Model: no-tocar"])),
-            ("effort: max antes de model:", agent_md("atlas", base, before=["effort: max"])),
+            ("sin salto final", agent_md(nm.PLANNER, base).rstrip(b"\n")),
+            ("--- y model: en el cuerpo", agent_md(nm.PLANNER, base) + b"---\nmodel: otro\neffort: low\nmas texto\n"),
+            ("Model: en mayusculas", agent_md(nm.PLANNER, base, before=["Model: no-tocar"])),
+            ("effort: max antes de model:", agent_md(nm.PLANNER, base, before=["effort: max"])),
         ]
         rejected = [
-            ("model: con comentario", agent_md("atlas", "x # nota")),
-            ("effort: con comentario antes de model:", agent_md("atlas", base, before=["effort: max # c"])),
-            ("CR suelto", agent_md("atlas", base, before=["color: green\rx: y"])),
+            ("model: con comentario", agent_md(nm.PLANNER, "x # nota")),
+            ("effort: con comentario antes de model:", agent_md(nm.PLANNER, base, before=["effort: max # c"])),
+            ("CR suelto", agent_md(nm.PLANNER, base, before=["color: green\rx: y"])),
         ]
         for name, data in ok:
             with self.subTest(case=name):
                 files = dict(LEVEL_SAMPLE)
-                files["agents/atlas.md"] = data
+                files[f"agents/{nm.PLANNER}.md"] = data
                 self.make_level_source(files)
                 self.set_level(3)
                 self.install_ok()
                 self.assert_level_installed(files, 3)
-                got = read(self.target, "agents/atlas.md")
+                got = read(self.target, f"agents/{nm.PLANNER}.md")
                 if name.startswith("Model:"):
                     self.assertIn(b"\nModel: no-tocar\n", got)
                 if name.startswith("---"):
@@ -3274,14 +3276,14 @@ class InstallCases:
         for name, data in rejected:
             with self.subTest(case=name):
                 files = dict(LEVEL_SAMPLE)
-                files["agents/atlas.md"] = data
+                files[f"agents/{nm.PLANNER}.md"] = data
                 self.make_level_source(files)
                 self.set_level(3)
                 before = snapshot(self.target)
                 for mode in (["-DryRun"], []):
                     code, out, err = self.run_install(*mode)
                     self.assertEqual(code, 1, out + err)
-                    self.assertIn("agents/atlas.md", err)
+                    self.assertIn(f"agents/{nm.PLANNER}.md", err)
                     self.assertEqual(snapshot(self.target), before)
                 shutil.rmtree(self.target)
 
@@ -3723,7 +3725,7 @@ class InstallCases:
     #   Sin configuracion, destino de la Fase 1 ........ test_t5_situation_phase1_target_without_config_is_igual_and_migrates
     #   Nivel 5 a 3 / 3 a 5 ............................ test_t5_case31_level_changes_are_actualizar_with_backup_and_the_previous_level
     #   Edicion a mano de model: tras instalar ......... test_t5_case32_manual_edit_is_modified_exit3_writes_nothing_and_force_backs_up
-    #   Edicion a mano de un agente fijo ............... (la misma, con auditor, shield y debugger)
+    #   Edicion a mano de un agente fijo ............... (la misma, con el revisor, seguridad y el depurador)
     #   Edicion a mano y luego cambio de nivel ......... test_t5_case32_manual_edit_then_level_change_is_modified_for_that_file_only
     #   Cambio de nivel y del origen a la vez .......... test_t5_case34_level_change_and_source_change_together_are_actualizar
     #   Estado schema 1, destino intacto, nivel 3 ...... test_t5_case33_schema1_state_with_intact_destination_at_level_3_is_actualizar
@@ -3841,9 +3843,9 @@ class InstallCases:
         self.assertEqual(self.tree(backup), {self.STATE: old_state})
 
     def test_t5_case32_manual_edit_is_modified_exit3_writes_nothing_and_force_backs_up(self):
-        combos = [(5, "agents/atlas.md"), (5, "agents/auditor.md"), (3, "agents/atlas.md"), (3, "agents/auditor.md"),
-                  (3, "agents/shield.md"), (3, "agents/debugger.md"), (3, "agents/forge.md"),
-                  (1, "agents/atlas.md"), (1, "agents/auditor.md")]
+        combos = [(5, f"agents/{nm.PLANNER}.md"), (5, f"agents/{nm.REVIEWER}.md"), (3, f"agents/{nm.PLANNER}.md"), (3, f"agents/{nm.REVIEWER}.md"),
+                  (3, f"agents/{nm.SECURITY}.md"), (3, f"agents/{nm.DEBUGGER}.md"), (3, f"agents/{nm.DEVELOPER}.md"),
+                  (1, f"agents/{nm.PLANNER}.md"), (1, f"agents/{nm.REVIEWER}.md")]
         for n, (level, rel) in enumerate(combos):
             with self.subTest(level=level, rel=rel):
                 shutil.rmtree(self.target, ignore_errors=True)
@@ -3872,7 +3874,7 @@ class InstallCases:
 
     def test_t5_case32_manual_edit_then_level_change_is_modified_for_that_file_only(self):
         files = self.t5_first_install(3)
-        rel = "agents/atlas.md"
+        rel = f"agents/{nm.PLANNER}.md"
         old = level_expected(files, 3)
         edited = read(self.target, rel).replace(b"\nmodel: ", b"\nmodel: manual-", 1)
         write(self.target, rel, edited)
@@ -3931,16 +3933,16 @@ class InstallCases:
     def test_t5_case34_level_change_and_source_change_together_are_actualizar(self):
         files = self.t5_first_install(5)
         new = dict(files)
-        new["agents/atlas.md"] = agent_md("atlas", "claude-fable-5-2", before=["version: 2"])
-        new["agents/forge.md"] = agent_md("forge", "sonnet", before=["version: 2"])
-        new["agents/auditor.md"] = agent_md("auditor", "opus", before=["version: 2"])
+        new[f"agents/{nm.PLANNER}.md"] = agent_md(nm.PLANNER, "claude-fable-5-2", before=["version: 2"])
+        new[f"agents/{nm.DEVELOPER}.md"] = agent_md(nm.DEVELOPER, "sonnet", before=["version: 2"])
+        new[f"agents/{nm.REVIEWER}.md"] = agent_md(nm.REVIEWER, "opus", before=["version: 2"])
         new["rules/agentes.md"] = b"reglas 2\n"
         self.make_level_source(new)
         self.set_level(3)
         old = level_expected(files, 5)
         want = level_expected(new, 3)
         changed = [rel for rel in new if old[rel] != want[rel]]
-        for rel in ("agents/atlas.md", "agents/forge.md", "agents/auditor.md", "rules/agentes.md", "agents/scribe.md"):
+        for rel in (f"agents/{nm.PLANNER}.md", f"agents/{nm.DEVELOPER}.md", f"agents/{nm.REVIEWER}.md", "rules/agentes.md", f"agents/{nm.WRITER}.md"):
             self.assertIn(rel, changed)
         backup = os.path.join(self.tmp, "respaldo")
         wanted = {rel: ("ACTUALIZAR" if rel in changed else "IGUAL") for rel in new}
@@ -3955,7 +3957,7 @@ class InstallCases:
         self.assertEqual(self.states(out), wanted)
         self.t5_assert_previous_level(out, 5)
         self.assert_level_installed(new, 3)
-        self.assertIn(b"version: 2", read(self.target, "agents/forge.md"))
+        self.assertIn(b"version: 2", read(self.target, f"agents/{nm.DEVELOPER}.md"))
         saved = self.tree(backup)
         self.assertEqual(sorted(saved), sorted([self.t5_path(r) for r in changed] + [self.STATE]))
         for rel in changed:
@@ -4067,7 +4069,7 @@ class InstallCases:
         saved = [l[len("Respaldado: "):] for l in out.splitlines() if l.startswith("Respaldado: ")]
         self.assertEqual(copied[0], "hooks/agent_guard.py", out)
         self.assertEqual(saved[0], "hooks/agent_guard.py", out)
-        self.assertIn("agents/atlas.md", copied[1:])
+        self.assertIn(f"agents/{nm.PLANNER}.md", copied[1:])
         self.assertEqual(sorted(copied), sorted(r for r in new if level_expected(files, 5)[r] != level_expected(new, 3)[r]))
         self.assert_level_installed(new, 3)
 
@@ -4084,17 +4086,17 @@ class InstallCases:
         self.assertEqual(sorted(os.listdir(self.tmp)), listing)
         # con un estado que dice otro nivel: los archivos que ya coinciden en CRLF siguen siendo IGUAL
         write(self.target, self.STATE, lr.state_for(read(self.src, "install-manifest.json"), None, 5))
-        for rel in ("agents/atlas.md", "agents/scribe.md"):
+        for rel in (f"agents/{nm.PLANNER}.md", f"agents/{nm.WRITER}.md"):
             write(self.target, rel, level_expected(files, 3)[rel].replace(b"\n", b"\r\n"))
         backup = os.path.join(self.tmp, "respaldo")
         out, err = self.install_ok("-BackupDir", backup)
         self.assertEqual(set(self.states(out).values()), {"IGUAL"})
-        self.assertEqual(read(self.target, "agents/atlas.md"), level_expected(files, 3)["agents/atlas.md"].replace(b"\n", b"\r\n"))
+        self.assertEqual(read(self.target, f"agents/{nm.PLANNER}.md"), level_expected(files, 3)[f"agents/{nm.PLANNER}.md"].replace(b"\n", b"\r\n"))
         self.assert_state(3, level_hashes(files, 3))
         self.assertEqual(sorted(self.tree(backup)), [self.STATE])
 
 
-    # --- Cierre de la Fase 3 (sentinel): huecos de borde no cubiertos por los casos 1 a 40 ---
+    # --- Cierre de la Fase 3 (agente de pruebas): huecos de borde no cubiertos por los casos 1 a 40 ---
 
     def test_g1_removing_the_config_after_level_3_returns_to_the_repository_bytes(self):
         # Nivel por defecto (sin archivo) sobre un estado de nivel 3: es el nivel 5, no «el mismo nivel».
@@ -4117,7 +4119,7 @@ class InstallCases:
     def test_g2_level_3_with_a_readonly_destination_exit1_in_both_modes_writes_nothing(self):
         files = self.t5_first_install(5)
         self.set_level(3)
-        self.make_readonly("agents/atlas.md")
+        self.make_readonly(f"agents/{nm.PLANNER}.md")
         before = snapshot(self.target)
         backup = os.path.join(self.tmp, "respaldo")
         for mode in (["-DryRun"], []):
@@ -4125,14 +4127,14 @@ class InstallCases:
                 code, out, err = self.run_install(*(mode + ["-BackupDir", backup]))
                 self.assertEqual(code, 1, out + err)
                 self.assertIn("solo lectura", err)
-                self.assertIn("atlas.md", err)
+                self.assertIn(f"{nm.PLANNER}.md", err)
                 self.assertEqual(snapshot(self.target), before)
                 self.assertFalse(os.path.exists(backup))
-        self.assertEqual(read(self.target, "agents/atlas.md"), files["agents/atlas.md"])
+        self.assertEqual(read(self.target, f"agents/{nm.PLANNER}.md"), files[f"agents/{nm.PLANNER}.md"])
 
     def test_g3_a_manifest_without_the_fixed_agents_installs_at_level_3(self):
         files = {rel: data for rel, data in LEVEL_SAMPLE.items()
-                 if rel not in ("agents/auditor.md", "agents/shield.md", "agents/debugger.md")}
+                 if rel not in [f"agents/{role}.md" for role in nm.FIXED]}
         self.make_level_source(files)
         self.set_level(3)
         code, out, err = self.run_install("-DryRun")
@@ -4140,31 +4142,31 @@ class InstallCases:
         self.assertEqual(len([l for l in out.splitlines() if l.startswith("Ajuste:")]), 6)
         self.install_ok()
         self.assert_level_installed(files, 3)
-        for name in ("auditor", "shield", "debugger"):
+        for name in nm.FIXED:
             self.assertFalse(os.path.exists(os.path.join(self.target, "agents", name + ".md")))
 
     def test_g4_reinstall_after_exit4_at_level_3_needs_force_for_the_corrupted_file_only(self):
         files = self.make_level_source()
         self.set_level(3)
-        atlas = os.path.join(self.target, "agents", "atlas.md").replace("'", "''")
-        self.patch_script("# Paso 8:", "[System.IO.File]::AppendAllText('%s', 'x')" % atlas)
+        planner_path = os.path.join(self.target, "agents", f"{nm.PLANNER}.md").replace("'", "''")
+        self.patch_script("# Paso 8:", "[System.IO.File]::AppendAllText('%s', 'x')" % planner_path)
         code, out, err = self.run_install()
         self.assertEqual(code, 4, out + err)
         self.assertFalse(os.path.exists(os.path.join(self.target, self.STATE)))
         shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
-        # sin estado, lo que difiere de lo esperado es MODIFICADO (regla vigente): solo atlas
+        # sin estado, lo que difiere de lo esperado es MODIFICADO (regla vigente): solo el planificador
         code, out, err = self.run_install()
         self.assertEqual(code, 3, out + err)
-        self.assertEqual(self.states(out), {r: ("MODIFICADO" if r == "agents/atlas.md" else "IGUAL") for r in files})
+        self.assertEqual(self.states(out), {r: ("MODIFICADO" if r == f"agents/{nm.PLANNER}.md" else "IGUAL") for r in files})
         backup = os.path.join(self.tmp, "respaldo")
         self.install_ok("-Force", "-BackupDir", backup)
-        self.assertEqual(sorted(self.tree(backup)), [os.path.join("agents", "atlas.md")])
+        self.assertEqual(sorted(self.tree(backup)), [os.path.join("agents", f"{nm.PLANNER}.md")])
         self.assert_level_installed(files, 3)
 
     def test_g5_environment_warnings_and_exit_3_come_together_without_the_value(self):
         files = self.t5_first_install(3)
-        edited = read(self.target, "agents/atlas.md").replace(b"\nmodel: ", b"\nmodel: manual-", 1)
-        write(self.target, "agents/atlas.md", edited)
+        edited = read(self.target, f"agents/{nm.PLANNER}.md").replace(b"\nmodel: ", b"\nmodel: manual-", 1)
+        write(self.target, f"agents/{nm.PLANNER}.md", edited)
         secret = "SECRETO-98765"
         for mode in (["-DryRun"], []):
             with self.subTest(mode=mode):
@@ -4173,7 +4175,7 @@ class InstallCases:
                 self.assertEqual(len(self.env_warnings(err)), 2, err)
                 self.assertIn(self.PHRASE, err)
                 self.assertNotIn(secret, out + err)
-                self.assertEqual(read(self.target, "agents/atlas.md"), edited)
+                self.assertEqual(read(self.target, f"agents/{nm.PLANNER}.md"), edited)
 
     def test_g6_dryrun_with_every_state_at_once_at_level_3(self):
         files = self.make_level_source()
@@ -4182,16 +4184,16 @@ class InstallCases:
         for rel, data in old.items():
             write(self.target, rel, data)
         self.write_state(old)
-        os.remove(os.path.join(self.target, "agents", "scribe.md"))
-        write(self.target, "agents/forge.md", b"editado a mano\n")
+        os.remove(os.path.join(self.target, "agents", f"{nm.WRITER}.md"))
+        write(self.target, f"agents/{nm.DEVELOPER}.md", b"editado a mano\n")
         self.set_level(3)
         changed = self.t5_changed(files, 5, 3)
-        self.assertIn("agents/atlas.md", changed)
-        self.assertIn("agents/scribe.md", changed)
-        self.assertNotIn("agents/forge.md", changed)
+        self.assertIn(f"agents/{nm.PLANNER}.md", changed)
+        self.assertIn(f"agents/{nm.WRITER}.md", changed)
+        self.assertNotIn(f"agents/{nm.DEVELOPER}.md", changed)
         wanted = {rel: ("ACTUALIZAR" if rel in changed else "IGUAL") for rel in files}
-        wanted["agents/scribe.md"] = "NUEVO"
-        wanted["agents/forge.md"] = "MODIFICADO"
+        wanted[f"agents/{nm.WRITER}.md"] = "NUEVO"
+        wanted[f"agents/{nm.DEVELOPER}.md"] = "MODIFICADO"
         wanted["agents/viejo.md"] = "HUERFANO"
         counts = {k: list(wanted.values()).count(k) for k in ("NUEVO", "IGUAL", "ACTUALIZAR", "MODIFICADO", "HUERFANO")}
         before = self.t5_world()
@@ -4255,12 +4257,12 @@ class InstallCases:
         for level in (3, 1):
             with self.subTest(level=level):
                 files = dict(LEVEL_SAMPLE)
-                files["agents/atlas.md"] = agent_md("atlas", "claude-fable-5-2", after=hooks)
+                files[f"agents/{nm.PLANNER}.md"] = agent_md(nm.PLANNER, "claude-fable-5-2", after=hooks)
                 self.make_level_source(files)
                 self.set_level(level)
                 self.install_ok()
                 self.assert_level_installed(files, level)
-                got = read(self.target, "agents/atlas.md")
+                got = read(self.target, f"agents/{nm.PLANNER}.md")
                 self.assertIn(("\n".join(hooks) + "\n").encode("ascii"), got)
                 shutil.rmtree(self.target)
 
@@ -5945,7 +5947,7 @@ class InstallCases:
         # el bloque hooks: de sentinel, byte a byte (con el model: de dentro incluido)
         src = files["agents/sentinel.md"]
         dst = read(self.target, "agents/amigo-qa.md")
-        block = ("\n".join(SENTINEL_HOOKS) + "\n").encode("ascii")
+        block = ("\n".join(QA_HOOKS) + "\n").encode("ascii")
         self.assertIn(block, src)
         self.assertIn(block, dst)
         # las lineas de tools:, model: y color: del frontmatter, intactas
@@ -6231,7 +6233,7 @@ class InstallCases:
         self.assertIn("Ajuste: agents/amigo-qa.md  model: sonnet  effort: -", lines)
         self.assertEqual(len([l for l in lines if l.startswith("Ajuste:")]), 4)
         # el hooks: de sentinel sigue intacto con nivel y alias
-        self.assertIn(("\n".join(SENTINEL_HOOKS) + "\n").encode("ascii"), read(self.target, "agents/amigo-qa.md"))
+        self.assertIn(("\n".join(QA_HOOKS) + "\n").encode("ascii"), read(self.target, "agents/amigo-qa.md"))
 
     # --- Fase 4, T6: alias con niveles, repositorio real y -DryRun (casos 41 a 46 del plan) ---
 
@@ -6248,7 +6250,7 @@ class InstallCases:
             lines = ["---", "name: " + role, "description: Rol " + role.upper() + " que avisa a FORGE y a SHIELD.",
                      "tools: Read, Grep", "model: " + model]
             if role in self.F4T6_HOOKED:
-                lines += SENTINEL_HOOKS
+                lines += QA_HOOKS
             lines += ["color: blue", "---",
                       "Eres " + role.upper() + ". Habla con `forge`, Sentinel y @agent-atlas; «" + role.upper() +
                       " sólo escribe tests». scribe describe y escribe.\n"]
@@ -6297,7 +6299,7 @@ class InstallCases:
                         self.assertIn("\nmodel: %s\n" % self.F4T6_MODELS[role], text)
                         self.assertNotIn("\neffort:", front)
                     if role in self.F4T6_HOOKED:
-                        self.assertIn(("\n".join(SENTINEL_HOOKS) + "\n").encode("ascii"), data, role)
+                        self.assertIn(("\n".join(QA_HOOKS) + "\n").encode("ascii"), data, role)
                     self.assertIn("\nname: %s\n" % table[role], text)
                 ajustes = [l for l in lines if l.startswith("Ajuste:")]
                 self.assertEqual(len(ajustes), len(level_agents))
@@ -7961,7 +7963,7 @@ class InstallCases:
                 self.assertEqual(len(ajustes), 0 if level == 5 else len(table))
                 # el hook y el agente fuera de los nueve no se tocan; el hooks: de sentinel (alias amigo-qa) queda intacto
                 self.assertEqual(read(self.target, "agents/alfa.md"), files["agents/alfa.md"])
-                self.assertIn(("\n".join(SENTINEL_HOOKS) + "\n").encode("ascii"), read(self.target, "agents/amigo-qa.md"))
+                self.assertIn(("\n".join(QA_HOOKS) + "\n").encode("ascii"), read(self.target, "agents/amigo-qa.md"))
 
     def test_f5t4_case26_real_repository_no_role_residue_and_every_order_levels_5_and_3(self):
         files = self.f4t6_repo_files()

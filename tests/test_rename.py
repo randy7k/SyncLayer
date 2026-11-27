@@ -6,6 +6,7 @@ puente: hashes esperados), 6 (supuestos 5, 6 y 7) y 18 (parte previa: hooks:, to
 No tocan ~/.claude ni install.ps1. Sin PowerShell: solo biblioteca estandar.
 """
 
+import ast
 import importlib.util
 import io
 import json
@@ -428,6 +429,29 @@ _SPANISH_WORDS = re.compile("escriben|escribe|describe|reescribe|sobrescribe", r
 _CONSTANT_TOKEN = re.compile(r"\b" + nm.DEBUGGER.upper() + r"\b")   # el identificador names.DEBUGGER
 
 
+# test_install.py se parametriza en dos tareas (T3 y T4), asi que no entra todavia en PARAMETRIZED: se escanea solo
+# la parte de T3. Corte por nombres: queda fuera todo lo que sigue a la marca de la Fase 4 (clases y metodos de las
+# Fases 4 y 5, incluido F4T6_GOLDEN) y, antes de ella, los metodos `test_f4*` y `test_f5*` de StaticChecks. T4 quita
+# este corte y mueve el archivo a PARAMETRIZED. Sin excepciones: ni siquiera comentarios.
+INSTALL_FILE = "test_install.py"
+INSTALL_T4_MARK = "    # --- Fase 4, T2: clave aliases"
+_INSTALL_T4_METHOD = re.compile(r"^test_f[45]")
+
+
+def install_t3_part(text):
+    """El texto de test_install.py que le toca a T3: lo anterior a la marca de la Fase 4 sin los metodos de
+    StaticChecks que pertenecen a T4. Las lineas excluidas quedan en blanco (los numeros de linea se conservan)."""
+    cut = text.index(INSTALL_T4_MARK)   # ValueError si alguien mueve o renombra la marca
+    head = text[:cut]
+    lines = head.split("\n")
+    for node in ast.walk(ast.parse(head)):
+        if isinstance(node, ast.FunctionDef) and _INSTALL_T4_METHOD.match(node.name):
+            first = min([node.lineno] + [d.lineno for d in node.decorator_list])
+            for i in range(first - 1, node.end_lineno):
+                lines[i] = ""
+    return "\n".join(lines)
+
+
 def old_names():
     return sorted(set(nm.ROLES) | set(nm.LEGACY))
 
@@ -466,6 +490,28 @@ class Parametrization(unittest.TestCase):
         self.assertEqual(old_name_hits("%s %s" % (WRITER.capitalize(), WRITER.upper()), [WRITER]), [(1, WRITER)])
         self.assertEqual(old_name_hits(nm.DEBUGGER.upper() + " " + nm.DEBUGGER.upper(), [nm.DEBUGGER]), [])
         self.assertEqual(old_name_hits(nm.DEBUGGER, [nm.DEBUGGER]), [(1, nm.DEBUGGER)])
+
+    def test_case7_install_part_one_has_no_old_name_literal(self):
+        with open(os.path.join(HERE, INSTALL_FILE), "rb") as f:
+            text = f.read().decode("utf-8")
+        part = install_t3_part(text)
+        for anchor in ("LEVEL_SAMPLE = {", "def test_g6_dryrun_with_every_state_at_once_at_level_3"):
+            self.assertIn(anchor, part, "la marca subio: la parte de T3 quedo recortada")
+        found = [(n, l) for l, n in old_name_hits(part)]
+        self.assertEqual(found, [], "nombre viejo literal en la parte de T3 de %s" % INSTALL_FILE)
+
+    def test_case7_install_part_one_cut_keeps_what_is_t3_and_drops_what_is_t4(self):
+        text = ("class A:\n"
+                "    def test_keep(self):\n        x = 'alfa'\n\n"
+                "    def test_f4t9_drop(self):\n        x = 'alfa'\n\n"
+                "    def test_f5t1_drop(self):\n        x = 'alfa'\n\n"
+                "    def test_keep_too(self):\n        x = 'tau'\n\n"
+                + INSTALL_T4_MARK + " de prueba\n    def test_after(self):\n        x = 'alfa'\n")
+        part = install_t3_part(text)
+        self.assertNotIn("test_after", part)
+        self.assertEqual(old_name_hits(part, ["alfa", "tau"]), [(3, "alfa"), (12, "tau")])
+        with self.assertRaises(ValueError):
+            install_t3_part("class A:\n    pass\n")
 
     def test_case7_names_py_and_rename_ref_are_the_only_homes_of_the_names(self):
         # names.py define las constantes; rename_ref.py guarda la tabla del renombrado (claves = nombres viejos).

@@ -6,7 +6,7 @@
 
 Plan `docs/plans/2026-11-27-fase6-renombrado-de-agentes.md`, aprobado por el propietario el 2026-11-27 con los
 valores por defecto de P1 a P16; rama `feat/renombrado-de-agentes`, creada desde `main` tras integrar la Fase 5.
-11 unidades (T1 a T10 y el cierre), 2 cerradas (T1 y T2). Los nombres de los agentes pasan a ser `heimdall` (oracle),
+11 unidades (T1 a T10 y el cierre), 3 cerradas (T1 a T3). Los nombres de los agentes pasan a ser `heimdall` (oracle),
 `hermes` (scout), `sindri` (forge), `anubis` (sentinel), `salomon` (auditor), `hector` (shield), `sherlock`
 (debugger) y `shakespeare` (scribe); `atlas` no cambia. Los nombres nuevos pasan a ser los roles; los viejos
 quedan en una tabla cerrada para avisar a quien ya los tenía instalados. El efecto en Claude Code real no está
@@ -14,6 +14,7 @@ verificado (G1).
 
 - T1 cerrada (2026-11-27): `tests/rename_ref.py`, `tests/test_rename.py` (34 pruebas) y `tests/rename_expected.json` (hashes canónicos de los once textos gestionados tras el renombrado). Sólo pruebas; ningún código de producción cambió. `auditor` en dos rondas, sin Critical ni Important abiertos (un Important de CRLF del fixture corregido). Línea de tiempo: Fase 6 con 1 de 11 (9 %), global 85 %: (5 × 100 + 100 × 1 ÷ 11) ÷ 6 = 84,85 %.
 - T2 cerrada (2026-11-27): `tests/names.py` (única fuente de los nombres de rol; hoy los actuales) y parametrización de las pruebas pequeñas; casos 7 y 8 (12 pruebas nuevas). Sólo pruebas. `auditor` sin Critical ni Important; 5 Minor anotados en el plan para T7. Línea de tiempo: Fase 6 con 2 de 11 (18 %), global 86 %: (5 × 100 + 100 × 2 ÷ 11) ÷ 6 = 86,36 %.
+- T3 cerrada (2026-11-27): primera parte de `tests/test_install.py` (helpers, muestras y pruebas de las Fases 1 a 3, hasta la marca `# --- Fase 4, T2`) lee los nombres de `tests/names.py`; 749 pruebas, mismos ids. Caso 7 ampliado (+2 pruebas, rojo antes). Apariciones sustituidas (290): rol 106, ruta `agents/<rol>.md` 100, texto de muestra 58, comentario 18, identificador 8, golden 0 (es de T4). `SENTINEL_HOOKS` pasó a `QA_HOOKS` en todo el archivo (sólo el identificador). Sólo pruebas. `auditor` sin Critical ni Important; 3 Minor (2 corregidos; los 4 comentarios históricos reescritos quedan). Línea de tiempo: Fase 6 con 3 de 11 (27 %), global 88 %: (5 × 100 + 100 × 3 ÷ 11) ÷ 6 = 87,88 %.
 
 ### Planificado (Fase 5)
 
