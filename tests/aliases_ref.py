@@ -23,10 +23,8 @@ import names  # noqa: E402
 
 ROOT = lr.ROOT
 
-# Palabras que llevan el nombre de un rol como subcadena sin ser el agente: no se tocan (limite de palabra).
-# Por rol {rol: {palabras}}. Vacio desde el renombrado de la Fase 6 (T7): ningun nombre vigente es subcadena de una
-# palabra de los once textos. Antes del cambio llevaba las palabras espanolas con el nombre del escritor dentro.
-SCRIBE_WORDS = {}
+# Desde el renombrado de la Fase 6 ningun nombre vigente es subcadena de una palabra de los once textos: el
+# diccionario de palabras con un rol dentro (antes, las espanolas con el nombre del escritor) se retiro en T8.
 
 # Limite de palabra (3.5, enmienda E1), sobre el texto decodificado en ISO-8859-1 (un byte, un caracter):
 # letra = [A-Za-z0-9_] o la pareja \xC3 + [\x80-\xBF] (U+00C0 a U+00FF en UTF-8); todo lo demas es limite.
@@ -389,7 +387,7 @@ def inventory(text):
     """Clasifica cada palabra (con la definicion de letra de E1) que contiene un rol, sin distinguir mayusculas.
 
     Devuelve (counts, other): counts {rol: [minuscula, Capitalizada, MAYUSCULAS]} de formas que casan
-    (reemplazables); other: palabras que no son ninguna forma ni una de las palabras del diccionario del rol (sin clasificar, por
+    (reemplazables); other: palabras que no son ninguna de las tres formas (sin clasificar, por
     ejemplo el nombre de un rol capitalizado + e acentuada o el nombre + `2`). Una forma pegada a puntuacion, comillas angulares, rayas o espacio duro
     es una palabra por si sola: cuenta como reemplazable."""
     counts = {r: [0, 0, 0] for r in roles()}
@@ -401,8 +399,6 @@ def inventory(text):
             variants = form_variants(role)
             if word in variants:
                 counts[role][variants.index(word)] += 1
-            elif low in SCRIBE_WORDS.get(role, ()):
-                continue
             else:
                 other.append((role, word))
     return counts, other

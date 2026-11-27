@@ -2,21 +2,21 @@
 
 Detalle de la línea de tiempo y del avance por fase y por frente. El resumen está en la sección «Línea de tiempo y avance» del [README](README.md); los planes de cada fase, en [docs/plans/](docs/plans/).
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-27** (T7 de la Fase 6 cerrada: 7 de 11 unidades; Fase 5 cerrada e integrada en `main`).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-27** (T8 de la Fase 6 cerrada: 8 de 11 unidades; Fase 5 cerrada e integrada en `main`).
 
 ## Avance global
 
-**El proyecto completo va en 94%.** Cuenta las seis fases con el mismo peso: (5 fases al 100 % + la fase 6 al 63,6 %) = (5 × 100 + 100 × 7 ÷ 11) ÷ 6 = 563,64 ÷ 6 = 93,94 % → 94 % (9 cuadros: 9,39 redondea a 9). La fase 5 ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md)) cuenta 9 de 9 unidades (T1 a T8 y el cierre) = 100 % (10 cuadros). La fase 6 ([plan](docs/plans/2026-11-27-fase6-renombrado-de-agentes.md)) cuenta 7 de 11; con k unidades cerradas el global es (500 + 100 × k ÷ 11) ÷ 6 = 83,33 + 1,515 × k y sólo llega a 100 % al cerrar las once. Siguen pendientes del propietario, fuera del conteo, G1/V1 de las fases 3 y 4 (efecto real de `effort:` y de los alias en Claude Code), G1 de la fase 5, V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
+**El proyecto completo va en 95%.** Cuenta las seis fases con el mismo peso: (5 fases al 100 % + la fase 6 al 72,7 %) = (5 × 100 + 100 × 8 ÷ 11) ÷ 6 = 572,73 ÷ 6 = 95,45 % → 95 % (10 cuadros: 9,55 redondea a 10). La fase 5 ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md)) cuenta 9 de 9 unidades (T1 a T8 y el cierre) = 100 % (10 cuadros). La fase 6 ([plan](docs/plans/2026-11-27-fase6-renombrado-de-agentes.md)) cuenta 8 de 11; con k unidades cerradas el global es (500 + 100 × k ÷ 11) ÷ 6 = 83,33 + 1,515 × k y sólo llega a 100 % al cerrar las once. Siguen pendientes del propietario, fuera del conteo, G1/V1 de las fases 3 y 4 (efecto real de `effort:` y de los alias en Claude Code), G1 de la fase 5, V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | **94%** | 6 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **95%** | 6 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
 | **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Plan aprobado, cerrada en la rama `feat/esfuerzo-configurable` (T1 a T7 y cierre); la compuerta G1 del propietario sigue pendiente (verificación en Claude Code real; no bloquea) ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
 | **4. Nombres de agentes configurables** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Plan aprobado, cerrada en la rama `feat/nombres-configurables` (T1 a T8 y cierre); la compuerta G1/V1 del propietario no resta pero sí condiciona aplicar alias a su `~/.claude` real (V2): el efecto de los alias en Claude Code real no está verificado ([plan](docs/plans/2026-11-22-fase4-nombres-configurables.md), [exploración](docs/plans/2026-11-22-fase4-nombres-exploracion.md)) |
 | **5. Otras configuraciones dinámicas** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Plan aprobado (2026-11-24, con los valores por defecto de P1 a P14), T1 a T8 y cierre cerradas, en la rama `feat/configuraciones-dinamicas` (cierre: `sentinel` con 1810 pruebas OK y 367 saltadas, `shield` sin Critical, High ni Medium, `auditor` sin Critical ni Important); la compuerta G1 del propietario no bloquea ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md), [backlog](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) |
-| **6. Renombrado de agentes** | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | **64%** | 7 de 11 | Plan aprobado (2026-11-27, con los valores por defecto de P1 a P16): nombres nuevos como roles, 4 fases (preparación, compatibilidad, cambio atómico, documentación y marca). Arranca al cerrar la Fase 5, en la rama `feat/renombrado-de-agentes`; el efecto en Claude Code real (G1) no bloquea T1 a T10 y sí la aplicación a `~/.claude` ([plan](docs/plans/2026-11-27-fase6-renombrado-de-agentes.md)) |
+| **6. Renombrado de agentes** | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | **73%** | 8 de 11 | Plan aprobado (2026-11-27, con los valores por defecto de P1 a P16): nombres nuevos como roles, 4 fases (preparación, compatibilidad, cambio atómico, documentación y marca). Arranca al cerrar la Fase 5, en la rama `feat/renombrado-de-agentes`; el efecto en Claude Code real (G1) no bloquea T1 a T10 y sí la aplicación a `~/.claude` ([plan](docs/plans/2026-11-27-fase6-renombrado-de-agentes.md)) |
 
 Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unidades planeadas. «Cerrada» = commiteada en la rama de la fase con su suite verde y la revisión de `auditor` sin hallazgos Critical ni Important; la integración a `main` se hace al cerrar la fase. Lo que falta probar en un entorno real (la instalación sobre el `~/.claude` verdadero) se lista aparte y no resta.
 
@@ -121,7 +121,7 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | A. Preparación | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 4 de 4 (T1, T2, T3, T4) |
 | B. Compatibilidad | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T5, T6) |
 | C. Cambio atómico | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 1 de 1 (T7) |
-| D. Documentación, marca y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 4 (T8, T9, T10, cierre) |
+| D. Documentación, marca y cierre | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **25%** | 1 de 4 (T8) de 4 (T8, T9, T10, cierre) |
 
 - **A. Preparación**
   - ✅ Hecho: T1 referencia del renombrado (`tests/rename_ref.py`, `tests/test_rename.py`, `tests/rename_expected.json`: tabla `RENAME` de ocho pares, once textos gestionados esperados con la transformación de alias y sus hashes canónicos, 34 pruebas de los casos 1 a 6 y 18 parte previa). Sólo pruebas: ningún código de producción ni texto gestionado cambió. Revisada por `auditor` en dos rondas (un Important de CRLF del fixture corregido) sin Critical ni Important abiertos.
@@ -134,7 +134,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 - **C. Cambio atómico**
   - ✅ Hecho: T7 renombrado atómico: los ocho agentes pasan a heimdall, hermes, sindri, anubis, salomon, hector, sherlock y shakespeare (atlas igual); los once textos gestionados son la salida de `rename_ref.expected_texts()` (hashes de `tests/rename_expected.json`); `install.ps1` con roles nuevos y `$LegacyRoles` con los ocho pares; `SYNCLAYER_AGENTS` y `SYNCLAYER_LEGACY_AGENTS` del reporte; tabla de niveles del README (24 celdas iguales); `agents_data.py`; manifiesto regenerado. `hooks/agent_guard.py`, `hooks:`, `tools:`, `model:` y `color:` sin cambio. Casos 5, 17 a 21 y los 6 pendientes de T2 a T4 resueltos. Suite completa: 1918 pruebas, 6 subtests de `test_t2_case14` fallaron por el orden alfabético nuevo; corregida y verde suelta, a repetir completa en el cierre. Revisada por `auditor` (sin Critical ni Important; Minor para T8) y `shield` (sin Critical, High ni Medium; un Low: un alias puede ser el nombre viejo de otro rol, se documenta en T8).
 - **D. Documentación, marca y cierre**
-  - ⬜ Falta: T8, T9, T10 (assets de marca; necesita la carpeta de fuentes IBM Plex) y cierre. Fuera del conteo y del propietario: G1 (Claude Code real) y V2 (aplicar a `~/.claude`).
+  - ✅ Hecho: T8 README y guía: nombres nuevos, sección «Nombres anteriores» (tabla viejo a nuevo, qué ve quien reinstala, conservar los viejos como alias, reporte de uso) y límites nuevos (estado ausente, agente propio con un nombre actual, V7, alias que es el nombre anterior de otro rol); `docs/agentes.md` con `<nombre>`; `agents/shakespeare.md` apunta al README resumen y a `PLAN.md`; prueba puente y fixture retirados; Minor de T7 resueltos; `tests/test_phase6_docs.py` (casos 22 y 23). Revisada por `auditor` (sin Critical ni Important; 6 Minor corregidos).
+  - ⬜ Falta: T9, T10 (assets de marca; necesita la carpeta de fuentes IBM Plex) y cierre. Fuera del conteo y del propietario: G1 (Claude Code real) y V2 (aplicar a `~/.claude`).
 
 ## Línea de tiempo
 
@@ -198,7 +199,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-27 | T5 de la Fase 6: nombres anteriores en `install.ps1` con la tabla vacía (`$LegacyRoles`, `RenamedTo` heredado, clave vieja en `aliases`); revisada por `auditor` y `shield` | ✅ |
 | 2026-11-27 | T6 de la Fase 6: nombres anteriores en el reporte de uso con la lista vacía (`SYNCLAYER_LEGACY_AGENTS`; casos 15 y 16); revisada por `auditor` | ✅ |
 | 2026-11-27 | T7 de la Fase 6: renombrado atómico de los ocho agentes, `$LegacyRoles` y `SYNCLAYER_LEGACY_AGENTS` llenos, manifiesto regenerado; revisada por `auditor` y `shield` | ✅ |
-| **Ahora** | **T8 de la Fase 6** (documentación: README, `CLAUDE.md`, `HISTORY.md`, `agents/<escritor>.md`; retira la prueba puente y la fixture). **Del propietario:** G1/V1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`, caso P10), V2 (aplicar los alias a su `~/.claude`), G1 de la fase 5 y las comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) | 🔄 |
+| 2026-11-27 | T8 de la Fase 6: README y guía con los nombres nuevos y la sección «Nombres anteriores»; prueba puente y fixture retiradas; revisada por `auditor` | ✅ |
+| **Ahora** | **T9 de la Fase 6** (`CLAUDE.md`, historial, documentos de marca y backlog). **Del propietario:** G1/V1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`, caso P10), V2 (aplicar los alias a su `~/.claude`), G1 de la fase 5 y las comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) | 🔄 |
 | Luego | Tarea aparte de `Get-Prop` (P11) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).

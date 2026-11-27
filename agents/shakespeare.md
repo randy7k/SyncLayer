@@ -20,7 +20,7 @@ Follow the project's and the user's `CLAUDE.md` rules on documentation. By defau
 - `CLAUDE.md` of the repository — commands, architecture, conventions, non-obvious behaviour.
 - `HISTORY.md` — history by milestone, with an `[Sin publicar]` section at the top for unreleased changes.
 
-Create any of these that are missing when asked to document a project. When the README has a `## Línea de tiempo y avance` section, update it according to the rules written in that section and in the user's `CLAUDE.md`, and show the arithmetic in your report.
+Create any of these that are missing when asked to document a project. When the README has a `## Línea de tiempo y avance` section at the end, update it according to the rules written in that section and in the user's `CLAUDE.md`, and show the arithmetic in your report. If the project keeps the detail in a separate plan file (for example `PLAN.md`) and the README holds only the summary, update both in the same change and keep the two consistent.
 
 ## Rules
 

@@ -92,7 +92,10 @@ python -B tools/usage_report.py global
 - Parámetros, códigos de salida y límites: `README.md` del repositorio («Reporte de uso» y
   «Límites del reporte de uso»).
 - Un agente con alias (ver «Cambiar el nombre de un agente») sale como `(otro agente)` y deja de
-  atribuirse a SyncLayer: el reporte reconoce a los agentes por su nombre original.
+  atribuirse a SyncLayer, salvo que el alias sea un nombre anterior (ver «Nombres anteriores» del
+  `README.md`): el reporte reconoce a los agentes por su nombre actual del repositorio.
+- Los nombres que los agentes tenían antes del renombrado (ver «Nombres anteriores» del `README.md`)
+  se siguen contando como SyncLayer, para que el historial ya registrado conserve su desglose.
 
 ## Mantenimiento
 
@@ -107,10 +110,10 @@ hace falta `-Force` (con respaldo).
 
 **Cambiar el nombre de un agente.** Cada uno de los nueve puede llevar un alias. Agregá en
 `~/.claude/synclayer-config.json` la clave `aliases`, un objeto de `<rol>` a `<alias>` (el `<rol>` es el
-nombre original del agente, el del repositorio; ver «Alias» del `README.md`, en minúsculas): `{ "aliases": { "<rol>": "<alias>" } }`. Al reinstalar, el
+nombre actual del agente en el repositorio; ver «Alias» del `README.md`, en minúsculas): `{ "aliases": { "<rol>": "<alias>" } }`. Al reinstalar, el
 instalador escribe ese agente en `agents/<alias>.md` con `name: <alias>` y cambia el nombre por el alias
 en las descripciones, en los cuerpos y en las dos copias de texto que instala (las reglas y esta guía). El
-repositorio conserva los nombres originales.
+repositorio conserva los nombres actuales.
 
 - **Formato del alias.** Minúsculas, empieza por letra, sólo `a-z`, `0-9`, `_` y `-`, hasta 64
   caracteres. No puede ser el nombre de un agente integrado de Claude Code, el de otro agente de
@@ -122,6 +125,11 @@ repositorio conserva los nombres originales.
 - **El archivo anterior queda.** El instalador nunca borra: si ya existía `agents/<nombre-anterior>.md`,
   sale como `HUERFANO` y, mientras exista, hay dos agentes activos con descripciones casi iguales.
   Quitalo a mano.
+- **Si reinstalás tras el renombrado de fábrica.** Los agentes cambiaron de nombre en el repositorio (tabla
+  en «Nombres anteriores» del `README.md`). Sobre una instalación de la versión anterior con estado
+  legible, los archivos con el nombre de antes salen `HUERFANO` con un aviso por stderr: siguen en
+  `~/.claude/agents/`, no se borran ni se respaldan y hay que quitarlos a mano. Sin estado legible no hay
+  aviso. Una clave de `aliases` con el nombre de antes da exit 1 con el nombre nuevo en el mensaje.
 - **Reiniciá las sesiones abiertas.** Renombrar con sesiones abiertas no está documentado.
 - **Qué no cambia.** El hook `agent_guard.py` no se transforma, y el bloque `hooks:` de los agentes
   que lo usan queda igual. Tus referencias propias por nombre (`Agent(<nombre>)` en `tools:`,

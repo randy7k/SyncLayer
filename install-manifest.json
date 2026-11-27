@@ -29,7 +29,7 @@
     },
     {
       "path": "agents/shakespeare.md",
-      "sha256": "5fc654854e295bcf2d1b00a507e48f34829a90c7532d74bfea8dc905b1d3c621"
+      "sha256": "7f984e568711be0fc9631eb794e41146b45143acc72b2e932c366de64ff1e2f6"
     },
     {
       "path": "agents/sherlock.md",
@@ -41,7 +41,7 @@
     },
     {
       "path": "docs/agentes.md",
-      "sha256": "a78ee982483c098ad23c0502ee8ed60e5ed3f10b87c9e8fd913a12005454575e"
+      "sha256": "770cd8e9d3fee626d178f1c249ebb619613ba4f0bf635694128cceef152e6aa1"
     },
     {
       "path": "hooks/agent_guard.py",

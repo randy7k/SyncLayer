@@ -6247,8 +6247,6 @@ class InstallCases:
     F4T6_MODELS = {nm.PLANNER: "claude-fable-5-2", nm.DEVELOPER: "sonnet", nm.QA: "sonnet", nm.WRITER: "sonnet",
                    nm.RESEARCHER: "sonnet", nm.ANALYST: "haiku", nm.REVIEWER: "opus", nm.SECURITY: "opus", nm.DEBUGGER: "opus"}
     F4T6_HOOKED = (nm.QA, nm.REVIEWER, nm.SECURITY, nm.DEBUGGER)
-    # Las palabras espanolas que llevan la subcadena del escritor, de la referencia (aliases_ref); la mas larga primero.
-    F4T6_WRITER_WORDS = re.compile("|".join(sorted(ar.SCRIBE_WORDS.get(nm.WRITER, ()), key=lambda w: (-len(w), w))), re.I)
 
     def f4t6_nine_sample(self):
         """Los nueve agentes (frontmatter de una linea por clave, los cuatro con guarda con su bloque hooks:, cuerpo con
@@ -6378,7 +6376,7 @@ class InstallCases:
                     text = tree[ar.dest_for(rel, table)].decode("utf-8")
                     for role in ar.roles():
                         # assertFalse y no assertNotIn: si falla, no imprime el texto entero dos veces
-                        self.assertFalse(role in self.F4T6_WRITER_WORDS.sub("", text).lower(), (rel, role))
+                        self.assertFalse(role in text.lower(), (rel, role))
                     # los roles entre comillas angulares son subcadenas del texto completo: el bucle de arriba ya los cubre
                 # revisor, seguridad y depurador: frontmatter igual salvo name: y description:
                 for role in (nm.REVIEWER, nm.SECURITY, nm.DEBUGGER):
@@ -6548,7 +6546,7 @@ class InstallCases:
         self.assertEqual(steps, self.F4T6_GOLDEN, message)
         # el golden no depende de los nombres porque la salida no trae ningun rol (salvo palabras espanolas)
         for _label, out, err in raw:
-            text = self.F4T6_WRITER_WORDS.sub("", out + err).lower()
+            text = (out + err).lower()
             self.assertEqual([r for r in nm.ROLES if r in text], [], _label)
         # el golden no es trivial: cubre el simulacro, un exit 3, un respaldo, una actualizacion y un huerfano
         self.assertEqual([s[1] for s in steps], [0, 0, 0, 3, 0, 0, 0, 0, 0, 0])
@@ -8290,7 +8288,7 @@ class InstallCases:
                 for rel in texts:
                     text = tree[ar.dest_for(rel, table)].decode("utf-8")
                     for role in ar.roles():
-                        self.assertFalse(role in self.F4T6_WRITER_WORDS.sub("", text).lower(), (rel, role))
+                        self.assertFalse(role in text.lower(), (rel, role))
                 # los cuatro agentes con guarda: bloque hooks: intacto; revisor, seguridad y depurador: frontmatter igual salvo
                 # name: y description:
                 for role in self.F4T6_HOOKED:

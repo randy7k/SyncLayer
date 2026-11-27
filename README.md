@@ -39,8 +39,8 @@ SyncLayer/
 │   ├── build_manifest.py  Genera y comprueba el manifiesto
 │   └── usage_report.py    Reporte de uso de subagentes (se ejecuta desde el clon)
 ├── agents/            Un archivo por agente (frontmatter + prompt)
-│   ├── oracle.md  scout.md  atlas.md  forge.md  sentinel.md
-│   └── auditor.md  shield.md  debugger.md  scribe.md
+│   ├── heimdall.md  hermes.md  atlas.md  sindri.md  anubis.md
+│   └── salomon.md  hector.md  sherlock.md  shakespeare.md
 ├── rules/
 │   └── agentes.md     Reglas de orquestación (se cargan en todos los proyectos)
 ├── hooks/
@@ -67,6 +67,10 @@ SyncLayer/
     ├── levels_ref.py      Lector de la tabla y del estado esperado (auxiliar de las pruebas)
     ├── test_manifest.py
     ├── test_phase5_docs.py  Documentación de la Fase 5 (perfiles por proyecto, carpeta de planes e idioma, casos 44 a 47)
+    ├── test_phase6_docs.py  Documentación de la Fase 6 (sección «Nombres anteriores», nombres sin tilde, sin promesas, casos 22 y 23)
+    ├── names.py           Nombres vigentes y anteriores de los agentes: única fuente de las pruebas
+    ├── rename_ref.py      Tabla del renombrado, textos del repositorio y frontmatter fijado (auxiliar de las pruebas)
+    ├── test_rename.py     Renombrado de la Fase 6: tabla, coherencia del repositorio, nombres anteriores, parametrización
     ├── test_plans.py      Carpeta de planes: reglas y inventario, sin PowerShell
     ├── plans_ref.py       Referencia independiente de la carpeta de planes (auxiliar de las pruebas)
     ├── test_usage_report.py
@@ -274,7 +278,7 @@ repositorio y se reinstala.
 
 - **Automático.** Claude delega según el tamaño de la tarea, con las reglas de
   `rules/agentes.md`. Las tareas triviales no usan agentes.
-- **Por nombre.** «Usa a forge para…», o `@agent-forge` en el prompt.
+- **Por nombre.** «Usa a sindri para…», o `@agent-sindri` en el prompt.
 - **Listar.** `/agents` dentro de Claude Code muestra los agentes registrados.
 - **Diagnóstico.** `claude --debug` muestra campos de frontmatter no reconocidos.
 
@@ -283,15 +287,15 @@ repositorio y se reinstala.
 | Tamaño | Flujo |
 |---|---|
 | Trivial | Sesión principal, sin agentes |
-| Mediana | `oracle` (si el área es desconocida) -> `forge` -> `auditor` |
-| Grande | `oracle` y `scout` (si hace falta) -> `atlas` -> aprobación del usuario -> por task: `forge` -> `auditor` -> al final: `sentinel` -> `shield` (si aplica) -> `scribe` -> `auditor` sobre el cambio completo |
-| Bug sin causa clara | `debugger` -> `forge` -> `sentinel` |
+| Mediana | `heimdall` (si el área es desconocida) -> `sindri` -> `salomon` |
+| Grande | `heimdall` y `hermes` (si hace falta) -> `atlas` -> aprobación del usuario -> por task: `sindri` -> `salomon` -> al final: `anubis` -> `hector` (si aplica) -> `shakespeare` -> `salomon` sobre el cambio completo |
+| Bug sin causa clara | `sherlock` -> `sindri` -> `anubis` |
 
 Resumen de las reglas (detalle en [`rules/agentes.md`](rules/agentes.md)):
 
-- En paralelo sólo corren agentes que no escriben (`oracle`, `scout`, `auditor`, `shield`).
-- Un solo agente que escribe (`forge`, `sentinel`, `scribe`) a la vez por checkout.
-- Precedencia ante conflictos: `shield` > `sentinel` > `auditor` > plan de `atlas` > `forge`.
+- En paralelo sólo corren agentes que no escriben (`heimdall`, `hermes`, `salomon`, `hector`).
+- Un solo agente que escribe (`sindri`, `anubis`, `shakespeare`) a la vez por checkout.
+- Precedencia ante conflictos: `hector` > `anubis` > `salomon` > plan de `atlas` > `sindri`.
 - Una tarea está terminada cuando las pruebas relevantes se corrieron y pasaron, los
   criterios de aceptación están verificados, no quedan hallazgos Critical ni Important
   sin resolver y la documentación está al día.
@@ -300,15 +304,15 @@ Resumen de las reglas (detalle en [`rules/agentes.md`](rules/agentes.md)):
 
 | Agente | Rol | Modelo | Herramientas |
 |---|---|---|---|
-| `oracle` | Analista de proyecto, sólo lectura | `haiku` | Read, Grep, Glob |
-| `scout` | Investigación en fuentes oficiales | `sonnet` | WebSearch, WebFetch, Read, Grep, Glob |
+| `heimdall` | Analista de proyecto, sólo lectura | `haiku` | Read, Grep, Glob |
+| `hermes` | Investigación en fuentes oficiales | `sonnet` | WebSearch, WebFetch, Read, Grep, Glob |
 | `atlas` | Planificador y arquitecto | `claude-fable-5-2` | Read, Grep, Glob, Write |
-| `forge` | Desarrollador | `sonnet` | Read, Edit, Write, Grep, Glob, Bash |
-| `sentinel` | QA | `sonnet` | Read, Grep, Glob, Bash, Edit, Write |
-| `auditor` | Code review independiente | `opus` | Read, Grep, Glob, Bash |
-| `shield` | Seguridad | `opus` | Read, Grep, Glob, Bash |
-| `debugger` | Causa raíz | `opus` | Read, Grep, Glob, Bash |
-| `scribe` | Documentación | `sonnet` | Read, Grep, Glob, Edit, Write |
+| `sindri` | Desarrollador | `sonnet` | Read, Edit, Write, Grep, Glob, Bash |
+| `anubis` | QA | `sonnet` | Read, Grep, Glob, Bash, Edit, Write |
+| `salomon` | Code review independiente | `opus` | Read, Grep, Glob, Bash |
+| `hector` | Seguridad | `opus` | Read, Grep, Glob, Bash |
+| `sherlock` | Causa raíz | `opus` | Read, Grep, Glob, Bash |
+| `shakespeare` | Documentación | `sonnet` | Read, Grep, Glob, Edit, Write |
 
 La columna de modelo es la del nivel 5, el repositorio tal cual (ver «Niveles»).
 
@@ -326,8 +330,8 @@ Guarda `PreToolUse` enlazada desde el frontmatter (`hooks:`) de cuatro agentes:
 
 | Agente | Matcher | Comando |
 |---|---|---|
-| `sentinel` | `Write\|Edit\|NotebookEdit\|Bash` | `python "$HOME/.claude/hooks/agent_guard.py" tests-only` |
-| `auditor`, `shield`, `debugger` | `Bash` | `python "$HOME/.claude/hooks/agent_guard.py" readonly --allow-temp` |
+| `anubis` | `Write\|Edit\|NotebookEdit\|Bash` | `python "$HOME/.claude/hooks/agent_guard.py" tests-only` |
+| `salomon`, `hector`, `sherlock` | `Bash` | `python "$HOME/.claude/hooks/agent_guard.py" readonly --allow-temp` |
 
 Contrato: lee un JSON por stdin (`tool_name`, `tool_input`, `cwd`). Sale con 0 para
 permitir y con 2 para bloquear; en ese caso escribe el motivo, en español, por stderr.
@@ -354,11 +358,11 @@ de más de 100 000 caracteres terminan en bloqueo.
 
 Es una heurística contra escrituras accidentales, **no un sandbox**.
 
-- **`sentinel` tiene guarda en `Bash` desde el modo estricto de `tests-only`, pero sigue
+- **`anubis` tiene guarda en `Bash` desde el modo estricto de `tests-only`, pero sigue
   siendo una lista negra.** Escribe en rutas de pruebas y bloquea los escritores
   habituales, no todos. Sin sandbox, un runner de pruebas ejecuta código del repositorio
   y puede escribir donde quiera. «Sólo escribe tests» es heurístico.
-- `auditor`, `shield` y `debugger` no son de solo lectura real: deben correr tests y
+- `salomon`, `hector` y `sherlock` no son de solo lectura real: deben correr tests y
   builds, y eso ejecuta código arbitrario. Tampoco hay restricción de lectura (`.env`)
   ni de red (`curl -d @archivo URL`).
 - El modo `readonly` es una lista negra con parser parcial de shell, no estricto. Pasan,
@@ -510,13 +514,13 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
   forma `clave: valor` y que ningún valor empiece por un indicador YAML (comillas, corchetes, llaves,
   `|`, `>`, `&`, asterisco, `!`, `%`, `@` o acento grave). También rechaza cualquier línea con sangría
   anterior a la línea `model:` o a un `effort:` existente; las líneas con sangría posteriores, como
-  el bloque `hooks:` de `sentinel`, siguen permitidas. El mismo defecto no detiene el nivel 5 ni a
+  el bloque `hooks:` de `anubis`, siguen permitidas. El mismo defecto no detiene el nivel 5 ni a
   un agente fijo.
 - Un estado de esquema 2 forjado con un `level` distinto puede mostrar un `Nivel anterior:` que no
   corresponde al disco. Es sólo informativo, y forjarlo exige poder escribir en `-Target`. Una clave
   `__type` en el estado se trata como ausente (como en la configuración).
-- El efecto real de `effort:` en Claude Code, y el de un valor que el modelo no soporta, sólo están
-  verificados por la documentación, no en una máquina real (la compuerta G1 no se corrió).
+- El efecto real de `effort:` en Claude Code, y el de un valor que el modelo no soporta, no están
+  verificados en una máquina real: sólo los respalda la documentación (la compuerta G1 no se corrió).
 - Según la documentación, un nivel de esfuerzo que el modelo no soporta baja al más alto soportado
   igual o inferior, sin un aviso documentado.
 - Un `model:` o un `effort:` inválido tiene un comportamiento no documentado en Claude Code; por eso
@@ -531,7 +535,7 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
   nueva, y el texto nuevo de la guía usa `<rol>` y `<alias>` en lugar de un nombre de rol.
 - **Límites del límite de palabra.** `×` y `÷` cuentan como letra: un rol pegado a ellos no se
   reemplaza. Las letras de fuera de U+00C0 a U+00FF (`ő`, griego, cirílico) y las marcas combinantes
-  (texto en NFD) son límite: un rol pegado a ellas sí se reemplazaría. Otras grafías (`sCribe`) no se
+  (texto en NFD) son límite: un rol pegado a ellas sí se reemplazaría. Otras grafías (`hErmes`) no se
   tocan. Hoy los once textos no tienen ninguna de esas formas y una prueba lo vigila.
 - **La lista de nombres reservados es cerrada** (nueve) y puede quedarse atrás frente a integrados nuevos
   de Claude Code: comprueba con `/agents` que el nombre no exista antes de elegir un alias.
@@ -582,6 +586,11 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
 - Renombrar con sesiones abiertas no está documentado: reinicia las sesiones. El efecto de los alias
   en Claude Code real no se comprobó (G1/V1 del propietario pendiente).
 
+**Nombres anteriores**
+
+- El cambio de nombre de los agentes tiene sus propios límites (estado ausente, un agente propio con un nombre
+  actual, V7, un alias que es el nombre anterior de otro rol): ver «Nombres anteriores».
+
 **No verificado**
 
 - pwsh 7 (no está instalado en el equipo de pruebas), volúmenes de red y OneDrive, un enlace
@@ -590,17 +599,17 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
 
 ## Niveles
 
-Un nivel de 1 a 5 fija el `model:` y el `effort:` de seis agentes (`atlas`, `forge`, `sentinel`,
-`scribe`, `scout`, `oracle`). El nivel 5 es el repositorio tal cual: quien no configura nada
+Un nivel de 1 a 5 fija el `model:` y el `effort:` de seis agentes (`atlas`, `sindri`, `anubis`,
+`shakespeare`, `hermes`, `heimdall`). El nivel 5 es el repositorio tal cual: quien no configura nada
 instala los mismos archivos de siempre. `install.ps1` lleva la tabla de los niveles 1 a 4.
-`auditor`, `shield` y `debugger` quedan fijos en todos los niveles (`opus`, sin `effort:`, con su
+`salomon`, `hector` y `sherlock` quedan fijos en todos los niveles (`opus`, sin `effort:`, con su
 hook). La tabla es un orden razonado, no una medición: no promete ahorro de tokens ni de costo.
 «—» significa sin `effort:`.
 
 > **Estado de la Fase 3: los niveles 1 a 4 se aplican; el efecto real en Claude Code no está
 > verificado en una máquina real (G1).** El instalador escribe lo que dice la tabla, y eso está
-> probado. Lo que Claude Code hace con `effort:` (y con un valor que el modelo no soporta) sólo se
-> conoce por su documentación: la compuerta G1 no se corrió. Para comprobarlo, sigue el
+> probado. Lo que Claude Code hace con `effort:` (y con un valor que el modelo no soporta) no está verificado:
+> sólo se conoce por su documentación (la compuerta G1 no se corrió). Para comprobarlo (aún no verificado), sigue el
 > procedimiento de G1 del plan
 > ([`docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md))
 > y mira la ejecución del agente con `/tasks`. Los cambios de nivel y las ediciones a mano están en «Cambiar de nivel, ediciones a mano y `-Force`».
@@ -654,8 +663,8 @@ Con un nivel de 1 a 4 válido:
   synclayer-config.json)` si no hay archivo) y, tras el `Resumen:`, una línea por agente
   renderizado: `Ajuste: agents/<nombre>.md  model: <modelo>  effort: <esfuerzo>` (`effort: -` si la
   celda no lo fija).
-- Para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle` escribe en el destino el `model:`
-  y, según la tabla, el `effort:`. `auditor`, `shield`, `debugger`, el hook, `rules/agentes.md` y
+- Para `atlas`, `sindri`, `anubis`, `shakespeare`, `hermes` y `heimdall` escribe en el destino el `model:`
+  y, según la tabla, el `effort:`. `salomon`, `hector`, `sherlock`, el hook, `rules/agentes.md` y
   `docs/agentes.md` quedan con los bytes del origen. El nivel 5 no pasa por el renderizado.
 - Con `-DryRun` muestra el plan y no escribe nada. Si el frontmatter de un agente no se puede
   renderizar, sale con exit 1 antes de escribir (también con `-DryRun`):
@@ -667,9 +676,9 @@ Con un nivel de 1 a 4 válido:
 ### Qué fija el nivel y qué no
 
 Lo que el instalador escribe está descrito arriba. Lo que Claude Code hace después con esos
-valores sólo está verificado por su documentación, no en una máquina real (G1).
+valores no está verificado en una máquina real (G1): sólo lo respalda su documentación.
 
-- **Fijos en todos los niveles:** `auditor`, `shield` y `debugger` (`opus`, sin `effort:`, hook
+- **Fijos en todos los niveles:** `salomon`, `hector` y `sherlock` (`opus`, sin `effort:`, hook
   intacto). Ningún nivel les cambia nada, así que las revisiones de seguridad y de código no
   dependen del nivel.
 - **Bajar el nivel cambia la calidad esperada** del trabajo de los seis agentes modificables. El
@@ -721,7 +730,7 @@ instalación anterior (`written` en el estado):
 |---|---|
 | Cambio de nivel, archivos intactos, estado válido | `ACTUALIZAR` en los archivos cuya celda cambia (con respaldo de la versión y del estado anteriores); el resto, `IGUAL`. Nunca `MODIFICADO` |
 | Mismo nivel, sin cambios | `IGUAL` |
-| Edición a mano de `model:` o `effort:`, o de cualquier archivo (incluidos `auditor`, `shield` y `debugger`) | `MODIFICADO` en cualquier nivel: exit 3 y no se escribe nada. Con `-Force` se respalda la versión local y se sobrescribe |
+| Edición a mano de `model:` o `effort:`, o de cualquier archivo (incluidos `salomon`, `hector` y `sherlock`) | `MODIFICADO` en cualquier nivel: exit 3 y no se escribe nada. Con `-Force` se respalda la versión local y se sobrescribe |
 | Estado ausente, ilegible o de esquema desconocido, con nivel 1 a 4 | Se trata como ausente: lo que ya coincide con lo esperado para el nivel es `IGUAL`; lo que difiere es `MODIFICADO`. Nunca `ACTUALIZAR` |
 | Estado de esquema 1 intacto y nivel 3 | `ACTUALIZAR`; el estado migra a esquema 2 |
 
@@ -735,7 +744,7 @@ synclayer-config.json.` Se añade siempre que hay exit 3; ver sus límites en «
 ## Alias
 
 Cualquiera de los nueve agentes puede llevar un nombre propio (alias) en la copia instalada. El
-repositorio conserva los nombres originales: el nombre original es el rol, el id estable interno; el alias
+repositorio conserva los nombres actuales: el nombre actual del repositorio es el rol, el id estable interno; el alias
 sólo existe en lo que el instalador escribe en `~/.claude/`. Los alias no cambian el comportamiento de los
 agentes ni prometen ahorro, calidad ni costo.
 
@@ -752,14 +761,15 @@ La clave `aliases` de `<Target>/synclayer-config.json` (el mismo archivo del niv
 instalador sólo lo lee) es un objeto de rol a alias. `level` y `aliases` son opcionales:
 
 ```json
-{ "level": 3, "aliases": { "sentinel": "amigo-qa", "forge": "dev" } }
+{ "level": 3, "aliases": { "anubis": "amigo-qa", "sindri": "dev" } }
 ```
 
-- Las claves de `aliases` son sólo los nueve roles: `atlas`, `auditor`, `debugger`, `forge`, `oracle`,
-  `scout`, `scribe`, `sentinel` y `shield`, en minúsculas. Otra clave, incluida `Forge`, da exit 1.
+- Las claves de `aliases` son sólo los nueve roles: `anubis`, `atlas`, `hector`, `heimdall`, `hermes`,
+  `salomon`, `shakespeare`, `sherlock` y `sindri`, en minúsculas. Otra clave, incluida `Sindri`, da exit 1.
+  Una clave con el nombre de antes del renombrado tiene su propio motivo (ver «Nombres anteriores»).
 - Cada valor es una cadena. `null`, un número, un booleano, una lista o un objeto dan exit 1.
 - `aliases` ausente o `{}` equivale a no tener alias: los bytes y la salida son los de siempre. Un alias
-  igual a su propio rol (`"forge": "forge"`) es válido y equivale a no ponerlo.
+  igual a su propio rol (`"sindri": "sindri"`) es válido y equivale a no ponerlo.
 - Otra clave en la raíz (incluida `agents` o `Aliases`) da exit 1, como siempre.
 
 ### Reglas del alias
@@ -776,8 +786,8 @@ sale con exit 1, también con `-DryRun`. El alias debe cumplir todo esto (V1 a V
    `web-fetch`, `fork` y `output-style-setup`.
 5. No es el nombre de otro agente de SyncLayer (los nueve roles), lo que descarta también los ciclos.
 6. Ningún alias se repite entre dos roles.
-7. No contiene el nombre de un rol como palabra delimitada por `-` o por los extremos (`dev-sentinel` y
-   `forge-2` se rechazan).
+7. No contiene el nombre de un rol como palabra delimitada por `-` o por los extremos (`dev-anubis` y
+   `sindri-2` se rechazan).
 8. `agents/<alias>.md` no coincide con ninguna ruta del manifiesto ni con el destino de otro rol, esté o no
    en el manifiesto el archivo del rol de origen. Sólo se compara con el manifiesto: los archivos que ya
    tengas en `<Target>/agents/` no se ven aquí (ver «Límites del instalador»).
@@ -802,13 +812,14 @@ Con al menos un alias efectivo (distinto de su rol), el instalador:
 No cambia: `hooks/agent_guard.py` (nunca se transforma) ni los bloques `hooks:` de los agentes, que quedan
 byte a byte; `README.md`, `PLAN.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` (no se instalan); el manifiesto
 (los alias no entran en él: los doce archivos gestionados siguen siendo los mismos); el reporte de uso (un
-agente con alias sale como `(otro agente)`: ver «Límites del reporte de uso»).
+agente con alias sale como `(otro agente)`, salvo que el alias sea un nombre anterior (ver «Nombres anteriores»): ver «Límites del reporte de uso»).
 
 **Límite de palabra.** Una letra es un carácter de `[A-Za-z0-9_]` o una letra latina acentuada del texto
 UTF-8 (U+00C0 a U+00FF: `á`, `é`, `ñ`, `ü` y sus mayúsculas). Todo lo demás es límite, incluidos `-`, `/`,
-`.`, comillas angulares, `¿` `¡`, comillas tipográficas, rayas y el espacio duro: `«SENTINEL sólo…»` se
-reemplaza y `ñforge` no. Por eso «escribe», «escriben», «describe», «reescribe» y «sobrescribe» no se
-tocan aunque `scribe` tenga alias. Es un reemplazo textual, no semántico (ver «Límites del instalador»).
+`.`, comillas angulares, `¿` `¡`, comillas tipográficas, rayas y el espacio duro: `«ANUBIS sólo…»` se
+reemplaza y `ñsindri` no. Ningún nombre de rol es hoy subcadena de otra palabra de los once textos, así
+que ninguna palabra corriente se salta; el límite se prueba con palabras sintéticas (`<rol>2`, `x_<rol>`,
+`ñ<rol>`). Es un reemplazo textual, no semántico (ver «Límites del instalador»).
 
 ### Probar, aplicar, cambiar y quitar
 
@@ -854,7 +865,7 @@ opcional, a mano, el instalador sólo lo lee, en la misma lectura única) es una
 agentes dejarán los planes:
 
 ```json
-{ "level": 3, "aliases": { "sentinel": "amigo-qa" }, "plans_dir": "docs/planes" }
+{ "level": 3, "aliases": { "anubis": "amigo-qa" }, "plans_dir": "docs/planes" }
 ```
 
 - Ausente, o igual a `docs/plans`: equivale a no ponerla. Los bytes y la salida son los de siempre y no
@@ -867,7 +878,7 @@ agentes dejarán los planes:
   2. Mide hasta 64 caracteres en total.
   3. Ningún segmento es un nombre de dispositivo de Windows (`con`, `prn`, `aux`, `nul`, `com0` a `com9`,
      `lpt0` a `lpt9`).
-  4. Ningún trozo de un segmento, partido por `-`, es el nombre de uno de los nueve roles (`docs/forge` y
+  4. Ningún trozo de un segmento, partido por `-`, es el nombre de uno de los nueve roles (`docs/sindri` y
      `atlas-planes` se rechazan).
 - La validación va después de la tabla de alias y antes de leer el estado y de escribir: ante un problema
   sale con exit 1, también con `-DryRun`. El mensaje es
@@ -894,7 +905,7 @@ agentes dejarán los planes:
 ## Perfiles por proyecto
 
 Solo documentación (Fase 5, T7): el instalador no crea, lee ni comprueba nada de esto. Adaptar un agente a
-un proyecto es poner un archivo en el repositorio de ese proyecto. Nada de lo que sigue está probado en un
+un proyecto es poner un archivo en el repositorio de ese proyecto. Lo que sigue no está verificado en un
 Claude Code real (G1 del propietario); la columna «Certeza» dice qué respalda cada frase.
 
 | Afirmación | Certeza |
@@ -925,10 +936,102 @@ describe no está verificado en un Claude Code real (G1).
 
 | Candidata | Motivo del descarte | Qué se ofrece |
 |:--|:--|:--|
-| Activar o desactivar agentes por usuario | Las pruebas fijan nueve agentes y doce archivos; habría que redefinir el manifiesto, el catálogo de las reglas y de la guía, la tabla de precedencia y los flujos cuando falta un agente (por ejemplo, sin `auditor`) | `permissions.deny` con `Agent(<nombre>)` o `--disallowedTools` |
-| `tools:` por agente | El mínimo seguro depende del rol (un `auditor` con `Edit` deja de ser una revisión independiente) y no hay transformación de la línea `tools:` | Editar la línea `tools:` a mano (sale `MODIFICADO`) o un agente de proyecto |
+| Activar o desactivar agentes por usuario | Las pruebas fijan nueve agentes y doce archivos; habría que redefinir el manifiesto, el catálogo de las reglas y de la guía, la tabla de precedencia y los flujos cuando falta un agente (por ejemplo, sin `salomon`) | `permissions.deny` con `Agent(<nombre>)` o `--disallowedTools` |
+| `tools:` por agente | El mínimo seguro depende del rol (un agente de revisión con `Edit` deja de ser una revisión independiente) y no hay transformación de la línea `tools:` | Editar la línea `tools:` a mano (sale `MODIFICADO`) o un agente de proyecto |
 | Estrictez de la guarda | Exige transformar el bloque `hooks:`, que hoy debe quedar byte a byte; un modo «sin guarda» contradice la falla cerrada y cualquier grado intermedio invita a tomarla por un sandbox | Nada: la guarda es la del repositorio |
 | Convención de commits | Nada la lee ni la hace cumplir: sería una opción sin efecto | El `CLAUDE.md` de cada proyecto |
+
+<!-- nombres-anteriores:inicio -->
+## Nombres anteriores
+
+Ocho de los nueve agentes cambiaron de nombre en el repositorio; `atlas` sigue igual. Los nombres actuales son
+los que instala cualquiera sin configurar nada (archivos de `agents/`, `name:`, textos, manifiesto, tablas del
+instalador). Van sin tilde en todas partes: `salomon` y `hector`, porque el alias y el nombre de archivo sólo
+admiten `[a-z0-9_-]`. Esta sección y la línea de tiempo son los únicos sitios del README que nombran los de antes.
+
+| Nombre anterior | Nombre actual |
+|---|---|
+| `oracle` | `heimdall` |
+| `scout` | `hermes` |
+| `forge` | `sindri` |
+| `sentinel` | `anubis` |
+| `auditor` | `salomon` |
+| `shield` | `hector` |
+| `debugger` | `sherlock` |
+| `scribe` | `shakespeare` |
+
+El cambio sólo toca el repositorio. Los archivos vivos de `~/.claude` no cambian hasta que reinstales, y las
+sesiones ya abiertas no ven los agentes nuevos: reinícialas.
+
+### Qué ve quien reinstala
+
+Con `-DryRun` primero. El instalador lleva una tabla cerrada de los ocho pares (`$LegacyRoles`) con dos usos,
+ambos sin tocar disco: elegir el aviso de un huérfano y elegir el mensaje de una clave de `aliases`.
+
+| Situación al reinstalar | Resultado |
+|---|---|
+| Instalación hecha con los nombres anteriores, estado legible y archivos intactos | 8 `NUEVO` (`agents/<actual>.md`); `agents/atlas.md`, `rules/agentes.md` y `docs/agentes.md` `ACTUALIZAR` (con respaldo); el hook `IGUAL`; 8 `HUERFANO` con un aviso por stderr; el estado se reescribe con las rutas actuales |
+| Alias previo y `aliases` ya corregido a la clave actual | El archivo del alias sale `IGUAL` o `ACTUALIZAR` (según cambie el texto) y no hay huérfano para ese rol |
+| Alias previo y sin `aliases` ahora | El archivo del alias sale `HUERFANO` con el aviso de nombre anterior |
+| Los nombres anteriores como valores de `aliases` | Son válidos: el archivo anterior es el destino actual (`ACTUALIZAR` o `IGUAL`), sin huérfano |
+| Segunda corrida | Todo `IGUAL`; los huérfanos ya no se informan (el estado nuevo no los trae), pero los archivos siguen en el destino |
+
+- **El archivo anterior no se toca.** El instalador no abre el archivo anterior: no se abre, no se respalda y
+  no se borra; sólo comprueba que exista. El aviso sale por stderr, uno por archivo que sigue en el destino, también con `-DryRun`, y no
+  cambia el código de salida. Mientras exista hay dos agentes activos con descripciones casi iguales: quítalo a
+  mano. No está verificado en Claude Code real a cuál delega con los dos presentes (G1).
+- **`aliases` con una clave anterior** da exit 1 antes de escribir (también con `-DryRun`) con un motivo
+  fijo que nombra los dos nombres: `el rol forge ahora se llama sindri: cambia la clave en aliases`. Los
+  nombres salen de la lista cerrada, nunca del archivo. No se aceptan las claves anteriores como sinónimo.
+- **Conservar los nombres anteriores.** Esta tabla de alias instala los archivos con los nombres de antes:
+
+```json
+{ "aliases": { "heimdall": "oracle", "hermes": "scout", "sindri": "forge", "anubis": "sentinel", "salomon": "auditor", "hector": "shield", "sherlock": "debugger", "shakespeare": "scribe" } }
+```
+
+  El estado pasa a esquema 3 y los archivos existentes salen `IGUAL` o `ACTUALIZAR` (según cambie el texto) si están intactos. El efecto de los
+  alias en Claude Code real sigue no verificado (G1).
+- **Reporte de uso.** Las transcripciones ya escritas traen los nombres anteriores. El reporte los reconoce
+  con una lista cerrada y los cuenta en el mismo conjunto `SyncLayer`, cada uno en su fila: el historial se ve
+  con el nombre que tenía y lo nuevo, con el nombre actual. No hay nota nueva en el reporte. Un agente con
+  otro alias sigue saliendo como `(otro agente)`; con un nombre anterior como alias, el reporte lo cuenta
+  en SyncLayer bajo ese nombre.
+
+### Lo que queda fuera del repositorio
+
+El renombrado por sí solo no cambia nada de `~/.claude`; lo que queda fuera del repositorio lo revisas tú:
+
+1. Reinstalar: `-DryRun` primero; se esperan 8 `NUEVO`, 3 `ACTUALIZAR`, 1 `IGUAL` y 8 `HUERFANO` con aviso,
+   si `~/.claude` está intacto y con estado válido.
+2. Quitar a mano los ocho archivos anteriores de `~/.claude/agents/`, o conservarlos con la tabla de alias de arriba.
+3. `~/.claude/rules/agentes.md` y `~/.claude/docs/agentes.md` se actualizan solos al reinstalar (son gestionados).
+4. El `CLAUDE.md` global del usuario y la memoria que nombren `forge`, `auditor` u otro nombre anterior:
+   edítalos a mano.
+5. `settings.json` (usuario y proyectos): reglas `Agent(<nombre>)` en `permissions`, `--disallowedTools`,
+   matchers de hooks y `--agent <nombre>`.
+6. Agentes de proyecto (`.claude/agents/<nombre>.md`) en otros repositorios: el `name:` a igualar es el actual.
+
+### Límites
+
+- **Con el estado ausente o ilegible.** Sin estado previo válido el instalador no puede saber qué archivos eran suyos:
+  ningún archivo anterior sale como `HUERFANO` y los ocho quedan sin aviso. Quítalos a mano. Además nunca hay
+  `ACTUALIZAR`: `agents/atlas.md`, `rules/agentes.md` y `docs/agentes.md`, que cambiaron de texto, salen
+  `MODIFICADO` (exit 3) y hace falta `-Force`, que respalda la versión local.
+- **Un agente propio con un nombre actual.** Si ya tenías un `agents/hermes.md` tuyo (o cualquier otro
+  nombre actual) que no es de SyncLayer, el instalador lo trata como `MODIFICADO`: exit 3 y no escribe nada. Con
+  `-Force` lo respalda y lo sobrescribe. Mira el diff antes y cámbiale el nombre al tuyo.
+- **V7 con los nombres actuales.** Un alias no puede contener, partido por `-`, un nombre actual: `sherlock-2`
+  se rechaza y `forge-2`, que ya no es un rol, se admite. Igual la carpeta de planes: `docs/hermes` se
+  rechaza y `docs/forge` se admite.
+- **Un alias que es el nombre anterior de otro rol.** Es válido (los nombres anteriores no entran en V5 ni en
+  V7). Con `{ "aliases": { "anubis": "auditor" } }` el agente que escribe (`anubis`, con `Edit` y `Write`)
+  queda instalado con `name: auditor`, el nombre que antes tenía el revisor (sin `Edit` ni `Write`), y el instalador no
+  avisa. Si tus reglas, memoria o permisos siguen asociando ese nombre a un revisor, ahora apuntan a un agente
+  que escribe. En el reporte de uso, con `{ "<rol>": "<nombre anterior de otro rol>" }` las llamadas de ese agente se
+  suman a la fila histórica del otro rol. Es un límite aceptado: elige alias que no sean el nombre anterior de otro rol.
+- **Efecto en Claude Code real: no verificado (G1).** Que la delegación automática elija bien con los nombres
+  nuevos, con los dos conjuntos a la vez o con alias no lo prueba la suite: lo comprueba el propietario.
+<!-- nombres-anteriores:fin -->
 
 ## Reporte de uso
 
@@ -1082,9 +1185,10 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
   15,1 s (promedio de tres corridas alternadas, 19,7 % menos). Con datos reales no se midió la
   proporción: antes de optimizar, el `global --all` del propietario tardó unos 3 minutos con unas
   2 800 transcripciones (dato real de C4), y el objetivo de 60 s puede no cumplirse.
-- **Agentes con alias.** El reporte reconoce a los agentes de SyncLayer por su nombre original. Un
-  agente instalado con alias (ver «Alias») sale como `(otro agente)` y deja de atribuirse a SyncLayer. El
-  reporte no lee la tabla de alias.
+- **Agentes con alias.** El reporte reconoce a los agentes de SyncLayer por su nombre actual del repositorio (y por los
+  anteriores al renombrado, ver «Nombres anteriores»). Un
+  agente instalado con alias (ver «Alias») sale como `(otro agente)` y deja de atribuirse a SyncLayer, salvo que el
+  alias sea un nombre anterior (ver «Nombres anteriores»). El reporte no lee la tabla de alias.
 - **Idioma `en`.** El reporte en inglés es una traducción del español; el español es la referencia. Las
   claves del pie quedan en español. Los mensajes de la CLI e `inspect` salen sólo en español. El idioma no se
   guarda en ningún sitio: cada corrida lo recibe por `--lang`, y un reporte sustituye al del otro idioma en el
@@ -1102,17 +1206,17 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1810 pruebas, 367 saltadas: 364 contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso, que en Windows no corren. Las pruebas del instalador corren contra Windows PowerShell 5.1. Sólo biblioteca estándar, Python 3.12. La suite tarda entre unos 43 y 70 minutos en este equipo: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
-reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
-`tests/` permitido para `sentinel`.
+Recuento pendiente de la corrida de cierre de la Fase 6 (antes del renombrado: 1810 pruebas, 367 saltadas): 364 contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso, que en Windows no corren. Las pruebas del instalador corren contra Windows PowerShell 5.1. Sólo biblioteca estándar, Python 3.12. La suite tarda entre unos 43 y 70 minutos en este equipo: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+reales, con los nombres de antes del renombrado: `git add` bloqueado para el agente de revisión; `Write`
+sobre `src/` bloqueado y sobre `tests/` permitido para el de QA.
 
 ## Mantenimiento
 
 Resumen; la guía completa está en [`docs/agentes.md`](docs/agentes.md).
 
-- **Cambiar el modelo:** para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle`, la vía es
+- **Cambiar el modelo:** para `atlas`, `sindri`, `anubis`, `shakespeare`, `hermes` y `heimdall`, la vía es
   el nivel de `synclayer-config.json`, que se aplica al reinstalar (ver «Niveles»). Editar a mano
-  `model:` o `effort:` sale `MODIFICADO` (exit 3) y pide `-Force`. `auditor`, `shield` y `debugger`
+  `model:` o `effort:` sale `MODIFICADO` (exit 3) y pide `-Force`. `salomon`, `hector` y `sherlock`
   no cambian con el nivel.
 - **Cambiar el nombre de un agente:** la clave `aliases` de `synclayer-config.json`, que se aplica al
   reinstalar (ver «Alias»). El archivo con el nombre anterior no se borra: quítalo a mano.
@@ -1136,18 +1240,18 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Resumen; el detalle (frentes por fase, línea de tiempo completa y reglas de cálculo) está en [PLAN.md](PLAN.md). Se actualiza en el mismo commit que cierra una sub-fase. Última actualización: **2026-11-27** (T7 de la Fase 6 cerrada: 7 de 11 unidades).
+> **Sección viva.** Resumen; el detalle (frentes por fase, línea de tiempo completa y reglas de cálculo) está en [PLAN.md](PLAN.md). Se actualiza en el mismo commit que cierra una sub-fase. Última actualización: **2026-11-27** (T8 de la Fase 6 cerrada: 8 de 11 unidades).
 
-**El proyecto completo va en 94%:** seis fases con el mismo peso, (5 × 100 + 100 × 7 ÷ 11) ÷ 6 = 93,94 % → 94 % (9 cuadros). Cada sub-fase cuenta una unidad; «cerrada» = commiteada en la rama de la fase con su suite verde y `auditor` sin Critical ni Important.
+**El proyecto completo va en 95%:** seis fases con el mismo peso, (5 × 100 + 100 × 8 ÷ 11) ÷ 6 = 95,45 % → 95 % (10 cuadros). Cada sub-fase cuenta una unidad; «cerrada» = commiteada en la rama de la fase con su suite verde y `auditor` sin Critical ni Important.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | **94%** | 6 fases | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **95%** | 6 fases | |
 | 1. Instalador | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada |
 | 2. Reporte de uso de agentes | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada |
 | 3. Esfuerzo configurable | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Cerrada (G1 pendiente) |
 | 4. Nombres de agentes configurables | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada (G1/V1 pendiente) |
 | 5. Otras configuraciones dinámicas | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada (G1 pendiente) |
-| 6. Renombrado de agentes | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | **64%** | 7 de 11 | En curso |
+| 6. Renombrado de agentes | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | **73%** | 8 de 11 | En curso |
 
-**Ahora:** T8 de la Fase 6 (documentación). Pendiente del propietario, fuera del conteo: G1/V1 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
+**Ahora:** T9 de la Fase 6 (`CLAUDE.md`, historial, documentos de marca y backlog). Pendiente del propietario, fuera del conteo: G1/V1 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.

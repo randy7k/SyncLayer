@@ -2,8 +2,7 @@
 
 Casos del plan docs/plans/2026-11-27-fase6-renombrado-de-agentes.md: 1 (tabla), 2 (V1 a V4 de los nombres
 nuevos), 3 (T7: ningun nombre viejo queda como palabra en los once textos ni en install.ps1 fuera de
-$LegacyRoles), 4 (los once textos del repositorio), 5 (prueba puente: los hashes del repositorio son los del
-fixture), 6 (supuestos 5, 6 y 7), 7 y 8 (parametrizacion y mutacion de control), 17 (coherencia del
+$LegacyRoles), 4 (los once textos del repositorio), 5 (prueba puente, retirada en T8), 6 (supuestos 5, 6 y 7), 7 y 8 (parametrizacion y mutacion de control), 17 (coherencia del
 repositorio renombrado), 18 (hooks:, tools:, model: y color: fijados antes del cambio), 20 (parte estatica:
 $LegacyRoles y la clave vieja) y 21 (reporte de uso).
 No tocan ~/.claude ni ejecutan install.ps1. Sin PowerShell: solo biblioteca estandar.
@@ -15,10 +14,8 @@ import json
 import os
 import re
 import sys
-import tempfile
 import tokenize
 import unittest
-from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -161,7 +158,8 @@ class NoOldNameLeft(unittest.TestCase):
 
 class ManagedTexts(unittest.TestCase):
     """Caso 4: los once textos del repositorio. Antes de T7 era el ensayo en memoria de la transformacion de alias
-    con la tabla del renombrado; tras T7 los textos del repositorio son esa salida (el caso 5 los ata por hash)."""
+    con la tabla del renombrado; tras T7 los textos del repositorio son esa salida. La prueba puente (caso 5, los
+    hashes del fixture) se retiro en T8; el manifiesto lo ata el caso 17."""
 
     def setUp(self):
         self.expected = rr.repo_texts()
@@ -176,12 +174,9 @@ class ManagedTexts(unittest.TestCase):
                 self.assertIsInstance(data, bytes)
                 self.assertNotIn(b"\r", data)
 
-    def test_case4_the_table_is_valid_and_the_inputs_are_untouched(self):
+    def test_case4_the_table_is_valid(self):
         # V8: ningun nombre viejo, usado como alias, coincide con una ruta del manifiesto actual.
         self.assertIsNone(ar.validate_table(dict(OLD_OF), bm.managed_files(ar.ROOT)))
-        before = {rel: ar.repo_text(rel) for rel in ar.text_files()}
-        rr.repo_texts()
-        self.assertEqual({rel: ar.repo_text(rel) for rel in ar.text_files()}, before)
 
     def test_case4_no_unclassified_word_and_no_old_name_left(self):
         for path, data in self.expected.items():
@@ -250,70 +245,6 @@ class ManagedTexts(unittest.TestCase):
                 self.assertNotIn("agents/%s.md" % old, self.expected)
                 self.assertFalse(os.path.exists(os.path.join(ar.ROOT, "agents", old + ".md")))
                 self.assertIn(b"\nname: " + new.encode("ascii") + b"\n", self.expected["agents/%s.md" % new])
-
-
-class BridgeFixture(unittest.TestCase):
-    """Caso 5: prueba puente. Vive de T1 a T7; T8 la retira. Antes de T7 el fixture eran los hashes que produciria la
-    transformacion; tras T7 son los hashes de los once textos del repositorio."""
-
-    def fixture(self):
-        with open(rr.FIXTURE, "rb") as f:
-            return json.loads(f.read().decode("utf-8"))
-
-    def test_case5_fixture_shape(self):
-        data = self.fixture()
-        self.assertEqual(list(data), ["schema", "algorithm", "eol", "files"])
-        self.assertEqual((data["schema"], data["algorithm"], data["eol"]), (1, "sha256", "lf"))
-        self.assertEqual(len(data["files"]), 11)
-        self.assertEqual(list(data["files"]), sorted(data["files"]))
-        for path, digest in data["files"].items():
-            with self.subTest(path=path):
-                self.assertRegex(digest, r"^[0-9a-f]{64}\Z")
-                self.assertIsNotNone(bm.ALLOWED.match(path))
-
-    def test_case5_repository_hashes_match_the_fixture(self):
-        self.assertEqual(rr.repo_hashes(), self.fixture()["files"])
-
-    def test_case5_the_manifest_carries_the_fixture_hashes(self):
-        with open(os.path.join(ROOT, "install-manifest.json"), "rb") as f:
-            listed = {e["path"]: e["sha256"] for e in json.loads(f.read().decode("utf-8"))["files"]}
-        self.assertEqual({p: listed[p] for p in self.fixture()["files"]}, self.fixture()["files"])
-
-    def test_case5_fixture_is_ascii_with_lf_and_final_newline(self):
-        with open(rr.FIXTURE, "rb") as f:
-            raw = f.read()
-        # core.autocrlf: el checkout puede dejar CRLF; se normaliza antes de comparar.
-        norm = raw.replace(b"\r\n", b"\n")
-        self.assertTrue(norm.isascii())
-        self.assertTrue(norm.endswith(b"\n"))
-        self.assertEqual(norm, rr.fixture_bytes(rr.repo_hashes()))
-
-    def test_write_refuses_on_an_already_renamed_repository(self):
-        # Tras T7 los roles vivos ya son los nuevos: --write se niega con el mensaje fijo y no escribe.
-        with tempfile.TemporaryDirectory() as tmp:
-            target = os.path.join(tmp, "fixture.json")
-            with mock.patch.object(rr, "FIXTURE", target), mock.patch.object(sys, "stderr", io.StringIO()) as err:
-                self.assertEqual(rr.main(["--write"]), 1)
-            self.assertFalse(os.path.exists(target))
-            self.assertEqual(err.getvalue(), rr.MSG_REFUSED + "\n")
-            with mock.patch.object(sys, "stdout", io.StringIO()):
-                self.assertEqual(rr.main([]), 2)
-
-    def test_case5_a_changed_byte_or_name_changes_the_hashes(self):
-        fixture = self.fixture()["files"]
-        for path, raw in rr.repo_texts().items():
-            with self.subTest(path=path):
-                self.assertNotEqual(bm.canonical_sha256(raw + b" "), fixture[path])
-                self.assertNotEqual(bm.canonical_sha256(raw.replace(b"\n", b"\n ", 1)), fixture[path])
-        swapped = rr.repo_texts()["agents/%s.md" % DEVELOPER].replace(DEVELOPER.encode(), ANALYST.encode())
-        self.assertNotEqual(bm.canonical_sha256(swapped), fixture["agents/%s.md" % DEVELOPER])
-
-    def test_case5_hashes_are_canonical_sha256_of_lf_bytes(self):
-        data = self.fixture()["files"]
-        for path, raw in rr.repo_texts().items():
-            with self.subTest(path=path):
-                self.assertEqual(bm.canonical_sha256(raw), data[path])
-                self.assertEqual(bm.canonical_sha256(raw.replace(b"\n", b"\r\n")), data[path])
 
 
 class AssumptionsFiveToSeven(unittest.TestCase):
@@ -546,13 +477,11 @@ PARAMETRIZED = ("test_aliases.py", "aliases_ref.py", "test_levels.py", "levels_r
 # Lista cerrada de excepciones: identificadores de Python que llevan un nombre anterior dentro. Se quitan antes de
 # buscar SOLO los tokens de tipo identificador (tokenize), no un literal de cadena que diga lo mismo.
 #   - el identificador global de la constante de names.py cuyo nombre en mayusculas es el de un nombre anterior
-#     de la constante del depurador de names.py, en cualquier archivo;
-#   - el identificador del diccionario de palabras de aliases_ref.py (<ROL>_WORDS; nombre fijado por el plan, T2 y
-#     T4) en aliases_ref.py y test_install.py.
+#     de la constante del depurador de names.py, en cualquier archivo.
+# (T8 retiro el diccionario de palabras <ROL>_WORDS de aliases_ref.py: estaba vacio y su rama no podia ejecutarse.)
 # Ademas se quitan antes de buscar las palabras espanolas con la subcadena de un nombre anterior (escribe...).
 GLOBAL_IDENTIFIERS = sorted(n for n in dir(nm) if n.isupper() and n.lower() in rr.RENAME)
-_WORDS_IDENTIFIERS = sorted(n for n in dir(ar) if any(o in n.lower() for o in rr.RENAME))
-ALLOWED_IDENTIFIERS = {"aliases_ref.py": _WORDS_IDENTIFIERS, "test_install.py": _WORDS_IDENTIFIERS}
+ALLOWED_IDENTIFIERS = {}
 _SPANISH_WORDS = re.compile("escriben|escribe|describe|reescribe|sobrescribe", re.I)
 
 
@@ -604,7 +533,7 @@ class Parametrization(unittest.TestCase):
 
     def test_case7_the_closed_list_is_what_it_says(self):
         self.assertEqual(len(GLOBAL_IDENTIFIERS), 1)
-        self.assertEqual(len(_WORDS_IDENTIFIERS), 1)
+        self.assertEqual([n for n in dir(ar) if any(o in n.lower() for o in rr.RENAME)], [])
         self.assertEqual(GLOBAL_IDENTIFIERS, [OLD_OF[DEBUGGER].upper()])
         self.assertTrue(set(ALLOWED_IDENTIFIERS) <= set(PARAMETRIZED))
 
@@ -633,9 +562,8 @@ class Parametrization(unittest.TestCase):
             text = f.read().decode("utf-8")
         self.assertGreater(text.count(chr(10)), 8000)
         # sin quitar el identificador, el escaneo ve contenido real: las unicas lineas con hit son las que lo traen
-        ident = ALLOWED_IDENTIFIERS[INSTALL_FILE][0]
         lines = text.split(chr(10))
-        expected = sorted(i + 1 for i, l in enumerate(lines) if ident in l or GLOBAL_IDENTIFIERS[0] in l)
+        expected = sorted(i + 1 for i, l in enumerate(lines) if GLOBAL_IDENTIFIERS[0] in l)
         self.assertTrue(expected)
         self.assertEqual(sorted({ln for ln, _n in name_hits(text, scanned_names(INSTALL_FILE))}), expected)
 
