@@ -370,6 +370,14 @@ Reglas para todas:
 - Cada cierre actualiza en el mismo commit «Línea de tiempo y avance» con la aritmética de 4.7. Commits sin
   etiquetas de coautoría.
 - La suite no se corre en paralelo con procesos pesados.
+- Decisión de T1 (hallazgo 3 de `auditor`): el caso 3 escanea `tests/` y sólo excluye los tres archivos de la
+  fase. Los pares y nombres «inyectados» de T5 (casos 11 a 14) y T6 (caso 16) usan nombres de fantasía
+  (por ejemplo `zeta-uno`), no los ocho nombres nuevos ni los viejos; así el caso 3 no se amplía ni se retira antes
+  de T7. Si una prueba necesita de verdad un nombre real, se añade su archivo a la lista cerrada `OWN_FILES` con
+  un comentario que lo justifique, y se anota en el cierre de la tarea.
+- Aviso para T10 (hallazgo C de `auditor`): `test_case6_assumption7...` de `tests/test_rename.py` falla si otra
+  prueba de `tests/` menciona `.svg`; el caso 24 de T10 necesita leer los SVG, así que T10 ajusta o retira esa
+  comprobación en el mismo cambio y lo anota en su cierre.
 
 **Orden y paralelismo.** Estrictamente secuencial de T1 a T9: T2 a T5 y T7 comparten `tests/test_install.py`
 o `install.ps1`, y cada cierre edita el `README.md`. T6 (reporte de uso) toca archivos disjuntos de T3 a T5

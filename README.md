@@ -1136,21 +1136,21 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-27** (Fase 5 cerrada: 9 de 9 unidades; plan de la Fase 6 aprobado, 0 de 11).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-27** (T1 de la Fase 6 cerrada: 1 de 11 unidades; Fase 5 cerrada e integrada en `main`).
 
 ### Avance global
 
-**El proyecto completo va en 83%.** Cuenta las seis fases con el mismo peso: (5 fases al 100 % + la fase 6 al 0 %) = (5 × 100 + 100 × 0 ÷ 11) ÷ 6 = 500 ÷ 6 = 83,33 % → 83 % (8 cuadros: 8,33 redondea a 8). La fase 5 ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md)) cuenta 9 de 9 unidades (T1 a T8 y el cierre) = 100 % (10 cuadros). La fase 6 ([plan](docs/plans/2026-11-27-fase6-renombrado-de-agentes.md)) cuenta 0 de 11; con k unidades cerradas el global es (500 + 100 × k ÷ 11) ÷ 6 = 83,33 + 1,515 × k y sólo llega a 100 % al cerrar las once. Siguen pendientes del propietario, fuera del conteo, G1/V1 de las fases 3 y 4 (efecto real de `effort:` y de los alias en Claude Code), G1 de la fase 5, V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
+**El proyecto completo va en 85%.** Cuenta las seis fases con el mismo peso: (5 fases al 100 % + la fase 6 al 9,1 %) = (5 × 100 + 100 × 1 ÷ 11) ÷ 6 = 509,09 ÷ 6 = 84,85 % → 85 % (8 cuadros: 8,48 redondea a 8). La fase 5 ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md)) cuenta 9 de 9 unidades (T1 a T8 y el cierre) = 100 % (10 cuadros). La fase 6 ([plan](docs/plans/2026-11-27-fase6-renombrado-de-agentes.md)) cuenta 0 de 11; con k unidades cerradas el global es (500 + 100 × k ÷ 11) ÷ 6 = 83,33 + 1,515 × k y sólo llega a 100 % al cerrar las once. Siguen pendientes del propietario, fuera del conteo, G1/V1 de las fases 3 y 4 (efecto real de `effort:` y de los alias en Claude Code), G1 de la fase 5, V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **83%** | 6 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **85%** | 6 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
 | **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Plan aprobado, cerrada en la rama `feat/esfuerzo-configurable` (T1 a T7 y cierre); la compuerta G1 del propietario sigue pendiente (verificación en Claude Code real; no bloquea) ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
 | **4. Nombres de agentes configurables** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Plan aprobado, cerrada en la rama `feat/nombres-configurables` (T1 a T8 y cierre); la compuerta G1/V1 del propietario no resta pero sí condiciona aplicar alias a su `~/.claude` real (V2): el efecto de los alias en Claude Code real no está verificado ([plan](docs/plans/2026-11-22-fase4-nombres-configurables.md), [exploración](docs/plans/2026-11-22-fase4-nombres-exploracion.md)) |
 | **5. Otras configuraciones dinámicas** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Plan aprobado (2026-11-24, con los valores por defecto de P1 a P14), T1 a T8 y cierre cerradas, en la rama `feat/configuraciones-dinamicas` (cierre: `sentinel` con 1810 pruebas OK y 367 saltadas, `shield` sin Critical, High ni Medium, `auditor` sin Critical ni Important); la compuerta G1 del propietario no bloquea ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md), [backlog](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) |
-| **6. Renombrado de agentes** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 11 | Plan aprobado (2026-11-27, con los valores por defecto de P1 a P16): nombres nuevos como roles, 4 fases (preparación, compatibilidad, cambio atómico, documentación y marca). Arranca al cerrar la Fase 5, en la rama `feat/renombrado-de-agentes`; el efecto en Claude Code real (G1) no bloquea T1 a T10 y sí la aplicación a `~/.claude` ([plan](docs/plans/2026-11-27-fase6-renombrado-de-agentes.md)) |
+| **6. Renombrado de agentes** | 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **9%** | 1 de 11 | Plan aprobado (2026-11-27, con los valores por defecto de P1 a P16): nombres nuevos como roles, 4 fases (preparación, compatibilidad, cambio atómico, documentación y marca). Arranca al cerrar la Fase 5, en la rama `feat/renombrado-de-agentes`; el efecto en Claude Code real (G1) no bloquea T1 a T10 y sí la aplicación a `~/.claude` ([plan](docs/plans/2026-11-27-fase6-renombrado-de-agentes.md)) |
 
 Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unidades planeadas. «Cerrada» = commiteada en la rama de la fase con su suite verde y la revisión de `auditor` sin hallazgos Critical ni Important; la integración a `main` se hace al cerrar la fase. Lo que falta probar en un entorno real (la instalación sobre el `~/.claude` verdadero) se lista aparte y no resta.
 
@@ -1248,6 +1248,25 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
   - ✅ Hecho también: cierre. `sentinel`: suite completa de 1810 pruebas, 367 saltadas, 0 fallos (4536 s) y los 47 casos del plan con prueba; `shield` sin Critical, High ni Medium (2 Low informativos); `auditor` sin Critical ni Important (3 Minor corregidos: 136 claves por idioma, 364 + 3 saltadas, comentarios de `install.ps1`).
   - ⬜ Falta: nada del plan. Fuera del conteo y del propietario: G1 (perfiles, desactivar con `permissions.deny` y carpeta de planes en Claude Code real) y V2 (instalación real con `plans_dir` y una corrida real de `global --lang en --stdout`).
 
+### La Fase 6 por frentes
+
+| Frente | Avance | % | Unidades |
+|:--|:--|--:|:--|
+| A. Preparación | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **25%** | 1 de 4 (T1, T2, T3, T4) |
+| B. Compatibilidad | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 2 (T5, T6) |
+| C. Cambio atómico | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 1 (T7) |
+| D. Documentación, marca y cierre | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 4 (T8, T9, T10, cierre) |
+
+- **A. Preparación**
+  - ✅ Hecho: T1 referencia del renombrado (`tests/rename_ref.py`, `tests/test_rename.py`, `tests/rename_expected.json`: tabla `RENAME` de ocho pares, once textos gestionados esperados con la transformación de alias y sus hashes canónicos, 34 pruebas de los casos 1 a 6 y 18 parte previa). Sólo pruebas: ningún código de producción ni texto gestionado cambió. Revisada por `auditor` en dos rondas (un Important de CRLF del fixture corregido) sin Critical ni Important abiertos.
+  - ⬜ Falta: T2 `tests/names.py` y parametrización de las pruebas pequeñas; T3 y T4 parametrización de `tests/test_install.py`.
+- **B. Compatibilidad**
+  - ⬜ Falta: T5 nombres anteriores en `install.ps1` (con `shield`); T6 reporte de uso.
+- **C. Cambio atómico**
+  - ⬜ Falta: T7 renombrado de los archivos y regeneración del manifiesto (con `shield`).
+- **D. Documentación, marca y cierre**
+  - ⬜ Falta: T8, T9, T10 (assets de marca; necesita la carpeta de fuentes IBM Plex) y cierre. Fuera del conteo y del propietario: G1 (Claude Code real) y V2 (aplicar a `~/.claude`).
+
 ### Línea de tiempo
 
 | Fecha | Hito | |
@@ -1302,7 +1321,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-25 | T8 de la Fase 5: documentación de la carpeta de planes y del idioma del reporte de uso (README, `CLAUDE.md`, `HISTORY.md`; solo documentación; efecto en Claude Code real sin verificar) | ✅ |
 | 2026-11-27 | Cierre de la Fase 5: `sentinel` (1810 pruebas, 47 casos), `shield` (sin Critical, High ni Medium) y `auditor` (sin Critical ni Important) sobre el cambio completo | ✅ |
 | 2026-11-27 | Plan de la Fase 6 (renombrado de agentes) aprobado: 11 unidades, nombres nuevos como roles | ✅ |
-| **Ahora** | **Integrar la Fase 5 en `main` y arrancar T1 de la Fase 6** (`feat/renombrado-de-agentes`). **Del propietario:** G1/V1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`, caso P10), V2 (aplicar los alias a su `~/.claude`), G1 de la fase 5 y las comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) | 🔄 |
+| 2026-11-27 | Fase 5 integrada en `main` (merge `4da51e1`, sin push) | ✅ |
+| 2026-11-27 | T1 de la Fase 6: referencia del renombrado, 34 pruebas y fixture de hashes (sólo pruebas); revisada por `auditor` en dos rondas | ✅ |
+| **Ahora** | **T2 de la Fase 6** (`tests/names.py` y parametrización de las pruebas pequeñas). **Del propietario:** G1/V1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`, caso P10), V2 (aplicar los alias a su `~/.claude`), G1 de la fase 5 y las comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) | 🔄 |
 | Luego | Tarea aparte de `Get-Prop` (P11) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).

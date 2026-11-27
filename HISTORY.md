@@ -5,12 +5,14 @@
 ### Planificado (Fase 6)
 
 Plan `docs/plans/2026-11-27-fase6-renombrado-de-agentes.md`, aprobado por el propietario el 2026-11-27 con los
-valores por defecto de P1 a P16; rama prevista `feat/renombrado-de-agentes`, que arranca al cerrar la Fase 5.
-11 unidades (T1 a T10 y el cierre), 0 cerradas. Los nombres de los agentes pasan a ser `heimdall` (oracle),
+valores por defecto de P1 a P16; rama `feat/renombrado-de-agentes`, creada desde `main` tras integrar la Fase 5.
+11 unidades (T1 a T10 y el cierre), 1 cerrada (T1). Los nombres de los agentes pasan a ser `heimdall` (oracle),
 `hermes` (scout), `sindri` (forge), `anubis` (sentinel), `salomon` (auditor), `hector` (shield), `sherlock`
 (debugger) y `shakespeare` (scribe); `atlas` no cambia. Los nombres nuevos pasan a ser los roles; los viejos
 quedan en una tabla cerrada para avisar a quien ya los tenía instalados. El efecto en Claude Code real no está
 verificado (G1).
+
+- T1 cerrada (2026-11-27): `tests/rename_ref.py`, `tests/test_rename.py` (34 pruebas) y `tests/rename_expected.json` (hashes canónicos de los once textos gestionados tras el renombrado). Sólo pruebas; ningún código de producción cambió. `auditor` en dos rondas, sin Critical ni Important abiertos (un Important de CRLF del fixture corregido). Línea de tiempo: Fase 6 con 1 de 11 (9 %), global 85 %: (5 × 100 + 100 × 1 ÷ 11) ÷ 6 = 84,85 %.
 
 ### Planificado (Fase 5)
 
