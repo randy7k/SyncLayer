@@ -4,44 +4,44 @@
   "eol": "lf",
   "files": [
     {
+      "path": "agents/anubis.md",
+      "sha256": "95e5665ef0283713330fa617f4ea9964dc96651f14c46e98fb479d268d768ef8"
+    },
+    {
       "path": "agents/atlas.md",
-      "sha256": "d7a79b8f9c0573429f02656a30ba64e42b5c3e3396f568bbb65e61999f79f3db"
+      "sha256": "4e9d336636a825ef0d25ab066cd368969b3fdeafd0c29063b4cedfafcbe0eda9"
     },
     {
-      "path": "agents/auditor.md",
-      "sha256": "7dcf6767ba7da0205ddc63a9b10f9563a8f9651c8a9f738a506503ba0338ffc1"
+      "path": "agents/hector.md",
+      "sha256": "19789f8d824df9b6f9ce98684e94fd323487ea3e89f309c914aa78c89f50280d"
     },
     {
-      "path": "agents/debugger.md",
-      "sha256": "0d382b4d352194a5dbaae54048423a55dd4182ee06c7619f9e7d970d63ccb97d"
+      "path": "agents/heimdall.md",
+      "sha256": "a24fe5f8c5c7d6bd983b1fcfda812b81dbf96ca22336dc149f18696a31b2824d"
     },
     {
-      "path": "agents/forge.md",
-      "sha256": "2db783f46a3c03a37c63f42554399d5478237adb703cf6a1ffa44e7432032d95"
+      "path": "agents/hermes.md",
+      "sha256": "27152e149f139d827a990d98c802eb8c8af00566c3e710f364adf117ccb94aeb"
     },
     {
-      "path": "agents/oracle.md",
-      "sha256": "23ca602327bfe09733d4f602c90431b588e0ac9fc9c29837164e0338a78e6bd3"
+      "path": "agents/salomon.md",
+      "sha256": "3cedf422043237e1b191a5a9fdb174f397a8e7132cb5d1f6997248a5b664ca8e"
     },
     {
-      "path": "agents/scout.md",
-      "sha256": "e86f32a58231a5eb9d0d435e1aba2e4cb6a02356e425081f5beec9cfb7236e6d"
+      "path": "agents/shakespeare.md",
+      "sha256": "5fc654854e295bcf2d1b00a507e48f34829a90c7532d74bfea8dc905b1d3c621"
     },
     {
-      "path": "agents/scribe.md",
-      "sha256": "29ac8dcf21bbddb07c9ebe4e4956a4142a807789d4767501eee1a2727720ea22"
+      "path": "agents/sherlock.md",
+      "sha256": "151e90757e7f36edb467eab6ac444668a84809135eba90e56135db3a83b592ec"
     },
     {
-      "path": "agents/sentinel.md",
-      "sha256": "fe74a8cfcb638272f64883bca8f33c90f37c21cbc2e6bc8a9e0ab183c83d8888"
-    },
-    {
-      "path": "agents/shield.md",
-      "sha256": "6941a0cd3aad73cb3a2b2cf0a237a649863e165b6e783b5c4e0c691101ff8e2a"
+      "path": "agents/sindri.md",
+      "sha256": "afeb49e8e7918dc16dbf55d1b85bfe140058e2578a60c217c9aacc0893180db5"
     },
     {
       "path": "docs/agentes.md",
-      "sha256": "5ba1b453d0f41161cad3fba9f43ba088af20ca4e0596a1263e4a40033cb24212"
+      "sha256": "a78ee982483c098ad23c0502ee8ed60e5ed3f10b87c9e8fd913a12005454575e"
     },
     {
       "path": "hooks/agent_guard.py",
@@ -49,7 +49,7 @@
     },
     {
       "path": "rules/agentes.md",
-      "sha256": "52b846e49a65f301c4caf2db604ae601a6166f2ee6f907029263a6d8639daeb5"
+      "sha256": "7a21a46b6cb116f72785ed11b9778aa52e7758d286fcd88b749307ea841d8d56"
     }
   ]
 }

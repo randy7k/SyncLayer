@@ -609,11 +609,11 @@ hook). La tabla es un orden razonado, no una medición: no promete ahorro de tok
 | Agente | Nivel 5 (repo) | Nivel 4 | Nivel 3 | Nivel 2 | Nivel 1 |
 |---|---|---|---|---|---|
 | `atlas` | `claude-fable-5-2`, — | `opus`, — | `opus`, `medium` | `sonnet`, `medium` | `sonnet`, `medium` |
-| `forge` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
-| `sentinel` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` |
-| `scribe` | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` | `haiku`, `medium` |
-| `scout` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
-| `oracle` | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — |
+| `sindri` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
+| `anubis` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` |
+| `shakespeare` | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` | `haiku`, `medium` |
+| `hermes` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
+| `heimdall` | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — |
 <!-- niveles:fin -->
 
 ### Elegir el nivel
@@ -1136,18 +1136,18 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Resumen; el detalle (frentes por fase, línea de tiempo completa y reglas de cálculo) está en [PLAN.md](PLAN.md). Se actualiza en el mismo commit que cierra una sub-fase. Última actualización: **2026-11-27** (T6 de la Fase 6 cerrada: 6 de 11 unidades).
+> **Sección viva.** Resumen; el detalle (frentes por fase, línea de tiempo completa y reglas de cálculo) está en [PLAN.md](PLAN.md). Se actualiza en el mismo commit que cierra una sub-fase. Última actualización: **2026-11-27** (T7 de la Fase 6 cerrada: 7 de 11 unidades).
 
-**El proyecto completo va en 92%:** seis fases con el mismo peso, (5 × 100 + 100 × 6 ÷ 11) ÷ 6 = 92,42 % → 92 % (9 cuadros). Cada sub-fase cuenta una unidad; «cerrada» = commiteada en la rama de la fase con su suite verde y `auditor` sin Critical ni Important.
+**El proyecto completo va en 94%:** seis fases con el mismo peso, (5 × 100 + 100 × 7 ÷ 11) ÷ 6 = 93,94 % → 94 % (9 cuadros). Cada sub-fase cuenta una unidad; «cerrada» = commiteada en la rama de la fase con su suite verde y `auditor` sin Critical ni Important.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | **92%** | 6 fases | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | **94%** | 6 fases | |
 | 1. Instalador | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada |
 | 2. Reporte de uso de agentes | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada |
 | 3. Esfuerzo configurable | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Cerrada (G1 pendiente) |
 | 4. Nombres de agentes configurables | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada (G1/V1 pendiente) |
 | 5. Otras configuraciones dinámicas | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada (G1 pendiente) |
-| 6. Renombrado de agentes | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | **55%** | 6 de 11 | En curso |
+| 6. Renombrado de agentes | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | **64%** | 7 de 11 | En curso |
 
-**Ahora:** T7 de la Fase 6 (renombrado atómico de los archivos y regeneración del manifiesto, con `shield`). Pendiente del propietario, fuera del conteo: G1/V1 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
+**Ahora:** T8 de la Fase 6 (documentación). Pendiente del propietario, fuera del conteo: G1/V1 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.

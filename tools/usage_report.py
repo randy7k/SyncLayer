@@ -760,11 +760,13 @@ VERIFIED_MAX = "2.1.326"
 # cualquier otro nombre (usuario, plugin) se muestra como "(otro agente)". No se muestra
 # ningun texto libre del meta.
 SYNCLAYER_AGENTS = frozenset((
-    "oracle", "scout", "atlas", "forge", "sentinel", "auditor", "shield", "debugger", "scribe",
+    "heimdall", "hermes", "atlas", "sindri", "anubis", "salomon", "hector", "sherlock", "shakespeare",
 ))
 # Lista cerrada de nombres ANTERIORES de los agentes de SyncLayer (las transcripciones ya escritas traen el
-# agentType viejo): se clasifican como SyncLayer junto con los actuales. Vacia hasta el cambio de nombres.
-SYNCLAYER_LEGACY_AGENTS = frozenset()
+# agentType viejo): se clasifican como SyncLayer junto con los actuales. Son los ocho del renombrado de la Fase 6.
+SYNCLAYER_LEGACY_AGENTS = frozenset((
+    "oracle", "scout", "forge", "sentinel", "auditor", "shield", "debugger", "scribe",
+))
 BUILTIN_AGENTS = frozenset((
     "general-purpose", "Explore", "Plan", "statusline-setup", "output-style-setup",
     "claude-code-guide",

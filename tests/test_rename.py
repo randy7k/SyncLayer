@@ -1,9 +1,12 @@
-"""Pruebas de la Fase 6, T1: referencia del renombrado de agentes, colisiones y ensayo en memoria.
+"""Pruebas de la Fase 6: renombrado de agentes (T1 la referencia y los ensayos; T7 el cambio atomico).
 
 Casos del plan docs/plans/2026-11-27-fase6-renombrado-de-agentes.md: 1 (tabla), 2 (V1 a V4 de los nombres
-nuevos), 3 (ningun nombre nuevo aparece hoy), 4 (ensayo en memoria con la transformacion de alias), 5 (prueba
-puente: hashes esperados), 6 (supuestos 5, 6 y 7) y 18 (parte previa: hooks:, tools:, model: y color: fijados).
-No tocan ~/.claude ni install.ps1. Sin PowerShell: solo biblioteca estandar.
+nuevos), 3 (T7: ningun nombre viejo queda como palabra en los once textos ni en install.ps1 fuera de
+$LegacyRoles), 4 (los once textos del repositorio), 5 (prueba puente: los hashes del repositorio son los del
+fixture), 6 (supuestos 5, 6 y 7), 7 y 8 (parametrizacion y mutacion de control), 17 (coherencia del
+repositorio renombrado), 18 (hooks:, tools:, model: y color: fijados antes del cambio), 20 (parte estatica:
+$LegacyRoles y la clave vieja) y 21 (reporte de uso).
+No tocan ~/.claude ni ejecutan install.ps1. Sin PowerShell: solo biblioteca estandar.
 """
 
 import importlib.util
@@ -13,46 +16,60 @@ import os
 import re
 import sys
 import tempfile
+import tokenize
 import unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "tools"))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "assets", "brand", "src"))
 
 import aliases_ref as ar  # noqa: E402
 import levels_ref as lr  # noqa: E402
 import names as nm  # noqa: E402  (fuente unica de los nombres de rol vivos)
 import rename_ref as rr  # noqa: E402
 import test_aliases as ta  # noqa: E402  (INVENTORY: recuentos de las formas de cada rol)
+import usage_report as ur  # noqa: E402
+from agents_data import AGENTS  # noqa: E402
 from names import (ANALYST, DEBUGGER, DEVELOPER, PLANNER, QA, RESEARCHER, REVIEWER, SECURITY,  # noqa: E402
                    WRITER)
 
 bm = ar.bm
-OLD_ROLES = sorted(set(nm.ROLES) - {PLANNER})
+ROOT = ar.ROOT
+OLD_ROLES = sorted(rr.RENAME)        # los nombres anteriores (claves de la tabla del renombrado)
 NEW_NAMES = ["anubis", "hector", "heimdall", "hermes", "salomon", "shakespeare", "sherlock", "sindri"]
+OLD_OF = {new: old for old, new in rr.RENAME.items()}   # nombre nuevo -> nombre anterior
+# Hash canonico de hooks/agent_guard.py fijado el 2026-11-27, antes del cambio: el renombrado no lo toca.
+HOOK_SHA256 = "76082df93c06473b4c616e448ab2415ae4a2ab5139be028e6dc1c293db06ef32"
 
 
 class RenameTable(unittest.TestCase):
     """Caso 1."""
 
     def test_case1_eight_pairs(self):
-        self.assertEqual(rr.RENAME, {ANALYST: "heimdall", RESEARCHER: "hermes", DEVELOPER: "sindri",
-                                     QA: "anubis", REVIEWER: "salomon", SECURITY: "hector",
-                                     DEBUGGER: "sherlock", WRITER: "shakespeare"})
+        # Los nombres nuevos son los roles de names.py; los viejos, las claves de la tabla (y names.LEGACY, copia
+        # escrita a mano aparte).
+        self.assertEqual(set(rr.RENAME.values()), {ANALYST, RESEARCHER, DEVELOPER, QA, REVIEWER, SECURITY,
+                                                   DEBUGGER, WRITER})
+        self.assertEqual(rr.RENAME, nm.LEGACY)
         self.assertEqual(len(rr.RENAME), 8)
 
     def test_case1_planner_is_outside_and_names_are_unique(self):
         self.assertNotIn(PLANNER, rr.RENAME)
         self.assertNotIn(PLANNER, rr.RENAME.values())
-        self.assertEqual(sorted(rr.RENAME), OLD_ROLES)
+        self.assertEqual(set(rr.RENAME.values()), set(nm.ROLES) - {PLANNER})
         self.assertEqual(sorted(rr.RENAME.values()), NEW_NAMES)
         self.assertEqual(len(set(rr.RENAME.values())), 8)
+        self.assertEqual(len(set(rr.RENAME)), 8)
 
-    def test_case1_old_names_are_the_live_roles_but_the_planner(self):
-        # Hoy los roles de install.ps1 y agents/ son los viejos: son las claves de la tabla.
-        self.assertEqual(sorted(set(ar.roles()) - {PLANNER}), sorted(rr.RENAME))
+    def test_case1_new_names_are_the_live_roles_and_the_old_ones_are_gone(self):
+        # Tras T7 los roles de install.ps1 y agents/ son los nuevos; ningun nombre viejo es un rol ni un archivo.
+        self.assertEqual(sorted(set(ar.roles()) - {PLANNER}), NEW_NAMES)
         listed = sorted(f[:-3] for f in os.listdir(lr.AGENTS_DIR) if f.endswith(".md"))
-        self.assertEqual(sorted(set(listed) - {PLANNER}), sorted(rr.RENAME))
+        self.assertEqual(sorted(set(listed) - {PLANNER}), NEW_NAMES)
+        self.assertEqual(set(listed) & set(rr.RENAME), set())
+        self.assertEqual(set(ar.roles()) & set(rr.RENAME), set())
 
     def test_case1_names_are_plain_lowercase_without_accents(self):
         # P12: sin tilde (Salomon, Hector): una forma con tilde no es ninguna de las tres formas del reemplazo.
@@ -63,15 +80,17 @@ class RenameTable(unittest.TestCase):
 
 
 class NewNamesAsAliases(unittest.TestCase):
-    """Caso 2: V1 a V4 con las listas actuales de install.ps1."""
+    """Caso 2: V1 a V4 con las listas de install.ps1. Tras T7 la tabla se prueba al reves (P3): cada nombre nuevo
+    es el rol y el nombre viejo, un alias valido (la forma soportada de conservar los nombres viejos)."""
 
     def test_case2_the_whole_table_passes_the_validation(self):
-        self.assertIsNone(ar.validate_table(dict(rr.RENAME)))
+        self.assertIsNone(ar.validate_table(dict(OLD_OF)))
+        self.assertIsNone(ar.validate_table(dict(OLD_OF), bm.managed_files(ar.ROOT)))
 
     def test_case2_each_pair_passes_on_its_own(self):
-        for old, new in rr.RENAME.items():
+        for new, old in OLD_OF.items():
             with self.subTest(new=new):
-                self.assertIsNone(ar.validate_table({old: new}))
+                self.assertIsNone(ar.validate_table({new: old}))
 
     def test_case2_v1_to_v4_one_by_one(self):
         reserved, yaml = ar.reserved(), ar.yaml_words()
@@ -98,49 +117,54 @@ class NewNamesAsAliases(unittest.TestCase):
         self.assertIn("contiene", ar.validate_table({DEVELOPER: "hermes-" + RESEARCHER}))
 
 
-class NoNewNameToday(unittest.TestCase):
-    """Caso 3 (supuesto 4): ningun nombre nuevo aparece hoy, en ninguna capitalizacion ni como subcadena."""
+def old_word_hits(text):
+    """[(linea, nombre)] de los nombres anteriores como palabra (limite de palabra de la enmienda E1, sin distinguir
+    mayusculas) en un texto ASCII o ISO-8859-1. Una subcadena de otra palabra no cuenta."""
+    hits = []
+    for lineno, line in enumerate(text.split("\n"), 1):
+        for name in OLD_ROLES:
+            if re.search(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", line, re.I):
+                hits.append((lineno, name))
+    return hits
+
+
+class NoOldNameLeft(unittest.TestCase):
+    """Caso 3 tras T7 (el reves del supuesto 4): ningun nombre anterior queda como palabra en los once textos
+    gestionados ni en install.ps1 fuera de la linea de $LegacyRoles."""
+
+    def test_case3_no_old_name_in_the_eleven_managed_texts(self):
+        for path, data in rr.repo_texts().items():
+            with self.subTest(path=path):
+                text = data.decode("iso-8859-1")
+                self.assertEqual(old_word_hits(text), [])
+                self.assertEqual(ar.role_hits(text, dict(rr.RENAME)), [])
+
+    def test_case3_install_script_names_the_old_ones_only_in_legacy_roles(self):
+        text = lr.script_text()
+        hits = old_word_hits(text)
+        lines = text.split("\n")
+        self.assertTrue(hits)
+        for lineno, name in hits:
+            self.assertTrue(lines[lineno - 1].startswith("$LegacyRoles = @("), (lineno, name, lines[lineno - 1]))
+        self.assertEqual({name for _l, name in hits}, set(rr.RENAME))
+
+    def test_case3_the_scan_sees_a_mutated_copy_and_ignores_substrings(self):
+        for path, data in rr.repo_texts().items():
+            with self.subTest(path=path):
+                mutated = data.decode("iso-8859-1") + "\n" + OLD_ROLES[0].capitalize() + "\n"
+                self.assertEqual([n for _l, n in old_word_hits(mutated)], [OLD_ROLES[0]])
+        self.assertEqual(old_word_hits("escribe describe reescribe sobrescribe"), [])
+        self.assertEqual(old_word_hits("x%sy %s2" % (OLD_ROLES[0], OLD_ROLES[0])), [])
+        self.assertEqual(old_word_hits("(%s) %s-uno" % (OLD_ROLES[0].upper(), OLD_ROLES[1])),
+                         [(1, OLD_ROLES[0]), (1, OLD_ROLES[1])])
+
+
+class ManagedTexts(unittest.TestCase):
+    """Caso 4: los once textos del repositorio. Antes de T7 era el ensayo en memoria de la transformacion de alias
+    con la tabla del renombrado; tras T7 los textos del repositorio son esa salida (el caso 5 los ata por hash)."""
 
     def setUp(self):
-        self.files = rr.scan_files()
-
-    def test_case3_scan_covers_managed_files_script_tools_and_tests(self):
-        paths = set(self.files)
-        for rel in ("agents/%s.md" % PLANNER, "agents/%s.md" % DEVELOPER, "rules/agentes.md", "hooks/agent_guard.py",
-                    "docs/agentes.md", "install.ps1", "tools/build_manifest.py", "tools/usage_report.py",
-                    "tests/test_aliases.py", "tests/aliases_ref.py"):
-            self.assertIn(rel, paths)
-        self.assertEqual([p for p in paths if p in rr.OWN_FILES], [])
-        self.assertEqual([p for p in paths if "__pycache__" in p or p.endswith(".pyc")], [])
-        self.assertGreaterEqual(len(paths), 34)
-
-    def test_case3_no_new_name_today(self):
-        self.assertEqual(rr.new_name_hits(self.files), [])
-
-    def test_case3_adding_hermes_to_a_managed_text_fails(self):
-        # Mutacion sobre una copia en memoria: nada se escribe en el repositorio.
-        for rel in ("rules/agentes.md", "docs/agentes.md", "agents/%s.md" % DEVELOPER):
-            with self.subTest(rel=rel):
-                mutated = dict(self.files)
-                mutated[rel] = mutated[rel] + b"\nHermes\n"
-                self.assertEqual(rr.new_name_hits(mutated), [(rel, "hermes")])
-                self.assertEqual(rr.new_name_hits(self.files), [])
-
-    def test_case3_detects_any_capitalization_and_substrings(self):
-        for text in (b"hermes", b"Hermes", b"HERMES", b"hErMeS", b"xhermesx", b"ahectorb", b"_SINDRI_"):
-            with self.subTest(text=text):
-                self.assertTrue(rr.new_name_hits({"x.txt": text}))
-        self.assertEqual(rr.new_name_hits({"x.txt": b"escribe describe hermano hera"}), [])
-
-
-class DryRunInMemory(unittest.TestCase):
-    """Caso 4: la transformacion de alias de la Fase 4 con la tabla del renombrado, sin escribir nada."""
-
-    def setUp(self):
-        self.expected = rr.expected_texts()
-
-    def sources(self):
-        return {"agents/%s.md" % r: ar.repo_text("agents/%s.md" % r) for r in ar.roles()}
+        self.expected = rr.repo_texts()
 
     def test_case4_eleven_texts_with_the_new_paths_as_keys(self):
         self.assertEqual(len(self.expected), 11)
@@ -153,10 +177,10 @@ class DryRunInMemory(unittest.TestCase):
                 self.assertNotIn(b"\r", data)
 
     def test_case4_the_table_is_valid_and_the_inputs_are_untouched(self):
-        # V8: ningun nombre nuevo coincide con una ruta del manifiesto actual.
-        self.assertIsNone(ar.validate_table(dict(rr.RENAME), bm.managed_files(ar.ROOT)))
+        # V8: ningun nombre viejo, usado como alias, coincide con una ruta del manifiesto actual.
+        self.assertIsNone(ar.validate_table(dict(OLD_OF), bm.managed_files(ar.ROOT)))
         before = {rel: ar.repo_text(rel) for rel in ar.text_files()}
-        rr.expected_texts()
+        rr.repo_texts()
         self.assertEqual({rel: ar.repo_text(rel) for rel in ar.text_files()}, before)
 
     def test_case4_no_unclassified_word_and_no_old_name_left(self):
@@ -164,23 +188,21 @@ class DryRunInMemory(unittest.TestCase):
             with self.subTest(path=path):
                 text = data.decode("iso-8859-1")
                 counts, other = ar.inventory(text)
-                self.assertEqual(other, [], "palabra con un nombre viejo que no es ninguna de las tres formas")
-                self.assertEqual({r: v for r, v in counts.items() if any(v) and r != PLANNER}, {},
-                                 "queda un nombre viejo como palabra")
-                self.assertEqual(ar.role_hits(text, dict(rr.RENAME)), [])
+                self.assertEqual(other, [], "palabra con un nombre de rol que no es ninguna de las tres formas")
+                self.assertEqual(ar.role_hits(text, dict(rr.RENAME)), [], "queda un nombre viejo como palabra")
+                self.assertEqual(old_word_hits(text), [])
                 _new_counts, new_other = rr.word_counts(text, NEW_NAMES)
                 self.assertEqual(new_other, [], "palabra con un nombre nuevo que no es ninguna de las tres formas")
 
     def test_case4_counts_are_preserved_one_to_one(self):
-        # La transformacion es uno a uno: los recuentos de INVENTORY pasan al nombre nuevo, forma a forma.
-        for old_path, counts in ta.INVENTORY.items():
-            new_path = rr.new_path(old_path)
-            with self.subTest(old=old_path, new=new_path):
-                text = self.expected[new_path].decode("iso-8859-1")
+        # La transformacion fue uno a uno: los recuentos de INVENTORY (conservados desde antes del cambio) son los de
+        # los nombres nuevos en cada texto, forma a forma, contados aparte con rr.word_counts.
+        for path, counts in ta.INVENTORY.items():
+            with self.subTest(path=path):
+                text = self.expected[path].decode("iso-8859-1")
                 new_counts, other = rr.word_counts(text, NEW_NAMES + [PLANNER])
                 self.assertEqual(other, [])
-                want = {rr.RENAME.get(role, role): v for role, v in counts.items()}
-                self.assertEqual({n: v for n, v in new_counts.items() if any(v)}, want)
+                self.assertEqual({n: v for n, v in new_counts.items() if any(v)}, counts)
 
     def test_case4_substring_count_equals_form_count(self):
         # Ningun nombre nuevo es subcadena de otra palabra: cada aparicion (sin distinguir mayusculas) es una forma.
@@ -206,44 +228,33 @@ class DryRunInMemory(unittest.TestCase):
                 self.assertEqual(rr.foreign_letter_hits(data.decode("utf-8")), [])
 
     def test_case4_foreign_letter_check_sees_letters_and_combining_marks(self):
-        for text in ("hermes\u0301", "\u0101hermes", "sindri\u0100", "x\u0301anubis"):
+        for text in ("hermeś", "āhermes", "sindriĀ", "x́anubis"):
             with self.subTest(text=text):
                 self.assertTrue(rr.foreign_letter_hits(text))
-        for text in ("hermes\u00e9", "\u00e9hermes", "hermes, anubis", "hermes"):
+        for text in ("hermesé", "éhermes", "hermes, anubis", "hermes"):
             with self.subTest(text=text):
                 self.assertEqual(rr.foreign_letter_hits(text), [])
 
-    def test_case4_only_name_description_and_body_change_and_hooks_stay(self):
-        for old in ar.roles():
-            new = rr.RENAME.get(old, old)
-            with self.subTest(old=old):
-                src = ar.repo_text("agents/%s.md" % old).split("\n")
-                out = self.expected["agents/%s.md" % new].decode("iso-8859-1").split("\n")
-                close = src.index("---", 1)
-                self.assertEqual(len(out), len(src))
-                self.assertEqual(out.index("---", 1), close)
-                self.assertEqual([l for l in out[1:close] if l.startswith("name:")], ["name: " + new])
-                for i, (a, b) in enumerate(zip(src, out)):
-                    if a == b:
-                        continue
-                    if 0 < i < close:
-                        self.assertTrue(a.startswith(("name:", "description:")), "cambio en el frontmatter: %r" % a)
-                    else:
-                        self.assertTrue(ar.role_hits(a, dict(rr.RENAME)), "cambio sin nombre viejo: %r" % a)
-                if "hooks:" in src:
-                    h = src.index("hooks:")
-                    self.assertEqual(out[h:close], src[h:close])
+    def test_case4_the_name_line_matches_the_file_and_the_frontmatter_closes(self):
+        for role in ar.roles():
+            with self.subTest(role=role):
+                lines = self.expected["agents/%s.md" % role].decode("iso-8859-1").split("\n")
+                self.assertEqual(lines[0], "---")
+                close = lines.index("---", 1)
+                self.assertEqual([l for l in lines[1:close] if l.startswith("name:")], ["name: " + role])
+                self.assertEqual(len([l for l in lines[1:close] if l.startswith("description:")]), 1)
 
-    def test_case4_the_old_path_is_not_a_key_and_the_new_one_holds_the_transformed_agent(self):
-        # Solo la clave de ruta es nueva: el agente de cada rol viejo vive bajo la ruta del nombre nuevo.
+    def test_case4_the_old_paths_are_not_keys_and_do_not_exist(self):
         for old, new in rr.RENAME.items():
             with self.subTest(old=old):
                 self.assertNotIn("agents/%s.md" % old, self.expected)
+                self.assertFalse(os.path.exists(os.path.join(ar.ROOT, "agents", old + ".md")))
                 self.assertIn(b"\nname: " + new.encode("ascii") + b"\n", self.expected["agents/%s.md" % new])
 
 
 class BridgeFixture(unittest.TestCase):
-    """Caso 5: prueba puente. Vive de T1 a T7; T8 la retira. Tras T7 los hashes son los del repositorio."""
+    """Caso 5: prueba puente. Vive de T1 a T7; T8 la retira. Antes de T7 el fixture eran los hashes que produciria la
+    transformacion; tras T7 son los hashes de los once textos del repositorio."""
 
     def fixture(self):
         with open(rr.FIXTURE, "rb") as f:
@@ -260,8 +271,13 @@ class BridgeFixture(unittest.TestCase):
                 self.assertRegex(digest, r"^[0-9a-f]{64}\Z")
                 self.assertIsNotNone(bm.ALLOWED.match(path))
 
-    def test_case5_expected_texts_match_the_fixture(self):
-        self.assertEqual(rr.expected_hashes(), self.fixture()["files"])
+    def test_case5_repository_hashes_match_the_fixture(self):
+        self.assertEqual(rr.repo_hashes(), self.fixture()["files"])
+
+    def test_case5_the_manifest_carries_the_fixture_hashes(self):
+        with open(os.path.join(ROOT, "install-manifest.json"), "rb") as f:
+            listed = {e["path"]: e["sha256"] for e in json.loads(f.read().decode("utf-8"))["files"]}
+        self.assertEqual({p: listed[p] for p in self.fixture()["files"]}, self.fixture()["files"])
 
     def test_case5_fixture_is_ascii_with_lf_and_final_newline(self):
         with open(rr.FIXTURE, "rb") as f:
@@ -270,44 +286,31 @@ class BridgeFixture(unittest.TestCase):
         norm = raw.replace(b"\r\n", b"\n")
         self.assertTrue(norm.isascii())
         self.assertTrue(norm.endswith(b"\n"))
-        self.assertEqual(norm, rr.fixture_bytes())
+        self.assertEqual(norm, rr.fixture_bytes(rr.repo_hashes()))
 
     def test_write_refuses_on_an_already_renamed_repository(self):
-        renamed = [PLANNER] + sorted(rr.RENAME.values())
+        # Tras T7 los roles vivos ya son los nuevos: --write se niega con el mensaje fijo y no escribe.
         with tempfile.TemporaryDirectory() as tmp:
             target = os.path.join(tmp, "fixture.json")
-            with mock.patch.object(rr, "FIXTURE", target), mock.patch.object(ar, "roles", lambda: renamed), \
-                    mock.patch.object(sys, "stderr", io.StringIO()) as err:
+            with mock.patch.object(rr, "FIXTURE", target), mock.patch.object(sys, "stderr", io.StringIO()) as err:
                 self.assertEqual(rr.main(["--write"]), 1)
             self.assertFalse(os.path.exists(target))
             self.assertEqual(err.getvalue(), rr.MSG_REFUSED + "\n")
-            with mock.patch.object(rr, "FIXTURE", target), mock.patch.object(sys, "stdout", io.StringIO()):
-                self.assertEqual(rr.main(["--write"]), 0)
-            with open(target, "rb") as f:
-                self.assertEqual(f.read(), rr.fixture_bytes())
             with mock.patch.object(sys, "stdout", io.StringIO()):
                 self.assertEqual(rr.main([]), 2)
 
-    def test_case5_changing_a_pair_changes_the_hashes(self):
+    def test_case5_a_changed_byte_or_name_changes_the_hashes(self):
         fixture = self.fixture()["files"]
-        swapped = dict(rr.RENAME, **{ANALYST: "hermes", RESEARCHER: "heimdall"})
-        self.assertIsNone(ar.validate_table(swapped))
-        got = rr.expected_hashes(table=swapped)
-        self.assertNotEqual(got, fixture)
-        # Una pareja distinta toca sus dos agentes, las reglas y la guia (nombran a ambos).
-        self.assertNotEqual(got["agents/hermes.md"], fixture["agents/hermes.md"])
-        self.assertNotEqual(got["rules/agentes.md"], fixture["rules/agentes.md"])
-        self.assertNotEqual(got["docs/agentes.md"], fixture["docs/agentes.md"])
-        planner_path = "agents/%s.md" % PLANNER
-        self.assertEqual(got[planner_path] == fixture[planner_path], False)  # el planificador nombra al analista
-
-    def test_case5_a_renamed_name_changes_the_hashes(self):
-        other = dict(rr.RENAME, **{DEVELOPER: "sindrix"})
-        self.assertNotEqual(rr.expected_hashes(table=other), self.fixture()["files"])
+        for path, raw in rr.repo_texts().items():
+            with self.subTest(path=path):
+                self.assertNotEqual(bm.canonical_sha256(raw + b" "), fixture[path])
+                self.assertNotEqual(bm.canonical_sha256(raw.replace(b"\n", b"\n ", 1)), fixture[path])
+        swapped = rr.repo_texts()["agents/%s.md" % DEVELOPER].replace(DEVELOPER.encode(), ANALYST.encode())
+        self.assertNotEqual(bm.canonical_sha256(swapped), fixture["agents/%s.md" % DEVELOPER])
 
     def test_case5_hashes_are_canonical_sha256_of_lf_bytes(self):
         data = self.fixture()["files"]
-        for path, raw in rr.expected_texts().items():
+        for path, raw in rr.repo_texts().items():
             with self.subTest(path=path):
                 self.assertEqual(bm.canonical_sha256(raw), data[path])
                 self.assertEqual(bm.canonical_sha256(raw.replace(b"\n", b"\r\n")), data[path])
@@ -316,18 +319,17 @@ class BridgeFixture(unittest.TestCase):
 class AssumptionsFiveToSeven(unittest.TestCase):
     """Caso 6: supuestos 5, 6 y 7 del plan."""
 
-    def test_case6_assumption5_manifest_is_sorted_and_new_order_changes(self):
+    def test_case6_assumption5_manifest_is_sorted_and_the_new_order_holds(self):
         paths = bm.managed_files(ar.ROOT)
         self.assertEqual(paths, sorted(paths))
         with open(os.path.join(ar.ROOT, "install-manifest.json"), "rb") as f:
             listed = [e["path"] for e in json.loads(f.read().decode("utf-8"))["files"]]
         self.assertEqual(listed, sorted(listed))
-        new_paths = sorted(rr.new_path(p) for p in paths)
-        self.assertNotEqual(new_paths, paths)
-        agents = [p for p in new_paths if p.startswith("agents/")]
+        self.assertEqual(listed, paths)
+        agents = [p for p in paths if p.startswith("agents/")]
         self.assertEqual(agents[0], "agents/anubis.md")
-        self.assertEqual(agents, ["agents/%s.md" % n for n in ["anubis", PLANNER] + NEW_NAMES[1:]])
-        self.assertEqual(len(new_paths), 12)
+        self.assertEqual(agents, ["agents/%s.md" % n for n in sorted(NEW_NAMES + [PLANNER])])
+        self.assertEqual(len(paths), 12)
 
     def test_case6_assumption6_read_ps_list_reads_an_empty_list(self):
         for text in ("$LegacyRoles = @()\n", "$LegacyRoles = @()\r\n", "x\n$LegacyRoles = @()\nz\n"):
@@ -352,37 +354,151 @@ class AssumptionsFiveToSeven(unittest.TestCase):
 
 
 class FrozenFrontmatter(unittest.TestCase):
-    """Caso 18, parte previa: hooks:, tools:, model: y color: fijados como datos."""
+    """Caso 18: hooks:, tools:, model: y color: fijados como datos antes del cambio (por nombre anterior)."""
 
-    def test_case18_frozen_data_equals_the_repository_today(self):
+    def frozen_by_new_name(self):
+        return {rr.RENAME.get(old, old): parts for old, parts in rr.frozen_frontmatter().items()}
+
+    def test_case18_frozen_data_equals_the_repository_now(self):
         frozen = rr.frozen_frontmatter()
-        self.assertEqual(sorted(frozen), sorted(ar.roles()))
+        self.assertEqual(sorted(frozen), sorted(set(rr.RENAME) | {PLANNER}))
+        by_new = self.frozen_by_new_name()
+        self.assertEqual(sorted(by_new), sorted(ar.roles()))
         for role in ar.roles():
             with self.subTest(role=role):
-                self.assertEqual(frozen[role], rr.frontmatter_parts(ar.repo_text("agents/%s.md" % role)))
+                self.assertEqual(by_new[role], rr.frontmatter_parts(ar.repo_text("agents/%s.md" % role)))
 
     def test_case18_the_guards_are_as_documented(self):
-        frozen = rr.frozen_frontmatter()
         modes = {role: [l.split("agent_guard.py\" ")[1].rstrip("'") for l in parts["hooks"] if "agent_guard.py" in l]
-                 for role, parts in frozen.items()}
+                 for role, parts in self.frozen_by_new_name().items()}
         self.assertEqual(modes, {PLANNER: [], REVIEWER: ["readonly --allow-temp"], DEBUGGER: ["readonly --allow-temp"],
                                  DEVELOPER: [], ANALYST: [], RESEARCHER: [], WRITER: [],
                                  QA: ["tests-only"], SECURITY: ["readonly --allow-temp"]})
 
-    def test_case18_transformed_texts_keep_the_frozen_lines(self):
-        expected = rr.expected_texts()
-        for role, parts in rr.frozen_frontmatter().items():
-            new = rr.RENAME.get(role, role)
-            with self.subTest(role=role, new=new):
-                got = rr.frontmatter_parts(expected["agents/%s.md" % new].decode("iso-8859-1"))
+    def test_case18_the_repository_texts_keep_the_frozen_lines(self):
+        texts = rr.repo_texts()
+        for role, parts in self.frozen_by_new_name().items():
+            with self.subTest(role=role):
+                got = rr.frontmatter_parts(texts["agents/%s.md" % role].decode("iso-8859-1"))
                 self.assertEqual(got, parts)
 
     def test_case18_a_changed_line_is_detected(self):
-        frozen = rr.frozen_frontmatter()
+        frozen = self.frozen_by_new_name()
         text = ar.repo_text("agents/%s.md" % QA).replace("tests-only", "readonly --allow-temp")
         self.assertNotEqual(rr.frontmatter_parts(text), frozen[QA])
         text = ar.repo_text("agents/%s.md" % DEVELOPER).replace("model: sonnet", "model: opus")
         self.assertNotEqual(rr.frontmatter_parts(text), frozen[DEVELOPER])
+
+    def test_case18_the_hook_script_is_unchanged(self):
+        with open(os.path.join(ROOT, "hooks", "agent_guard.py"), "rb") as f:
+            self.assertEqual(bm.canonical_sha256(f.read()), HOOK_SHA256)
+        with open(os.path.join(ROOT, "install-manifest.json"), "rb") as f:
+            listed = {e["path"]: e["sha256"] for e in json.loads(f.read().decode("utf-8"))["files"]}
+        self.assertEqual(listed["hooks/agent_guard.py"], HOOK_SHA256)
+
+
+# Celdas de la tabla de niveles fijadas antes del cambio (caso 17: las 24 celdas no cambian, solo el nombre de la fila).
+LEVEL_CELLS = {
+    4: {PLANNER: ("opus", "-"), DEVELOPER: ("sonnet", "-"), QA: ("sonnet", "-"), WRITER: ("sonnet", "-"),
+        RESEARCHER: ("sonnet", "-"), ANALYST: ("haiku", "-")},
+    3: {PLANNER: ("opus", "medium"), DEVELOPER: ("sonnet", "-"), QA: ("sonnet", "-"), WRITER: ("sonnet", "medium"),
+        RESEARCHER: ("sonnet", "-"), ANALYST: ("haiku", "-")},
+    2: {PLANNER: ("sonnet", "medium"), DEVELOPER: ("sonnet", "medium"), QA: ("sonnet", "-"),
+        WRITER: ("sonnet", "low"), RESEARCHER: ("sonnet", "medium"), ANALYST: ("haiku", "-")},
+    1: {PLANNER: ("sonnet", "medium"), DEVELOPER: ("sonnet", "low"), QA: ("sonnet", "medium"),
+        WRITER: ("haiku", "medium"), RESEARCHER: ("sonnet", "low"), ANALYST: ("haiku", "-")},
+}
+
+
+class RenamedRepository(unittest.TestCase):
+    """Caso 17: el repositorio con los nombres nuevos es coherente en todas sus tablas."""
+
+    def test_case17_agents_dir_has_the_nine_new_names_and_none_of_the_old(self):
+        listed = sorted(f for f in os.listdir(lr.AGENTS_DIR))
+        self.assertEqual(listed, ["%s.md" % n for n in nm.ROLES])
+        self.assertEqual(len(listed), 9)
+        for old in rr.RENAME:
+            self.assertFalse(os.path.exists(os.path.join(lr.AGENTS_DIR, old + ".md")), old)
+
+    def test_case17_name_line_equals_the_file_name(self):
+        for role in nm.ROLES:
+            with self.subTest(role=role):
+                front = ar.repo_text("agents/%s.md" % role).split("\n---\n")[0].split("\n")
+                self.assertEqual([l for l in front if l.startswith("name:")], ["name: " + role])
+
+    def test_case17_install_lists_equal_the_reference(self):
+        self.assertEqual(lr.read_ps_list("AliasRoles"), nm.ROLES)
+        self.assertEqual(lr.read_ps_list("LevelAgents"), nm.LEVEL_ROLES)
+        rows = lr.read_level_rows()
+        self.assertEqual(len(rows), 24)
+        self.assertEqual({agent for _l, agent, _m, _e in rows}, set(nm.LEVEL_ROLES))
+        self.assertEqual(set(nm.FIXED) & {agent for _l, agent, _m, _e in rows}, set())
+
+    def test_case17_the_24_cells_are_the_ones_from_before_the_change(self):
+        script = lr.read_script_table()
+        readme = lr.read_readme_table()
+        want = {(level, role): cell for level, row in LEVEL_CELLS.items() for role, cell in row.items()}
+        self.assertEqual(len(want), 24)
+        self.assertEqual(script, want)
+        self.assertEqual({k: v for k, v in readme.items() if k[0] != 5}, want)
+        self.assertEqual({agent for level, agent in readme if level == 5} - set(nm.ROLES), set())
+
+    def test_case17_manifest_paths_and_hashes(self):
+        with open(os.path.join(ROOT, "install-manifest.json"), "rb") as f:
+            listed = {e["path"]: e["sha256"] for e in json.loads(f.read().decode("utf-8"))["files"]}
+        self.assertEqual(sorted(listed), sorted(["agents/%s.md" % r for r in nm.ROLES]
+                                                + ["docs/agentes.md", "hooks/agent_guard.py", "rules/agentes.md"]))
+        for path, digest in rr.repo_hashes().items():
+            self.assertEqual(listed[path], digest, path)
+
+    def test_case17_brand_data_and_usage_report_list_the_new_names(self):
+        self.assertEqual(sorted(a[0] for a in AGENTS), nm.ROLES)
+        self.assertEqual(sorted(ur.SYNCLAYER_AGENTS), nm.ROLES)
+
+    def test_case17_the_guards_are_the_same_modes_on_the_same_agents(self):
+        for role in nm.ROLES:
+            with self.subTest(role=role):
+                parts = rr.frontmatter_parts(ar.repo_text("agents/%s.md" % role))
+                found = {l.split("agent_guard.py\" ")[1].rstrip("'") for l in parts["hooks"] if "agent_guard.py" in l}
+                self.assertEqual(found, {nm.GUARDED[role]} if role in nm.GUARDED else set())
+
+
+class LegacyTable(unittest.TestCase):
+    """Caso 20, parte estatica: $LegacyRoles real y la clave vieja."""
+
+    def test_case20_legacy_roles_real_equals_the_reference(self):
+        self.assertEqual(lr.read_ps_list("LegacyRoles"), ["%s|%s" % (o, n) for o, n in rr.RENAME.items()])
+        self.assertEqual(lr.read_ps_list("LegacyRoles"), ["%s|%s" % (o, n) for o, n in nm.LEGACY.items()])
+        self.assertEqual(ar.legacy(), rr.RENAME)
+
+    def test_case20_an_old_key_in_aliases_names_both_roles_and_not_the_value(self):
+        for old, new in rr.RENAME.items():
+            with self.subTest(old=old):
+                reason = ar.validate_table({old: "secreto"})
+                self.assertEqual(reason, "el rol %s ahora se llama %s: cambia la clave en aliases" % (old, new))
+                self.assertNotIn("secreto", reason)
+
+    def test_case20_old_names_as_alias_values_are_valid(self):
+        self.assertIsNone(ar.validate_table({new: old for old, new in rr.RENAME.items()}))
+
+
+class UsageReportNames(unittest.TestCase):
+    """Caso 21: los nueve nuevos y los ocho anteriores se clasifican como SyncLayer (los goldens no cambian)."""
+
+    def test_case21_new_and_old_names_classify_as_synclayer(self):
+        for name in nm.ROLES + OLD_ROLES:
+            with self.subTest(name=name):
+                self.assertEqual(ur.classify_agent(name), (name, "SyncLayer"))
+
+    def test_case21_the_lists_are_closed_and_disjoint(self):
+        self.assertEqual(ur.SYNCLAYER_AGENTS, frozenset(nm.ROLES))
+        self.assertEqual(ur.SYNCLAYER_LEGACY_AGENTS, frozenset(rr.RENAME))
+        self.assertEqual(ur.SYNCLAYER_AGENTS & ur.SYNCLAYER_LEGACY_AGENTS, frozenset())
+
+    def test_case21_other_spellings_stay_unknown(self):
+        for name in ("Heimdall", "SINDRI", "sindri ", "hector\n", "Salomon", "zeta-uno"):
+            with self.subTest(name=name):
+                self.assertEqual(ur.classify_agent(name), ("(otro agente)", "otros"))
 
 
 class NamesModule(unittest.TestCase):
@@ -403,101 +519,149 @@ class NamesModule(unittest.TestCase):
         self.assertEqual(set(nm.LEVEL_ROLES) & set(nm.FIXED), set())
 
     def test_guarded_equals_the_hooks_of_the_agents(self):
+        # Se compara el CONJUNTO de modos de guarda de cada agente, no solo el primero que aparezca.
         modes = {}
         for role in nm.ROLES:
             parts = rr.frontmatter_parts(ar.repo_text("agents/%s.md" % role))
-            found = [l.split("agent_guard.py\" ")[1].rstrip("'") for l in parts["hooks"] if "agent_guard.py" in l]
+            found = {l.split("agent_guard.py\" ")[1].rstrip("'") for l in parts["hooks"] if "agent_guard.py" in l}
             if found:
-                modes[role] = found[0]
-        self.assertEqual(modes, nm.GUARDED)
+                modes[role] = found
+        self.assertEqual(modes, {role: {mode} for role, mode in nm.GUARDED.items()})
 
-    def test_legacy_is_empty_until_the_change(self):
-        self.assertEqual(nm.LEGACY, {})
+    def test_legacy_is_the_rename_table(self):
+        self.assertEqual(nm.LEGACY, rr.RENAME)
+        self.assertEqual(sorted(nm.LEGACY.values()), sorted(set(nm.ROLES) - {PLANNER}))
+        self.assertEqual(set(nm.LEGACY) & set(nm.ROLES), set())
 
 
-# --- caso 7: ningun nombre viejo literal en las pruebas parametrizadas ---
+# --- caso 7: ningun nombre literal en las pruebas parametrizadas ---
 
 INSTALL_FILE = "test_install.py"
 
 PARAMETRIZED = ("test_aliases.py", "aliases_ref.py", "test_levels.py", "levels_ref.py", "test_plans.py",
                 "plans_ref.py", "test_manifest.py", "test_phase5_docs.py", "test_rename.py", "test_brand_agents.py",
                 "test_install.py")
-# Lista cerrada de excepciones: {archivo: [identificadores que se quitan antes de buscar]}. Dos entradas: el
-# identificador del diccionario de palabras de aliases_ref.py (<ROL>_WORDS con el rol del escritor; nombre
-# fijado por el plan, T2 y T4) y su uso desde test_install.py (ar.<ROL>_WORDS). Ningun otro literal de un nombre viejo se permite en la lista; ademas se quitan antes de
-# buscar las palabras espanolas con la subcadena del nombre del escritor.
-ALLOWED_TOKENS = {"aliases_ref.py": [nm.WRITER.upper() + "_WORDS"],
-                  "test_install.py": ["ar." + nm.WRITER.upper() + "_WORDS"]}
+# Se buscan como subcadena, sin distinguir mayusculas: los nombres anteriores (en todos los archivos) y los nombres
+# vigentes (en todos salvo test_rename.py, que los lista a proposito: NEW_NAMES, MUTATED, el caso 17).
+# Lista cerrada de excepciones: identificadores de Python que llevan un nombre anterior dentro. Se quitan antes de
+# buscar SOLO los tokens de tipo identificador (tokenize), no un literal de cadena que diga lo mismo.
+#   - el identificador global de la constante de names.py cuyo nombre en mayusculas es el de un nombre anterior
+#     de la constante del depurador de names.py, en cualquier archivo;
+#   - el identificador del diccionario de palabras de aliases_ref.py (<ROL>_WORDS; nombre fijado por el plan, T2 y
+#     T4) en aliases_ref.py y test_install.py.
+# Ademas se quitan antes de buscar las palabras espanolas con la subcadena de un nombre anterior (escribe...).
+GLOBAL_IDENTIFIERS = sorted(n for n in dir(nm) if n.isupper() and n.lower() in rr.RENAME)
+_WORDS_IDENTIFIERS = sorted(n for n in dir(ar) if any(o in n.lower() for o in rr.RENAME))
+ALLOWED_IDENTIFIERS = {"aliases_ref.py": _WORDS_IDENTIFIERS, "test_install.py": _WORDS_IDENTIFIERS}
 _SPANISH_WORDS = re.compile("escriben|escribe|describe|reescribe|sobrescribe", re.I)
-_CONSTANT_TOKEN = re.compile(r"\b" + nm.DEBUGGER.upper() + r"\b")   # el identificador names.DEBUGGER
 
 
-def old_names():
-    return sorted(set(nm.ROLES) | set(nm.LEGACY))
+def strip_identifiers(text, identifiers):
+    """El texto sin los tokens NAME de Python que sean uno de `identifiers` (reemplazados por espacios del mismo
+    largo). Un literal de cadena o un comentario con el mismo texto se conserva."""
+    lines = text.split("\n")
+    for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+        if tok.type == tokenize.NAME and tok.string in identifiers:
+            row, col = tok.start
+            line = lines[row - 1]
+            lines[row - 1] = line[:col] + " " * len(tok.string) + line[tok.end[1]:]
+    return "\n".join(lines)
 
 
-def old_name_hits(text, old=None):
-    """[(linea, nombre)] de los nombres viejos como subcadena (cualquier capitalizacion). Se quitan antes las
-    palabras espanolas con la subcadena del escritor y el identificador de la constante del depurador."""
-    old = old_names() if old is None else old
-    text = _CONSTANT_TOKEN.sub("", _SPANISH_WORDS.sub("", text))
+def scanned_names(file_name):
+    """Nombres que no pueden aparecer literales en `file_name`: los anteriores y, salvo en test_rename.py, los vigentes."""
+    names = set(rr.RENAME)
+    if file_name != "test_rename.py":
+        names |= set(nm.ROLES)
+    return sorted(names)
+
+
+def name_hits(text, names=None, identifiers=()):
+    """[(linea, nombre)] de los nombres hallados como subcadena (cualquier capitalizacion), tras quitar las palabras
+    espanolas con la subcadena de un nombre anterior y los identificadores indicados."""
+    names = scanned_names("") if names is None else names
+    text = strip_identifiers(_SPANISH_WORDS.sub("", text), identifiers)
     hits = []
     for lineno, line in enumerate(text.split("\n"), 1):
         low = line.lower()
-        hits += [(lineno, n) for n in old if n in low]
+        hits += [(lineno, n) for n in names if n in low]
     return hits
 
 
 class Parametrization(unittest.TestCase):
     """Caso 7: parametrizacion sin cambio de comportamiento."""
 
-    def test_case7_no_old_name_literal_outside_the_closed_list(self):
+    def test_case7_no_name_literal_outside_the_closed_list(self):
         for name in PARAMETRIZED:
             with self.subTest(file=name):
                 with open(os.path.join(HERE, name), "rb") as f:
                     text = f.read().decode("utf-8")
-                for token in ALLOWED_TOKENS.get(name, []):
-                    self.assertIn(token, text)   # la excepcion existe: si deja de usarse, se retira
-                    text = text.replace(token, "")
-                found = [(n, l) for l, n in old_name_hits(text)]
-                self.assertEqual(found, [], "nombre viejo literal en %s" % name)
+                for ident in ALLOWED_IDENTIFIERS.get(name, []):
+                    self.assertIn(ident, text)   # la excepcion existe: si deja de usarse, se retira
+                identifiers = GLOBAL_IDENTIFIERS + ALLOWED_IDENTIFIERS.get(name, [])
+                found = [(n, l) for l, n in name_hits(text, scanned_names(name), identifiers)]
+                self.assertEqual(found, [], "nombre literal en %s" % name)
+
+    def test_case7_the_closed_list_is_what_it_says(self):
+        self.assertEqual(len(GLOBAL_IDENTIFIERS), 1)
+        self.assertEqual(len(_WORDS_IDENTIFIERS), 1)
+        self.assertEqual(GLOBAL_IDENTIFIERS, [OLD_OF[DEBUGGER].upper()])
+        self.assertTrue(set(ALLOWED_IDENTIFIERS) <= set(PARAMETRIZED))
 
     def test_case7_the_scan_detects_literals_and_skips_spanish_words(self):
         old = ["alfa", "delta", "tau"]
-        self.assertEqual(old_name_hits("x\nuna Alfa y DELTA\n", old), [(2, "alfa"), (2, "delta")])
-        self.assertEqual(old_name_hits("alfa_x y xtau", old), [(1, "alfa"), (1, "tau")])
-        self.assertEqual(old_name_hits("escribe describe reescribe sobrescribe Escriben", [WRITER]), [])
-        self.assertEqual(old_name_hits("%s %s" % (WRITER.capitalize(), WRITER.upper()), [WRITER]), [(1, WRITER)])
-        self.assertEqual(old_name_hits(nm.DEBUGGER.upper() + " " + nm.DEBUGGER.upper(), [nm.DEBUGGER]), [])
-        self.assertEqual(old_name_hits(nm.DEBUGGER, [nm.DEBUGGER]), [(1, nm.DEBUGGER)])
+        self.assertEqual(name_hits("x\nuna Alfa y DELTA\n", old), [(2, "alfa"), (2, "delta")])
+        self.assertEqual(name_hits("alfa_x y xtau", old), [(1, "alfa"), (1, "tau")])
+        self.assertEqual(name_hits("escribe describe reescribe sobrescribe Escriben", [OLD_OF[WRITER]]), [])
+        self.assertEqual(name_hits("%s %s" % (OLD_OF[WRITER].capitalize(), OLD_OF[WRITER].upper()), [OLD_OF[WRITER]]),
+                         [(1, OLD_OF[WRITER])])
+
+    def test_case7_only_identifier_tokens_are_removed_not_string_literals(self):
+        # Pendiente 1 de T2: un literal de cadena o un comentario con el texto del identificador si se ve.
+        self.assertEqual(name_hits("x = TAU_W + a.TAU_W", ["tau"], ["TAU_W"]), [])
+        self.assertEqual(name_hits("x = 'TAU_W'", ["tau"], ["TAU_W"]), [(1, "tau")])
+        self.assertEqual(name_hits('x = "tau"  # TAU_W', ["tau"], ["TAU_W"]), [(1, "tau")])
+        self.assertEqual(name_hits("x = 1  # TAU_W", ["tau"], ["TAU_W"]), [(1, "tau")])
+        self.assertEqual(name_hits("x = TAU_W\ny = 'tau'", ["tau"], ["TAU_W"]), [(2, "tau")])
+        self.assertEqual(name_hits("x = TAU_W", ["tau"], []), [(1, "tau")])
 
     def test_case7_the_full_scan_covers_test_install_and_is_not_empty(self):
-        # test_install.py esta en PARAMETRIZED entero (T3 y T4), sin cortes ni excepciones de nombres viejos: se
-        # comprueba que la lista lo incluye y que el texto escaneado trae los extremos del archivo.
+        # test_install.py esta en PARAMETRIZED entero (T3 y T4), sin cortes ni excepciones de nombres: se comprueba
+        # que la lista lo incluye y que el texto escaneado trae los extremos del archivo.
         self.assertIn(INSTALL_FILE, PARAMETRIZED)
         with open(os.path.join(HERE, INSTALL_FILE), "rb") as f:
             text = f.read().decode("utf-8")
         self.assertGreater(text.count(chr(10)), 8000)
-        # sin quitar el token, el escaneo ve contenido real: las unicas lineas con hit son las que traen el token
-        token = ALLOWED_TOKENS[INSTALL_FILE][0]
+        # sin quitar el identificador, el escaneo ve contenido real: las unicas lineas con hit son las que lo traen
+        ident = ALLOWED_IDENTIFIERS[INSTALL_FILE][0]
         lines = text.split(chr(10))
-        expected = sorted(i + 1 for i, l in enumerate(lines) if token in l)
+        expected = sorted(i + 1 for i, l in enumerate(lines) if ident in l or GLOBAL_IDENTIFIERS[0] in l)
         self.assertTrue(expected)
-        self.assertEqual(sorted({ln for ln, _n in old_name_hits(text)}), expected)
+        self.assertEqual(sorted({ln for ln, _n in name_hits(text, scanned_names(INSTALL_FILE))}), expected)
 
-    def test_case7_names_py_and_rename_ref_are_the_only_homes_of_the_names(self):
-        # names.py define las constantes; rename_ref.py guarda la tabla del renombrado (claves = nombres viejos).
-        for name in ("names.py", "rename_ref.py"):
-            with open(os.path.join(HERE, name), "rb") as f:
-                self.assertTrue(old_name_hits(f.read().decode("utf-8")), name)
+    def test_case7_names_py_and_rename_ref_hold_the_names_as_literals(self):
+        # names.py define las constantes (nombres vigentes) y LEGACY (anteriores); rename_ref.py guarda la tabla del
+        # renombrado: son los unicos sitios donde los nombres van escritos.
+        for file_name in ("names.py", "rename_ref.py"):
+            with open(os.path.join(HERE, file_name), "rb") as f:
+                text = f.read().decode("utf-8")
+            self.assertTrue(name_hits(text, sorted(rr.RENAME)), file_name)
+        with open(os.path.join(HERE, "names.py"), "rb") as f:
+            text = f.read().decode("utf-8")
+        self.assertTrue(name_hits(text, sorted(rr.RENAME.values())))
 
 
 # --- caso 8: mutacion de control ---
 
+_CONST_IDENT = GLOBAL_IDENTIFIERS[0]   # el identificador de names.py que coincide con un nombre anterior
 MUTATED = {"PLANNER": "kappa", "ANALYST": "lambda", "RESEARCHER": "sigma", "DEVELOPER": "omega", "QA": "tau",
-           "REVIEWER": "rho", "SECURITY": "phi", "DEBUGGER": "chi", "WRITER": "psi"}
+           "REVIEWER": "rho", "SECURITY": "phi", _CONST_IDENT: "chi", "WRITER": "psi"}
 
 # Pruebas puras (no leen install.ps1, agents/ ni la documentacion): deben pasar con otros nueve nombres.
+# Solo las de test_aliases dependen de los nombres (alias, formas, transformacion). Las de test_levels y test_plans
+# (TableComparison.test_promise_guard..., RealAgentsRender.test_reference_renderer_edge_cases, LeftBoundary y
+# SinglePass) no usan `names`: pasan con cualquier nombre y por eso NO prueban la mutacion; se listan solo para
+# comprobar que los modulos se importan con `names` cambiado (pendiente 3 de T2).
 PURE = {
     "test_aliases": ["WordBoundary", "HighByteBoundary",
                      "ReferenceTransform.test_empty_effective_table_returns_the_canonical_bytes",
@@ -530,8 +694,9 @@ def mutated_names_module():
 
 def run_with_mutated_names(module_name, ids):
     """Importa de nuevo `tests/<module_name>.py` (y aliases_ref y plans_ref) con `names` mutado y corre `ids`
-    (clases o Clase.metodo). Devuelve (resultado, modulo, salida). Restaura sys.modules al terminar."""
+    (clases o Clase.metodo). Devuelve (resultado, modulo, salida). Restaura sys.modules y sys.path al terminar."""
     saved = {key: sys.modules.get(key) for key in _FRESH}
+    saved_path = list(sys.path)
     sys.modules["names"] = mutated_names_module()
     for key in _FRESH[1:]:
         sys.modules.pop(key, None)
@@ -546,6 +711,7 @@ def run_with_mutated_names(module_name, ids):
         result = unittest.TextTestRunner(stream=out, verbosity=0).run(suite)
         return result, mod, out.getvalue()
     finally:
+        sys.path[:] = saved_path
         for key, value in saved.items():
             if value is None:
                 sys.modules.pop(key, None)
@@ -573,7 +739,7 @@ class MutationControl(unittest.TestCase):
         self.assertEqual(mod.LEVEL_ROLES, [MUTATED[k] for k in ("PLANNER", "DEVELOPER", "QA", "WRITER",
                                                                  "RESEARCHER", "ANALYST")])
         _result, mod, _out = run_with_mutated_names("test_levels", PURE["test_levels"][:1])
-        self.assertEqual(mod.FIXED, [MUTATED[k] for k in ("REVIEWER", "SECURITY", "DEBUGGER")])
+        self.assertEqual(mod.FIXED, [MUTATED[k] for k in ("REVIEWER", "SECURITY", _CONST_IDENT)])
 
     def test_case8_control_a_test_that_reads_the_repository_fails(self):
         # Que el control no sea vacuo: una prueba que compara con install.ps1 si falla con los nombres mutados.
@@ -584,12 +750,14 @@ class MutationControl(unittest.TestCase):
         result, _mod, _out = run_with_mutated_names("test_plans", ["RealRepository"])
         self.assertFalse(result.wasSuccessful())
 
-    def test_case8_sys_modules_is_restored(self):
+    def test_case8_sys_modules_and_sys_path_are_restored(self):
         before = {key: sys.modules.get(key) for key in _FRESH}
+        path_before = list(sys.path)
         run_with_mutated_names("test_plans", PURE["test_plans"])
         self.assertIs(sys.modules["names"], nm)
         for key in _FRESH:
             self.assertIs(sys.modules.get(key), before[key])
+        self.assertEqual(sys.path, path_before)
         self.assertEqual(nm.ROLES, sorted(nm.ROLES))
         self.assertNotIn(nm.PLANNER, MUTATED.values())
 

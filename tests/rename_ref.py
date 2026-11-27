@@ -121,9 +121,24 @@ def expected_hashes(table=None, read=None):
     return {path: bm.canonical_sha256(texts[path]) for path in sorted(texts)}
 
 
-def fixture_bytes():
-    """Contenido de tests/rename_expected.json: ASCII, indent=2, LF y salto final."""
-    data = {"schema": 1, "algorithm": "sha256", "eol": "lf", "files": expected_hashes()}
+def repo_texts():
+    """Los once textos gestionados tal como estan en el repositorio (bytes LF), con su ruta como clave. Tras el
+    cambio de T7 son los mismos que produce expected_texts() sobre el repositorio anterior."""
+    paths = ["agents/%s.md" % r for r in ar.roles()] + ["rules/agentes.md", "docs/agentes.md"]
+    return {path: ar.repo_text(path).encode("iso-8859-1") for path in sorted(paths)}
+
+
+def repo_hashes():
+    """{ruta: sha256 canonico} de los once textos del repositorio, ordenado por ruta."""
+    texts = repo_texts()
+    return {path: bm.canonical_sha256(texts[path]) for path in sorted(texts)}
+
+
+def fixture_bytes(hashes=None):
+    """Contenido de tests/rename_expected.json: ASCII, indent=2, LF y salto final. `hashes` (por omision
+    expected_hashes(), solo valido con el repositorio sin renombrar) es el diccionario ruta -> hash."""
+    hashes = expected_hashes() if hashes is None else hashes
+    data = {"schema": 1, "algorithm": "sha256", "eol": "lf", "files": hashes}
     return (json.dumps(data, indent=2, ensure_ascii=True) + "\n").encode("ascii")
 
 

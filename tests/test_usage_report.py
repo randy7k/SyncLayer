@@ -1254,8 +1254,9 @@ class ReaderAgentAndModel(ReaderBase):
         self.assertEqual(sorted(ur.SYNCLAYER_AGENTS), names)
         self.assertEqual(sorted(ur.SYNCLAYER_AGENTS), role_names.ROLES)
 
-    def test_legacy_agent_list_is_a_closed_empty_frozenset(self):
-        # Caso 15: con la lista vacia la clasificacion y los goldens no cambian (los goldens ya los fijan).
+    def test_legacy_agent_list_is_a_closed_frozenset(self):
+        # Casos 15 y 21: la lista son los ocho nombres anteriores (names.LEGACY); los goldens no cambian (los fijan
+        # tal cual: usan nombres anteriores a proposito) y un nombre fuera de las dos listas sigue siendo otro agente.
         self.assertIsInstance(ur.SYNCLAYER_LEGACY_AGENTS, frozenset)
         self.assertEqual(ur.SYNCLAYER_LEGACY_AGENTS, frozenset(role_names.LEGACY))
         self.assertFalse(ur.SYNCLAYER_LEGACY_AGENTS & ur.SYNCLAYER_AGENTS)

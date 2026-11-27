@@ -32,6 +32,7 @@ import build_manifest as bm  # noqa: E402
 import levels_ref as lr  # noqa: E402
 import names as nm  # noqa: E402
 import plans_ref as pr  # noqa: E402
+import rename_ref as rr  # noqa: E402
 
 SCRIPT = os.path.join(ROOT, "install.ps1")
 POWERSHELL = shutil.which("powershell")
@@ -4479,9 +4480,12 @@ class InstallCases:
         for table in tables:
             self.assertIsNotNone(ar.validate_table(table), table)
             self.assert_alias_verdict(table)
-        for table, motivo in ((two_cycle, f"el alias de {nm.DEVELOPER} es el nombre de otro agente de SyncLayer"),
-                              (three_cycle, f"el alias de {nm.DEVELOPER} es el nombre de otro agente de SyncLayer"),
-                              ({nm.DEVELOPER: "dev", nm.WRITER: "dev"}, f"{nm.DEVELOPER} y {nm.WRITER} tienen el mismo alias"),
+        # El primer problema sigue el orden de $AliasRoles (alfabetico, el de nm.ROLES): se calcula, no se copia.
+        first = lambda table: min(table, key=nm.ROLES.index)
+        same_alias = " y ".join(sorted((nm.DEVELOPER, nm.WRITER), key=nm.ROLES.index))
+        for table, motivo in ((two_cycle, f"el alias de {first(two_cycle)} es el nombre de otro agente de SyncLayer"),
+                              (three_cycle, f"el alias de {first(three_cycle)} es el nombre de otro agente de SyncLayer"),
+                              ({nm.DEVELOPER: "dev", nm.WRITER: "dev"}, f"{same_alias} tienen el mismo alias"),
                               ({nm.ANALYST: f"{nm.DEVELOPER}-2"}, f"el alias de {nm.ANALYST} contiene el nombre de un agente de SyncLayer")):
             with self.subTest(table=table):
                 self.assert_config_rejected(self.alias_config(table), motivo, modes=(["-DryRun"], []))
@@ -8552,6 +8556,147 @@ class InstallCases:
         self.assertEqual(found, [])
         self.assertEqual(read(backup, "agents/mapa.md"), b"editado a mano\n")
         self.assertEqual([n for n in os.listdir(self.target) if n.startswith(self.CONFIG) and n != self.CONFIG], [])
+
+    # --- Fase 6, T7: el repositorio real con los nombres nuevos (casos 19 y 20 del plan) ---
+    # Los casos de nueve alias con los niveles 5 y 3 (19) los cubren, ya con los nombres nuevos, test_f4t6_case42 y
+    # test_f5t4_case26. Aqui: instalacion limpia, actualizacion desde una instalacion vieja simulada (tabla de 3.3, fila 1),
+    # la tabla de nombres anteriores como alias y la clave vieja real (20).
+
+    def f6t7_old_tree(self):
+        """Instalacion vieja simulada: los once textos con los nombres anteriores (la tabla del renombrado al reves sobre los
+        textos del repositorio, que la transformacion de alias invierte byte a byte) y el hook; {ruta anterior: bytes LF}."""
+        inverse = {new: old for old, new in rr.RENAME.items()}
+        files = {}
+        for rel, data in rr.repo_texts().items():
+            m = re.fullmatch(r"agents/([a-z0-9_-]+)\.md", rel)
+            if m:
+                role = m.group(1)
+                files["agents/%s.md" % inverse.get(role, role)] = ar.transform_agent(data, role, inverse)
+            else:
+                files[rel] = ar.transform_doc(data, inverse)
+        files["hooks/agent_guard.py"] = read(ROOT, "hooks/agent_guard.py").replace(b"\r\n", b"\n")
+        return files
+
+    def f6t7_install_old(self):
+        """Origen real y destino con la instalacion vieja simulada (archivos y estado esquema 2); devuelve los archivos viejos."""
+        self.f5t4_repo()
+        old = self.f6t7_old_tree()
+        for rel, data in old.items():
+            write(self.target, rel, data)
+        self.write_state(old)
+        return old
+
+    def test_f6t7_case19_clean_install_of_the_real_repository(self):
+        files = self.f5t4_repo()
+        out, err = self.install_ok()
+        self.assertEqual(self.f4t7_by_state(out, "NUEVO"), sorted(files))
+        self.assertEqual(len(files), 12)
+        self.assertFalse([k for k, v in self.states(out).items() if v != "NUEVO"])
+        self.assertEqual(self.f4t7_avisos(err), [])
+        for rel, data in rr.repo_texts().items():
+            self.assertEqual(read(self.target, rel), data, rel)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.target, "agents"))), ["%s.md" % r for r in nm.ROLES])
+        for old in rr.RENAME:
+            self.assertFalse(os.path.exists(os.path.join(self.target, "agents", old + ".md")), old)
+        manifest = {f["path"]: f["sha256"] for f in json.loads(read(ROOT, "install-manifest.json").decode("utf-8"))["files"]}
+        self.assertEqual(bm.canonical_sha256(read(self.target, "hooks/agent_guard.py")), manifest["hooks/agent_guard.py"])
+        self.assertIn("Verificado: 12 archivo(s) escritos coinciden con el manifiesto.", out.splitlines())
+        self.assert_state()
+
+    def test_f6t7_case19_update_over_a_simulated_old_installation(self):
+        self.f6t7_install_old()
+        olds = sorted("agents/%s.md" % o for o in rr.RENAME)
+        news = sorted("agents/%s.md" % n for n in rr.RENAME.values())
+        changed = sorted(["agents/%s.md" % nm.PLANNER, "rules/agentes.md", "docs/agentes.md"])
+        before = {rel: self.f4t7_file(rel) for rel in olds}
+        old_tree = self.f4_tree(self.target)
+        backup = os.path.join(self.tmp, "respaldo")
+        for dry in (True, False):
+            with self.subTest(dry_run=dry):
+                if dry:
+                    code, out, err = self.run_install("-DryRun")
+                    self.assertEqual(code, 0, out + err)
+                    self.assertEqual(self.f4_tree(self.target), old_tree)
+                    self.assertFalse(os.path.exists(backup))
+                else:
+                    out, err = self.install_ok("-BackupDir", backup)
+                self.assertEqual(self.f4t7_by_state(out, "NUEVO"), news)
+                self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), changed)
+                self.assertEqual(self.f4t7_by_state(out, "IGUAL"), ["hooks/agent_guard.py"])
+                self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), olds)
+                self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), [])
+                self.assertIn("HUERFANO=8", out)
+                self.assertNotIn(self.F4T7_NOTE, out)
+                self.assertNotIn("nota:", out)
+                self.assertEqual(sorted(self.f4t7_avisos(err)),
+                                 sorted(self.f4t7_aviso("agents/%s.md" % o, "agents/%s.md" % n)
+                                        for o, n in rr.RENAME.items()))
+                self.assertTrue(err.isascii(), repr(err))
+        # corrida real: los ocho archivos anteriores intactos (bytes y mtime), los nuevos = repositorio, el estado
+        # con las rutas nuevas (esquema 2) y el anterior en el respaldo junto con lo que se sobrescribio
+        for rel in olds:
+            self.assertEqual(self.f4t7_file(rel), before[rel], rel)
+        for rel, data in rr.repo_texts().items():
+            self.assertEqual(read(self.target, rel), data, rel)
+        self.assert_state()
+        self.assertIn(b'"schema": 2', read(self.target, self.STATE))
+        tree = self.f4_tree(backup)
+        self.assertEqual(set(tree), set(changed) | {self.STATE})
+        for rel in changed:
+            self.assertEqual(tree[rel], old_tree[rel], rel)
+
+    def test_f6t7_case19_a_second_run_after_the_update_is_all_igual_and_the_orphans_are_not_listed_again(self):
+        self.f6t7_install_old()
+        self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo2"))
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertEqual(self.f4t7_avisos(err), [])
+        self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), [])
+        self.assertIn("HUERFANO=0", out)
+
+    def test_f6t7_case19_the_old_names_as_aliases_keep_the_old_installation(self):
+        old = self.f6t7_install_old()
+        table = {new: o for o, new in rr.RENAME.items()}
+        self.write_config(json.dumps({"aliases": table}).encode("ascii"))
+        olds = sorted("agents/%s.md" % o for o in rr.RENAME)
+        before = {rel: self.f4t7_file(rel) for rel in old}
+        out, err = self.install_ok("-BackupDir", os.path.join(self.tmp, "respaldo"))
+        # el destino de cada rol es el archivo viejo: no hay huerfanos ni avisos y todo lo intacto sale IGUAL
+        self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), [])
+        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), [])
+        self.assertEqual(self.f4t7_by_state(out, "NUEVO"), [])
+        # con las dos tablas inversas una a otra, lo que se escribiria es lo que ya hay: los doce salen IGUAL
+        self.assertEqual(set(self.states(out).values()), {"IGUAL"})
+        self.assertEqual(len(self.states(out)), 12)
+        self.assertEqual(self.f4t7_avisos(err), [])
+        self.assertEqual(len([l for l in out.splitlines() if l.startswith("Alias:")]), 8)
+        for rel in old:
+            self.assertEqual(self.f4t7_file(rel)[0], before[rel][0], rel)
+        for o in olds:
+            self.assertTrue(os.path.exists(os.path.join(self.target, *o.split("/"))), o)
+        for n in rr.RENAME.values():
+            self.assertFalse(os.path.exists(os.path.join(self.target, "agents", n + ".md")), n)
+        self.assertIn(b'"schema": 3', read(self.target, self.STATE))
+
+    def test_f6t7_case20_an_old_key_in_aliases_is_rejected_with_both_names_and_never_the_value(self):
+        self.f5t4_repo()
+        value = "secreto-qa"
+        first = sorted(rr.RENAME)[0]
+        for old, new in sorted(rr.RENAME.items()):
+            self.write_config(json.dumps({"aliases": {old: value}}).encode("ascii"))
+            before = snapshot(self.target)
+            listing = sorted(os.listdir(self.tmp))
+            for mode in (["-DryRun"], []) if old == first else (["-DryRun"],):
+                with self.subTest(old=old, mode=mode):
+                    code, out, err = self.run_install(*mode)
+                    self.assertEqual(code, 1, out + err)
+                    self.assertIn("error: synclayer-config.json no es valido: el rol %s ahora se llama %s: "
+                                  "cambia la clave en aliases. No se escribio nada." % (old, new), err)
+                    self.assertNotIn(value, err + out)
+                    self.assertNotIn("rol desconocido", err)
+                    self.assertNotIn("Copiado", out)
+                    self.assertEqual(snapshot(self.target), before)
+                    self.assertEqual(sorted(os.listdir(self.tmp)), listing)
 
 
 def f4t6_normalize_paths(text, pairs):

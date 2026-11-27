@@ -6,9 +6,9 @@ Instalado el 2026-11-19 con Claude Code 2.1.310.
 
 | Archivo | Contenido |
 |---|---|
-| `~/.claude/agents/*.md` | Los nueve agentes: `oracle`, `scout`, `atlas`, `forge`, `sentinel`, `auditor`, `shield`, `debugger`, `scribe` |
+| `~/.claude/agents/*.md` | Los nueve agentes: `heimdall`, `hermes`, `atlas`, `sindri`, `anubis`, `salomon`, `hector`, `sherlock`, `shakespeare` |
 | `~/.claude/rules/agentes.md` | Reglas de orquestación. Se cargan en todos los proyectos |
-| `~/.claude/hooks/agent_guard.py` | Hook de seguridad `PreToolUse` que usan `sentinel`, `auditor`, `shield` y `debugger` (ver «Límites conocidos») |
+| `~/.claude/hooks/agent_guard.py` | Hook de seguridad `PreToolUse` que usan `anubis`, `salomon`, `hector` y `sherlock` (ver «Límites conocidos») |
 | `~/.claude/CLAUDE.md` | Instrucciones globales del usuario: deben apuntar a `~/.claude/rules/agentes.md` |
 | `~/.claude/docs/agentes.md` | Esta guía |
 | Copias previas | `install.ps1` respalda lo que sobrescribe en `<Target>-backup-<fecha-hora>` (o en el `-BackupDir` que pases; por defecto `~/.claude-backup-<fecha-hora>`); no toca `CLAUDE.md` ni `settings.json`, así que respaldalos vos si los vas a editar |
@@ -26,15 +26,15 @@ ejecución de planes. Deshabilitarlo es opcional.
 
 | Agente | Rol | Modelo | Herramientas |
 |---|---|---|---|
-| ORACLE | Analista de proyecto, sólo lectura | `haiku` | Read, Grep, Glob |
-| SCOUT | Investigación en fuentes oficiales | `sonnet` | WebSearch, WebFetch, Read, Grep, Glob |
+| HEIMDALL | Analista de proyecto, sólo lectura | `haiku` | Read, Grep, Glob |
+| HERMES | Investigación en fuentes oficiales | `sonnet` | WebSearch, WebFetch, Read, Grep, Glob |
 | ATLAS | Planificador y arquitecto | `claude-fable-5-2` | Read, Grep, Glob, Write |
-| FORGE | Desarrollador | `sonnet` | Read, Edit, Write, Grep, Glob, Bash |
-| SENTINEL | QA | `sonnet` | Read, Grep, Glob, Bash, Edit, Write |
-| AUDITOR | Code review independiente | `opus` | Read, Grep, Glob, Bash |
-| SHIELD | Seguridad | `opus` | Read, Grep, Glob, Bash |
-| DEBUGGER | Causa raíz | `opus` | Read, Grep, Glob, Bash |
-| SCRIBE | Documentación | `sonnet` | Read, Grep, Glob, Edit, Write |
+| SINDRI | Desarrollador | `sonnet` | Read, Edit, Write, Grep, Glob, Bash |
+| ANUBIS | QA | `sonnet` | Read, Grep, Glob, Bash, Edit, Write |
+| SALOMON | Code review independiente | `opus` | Read, Grep, Glob, Bash |
+| HECTOR | Seguridad | `opus` | Read, Grep, Glob, Bash |
+| SHERLOCK | Causa raíz | `opus` | Read, Grep, Glob, Bash |
+| SHAKESPEARE | Documentación | `sonnet` | Read, Grep, Glob, Edit, Write |
 
 La columna de modelo es la del nivel 5 (el repositorio tal cual); con los niveles 1 a 4 el modelo real de seis agentes puede ser otro: ver `synclayer-config.json`.
 
@@ -45,7 +45,7 @@ la lista `tools` de cada uno es explícita.
 
 - **Automático.** Claude delega según el tamaño de la tarea, con las reglas de
   `~/.claude/rules/agentes.md`. Las tareas triviales no usan agentes.
-- **Por nombre.** «Usá a forge para…», o `@agent-forge` en el prompt.
+- **Por nombre.** «Usá a sindri para…», o `@agent-sindri` en el prompt.
 - **Listar.** `/agents` dentro de Claude Code muestra los agentes registrados y de
   dónde viene cada uno.
 
@@ -54,21 +54,21 @@ la lista `tools` de cada uno es explícita.
 | Tamaño | Flujo |
 |---|---|
 | Trivial | Sesión principal, sin agentes |
-| Mediana | ORACLE (si hace falta) → FORGE → AUDITOR |
-| Grande | ORACLE ∥ SCOUT → ATLAS → tu aprobación → por task: FORGE → AUDITOR → SENTINEL → SHIELD (si aplica) → SCRIBE → AUDITOR final |
-| Bug sin causa clara | DEBUGGER → FORGE → SENTINEL |
+| Mediana | HEIMDALL (si hace falta) → SINDRI → SALOMON |
+| Grande | HEIMDALL ∥ HERMES → ATLAS → tu aprobación → por task: SINDRI → SALOMON → ANUBIS → HECTOR (si aplica) → SHAKESPEARE → SALOMON final |
+| Bug sin causa clara | SHERLOCK → SINDRI → ANUBIS |
 
 ### Ejemplo: exportar órdenes a CSV
 
-1. ORACLE devuelve modelos, vistas y tests de órdenes con `archivo:línea`.
+1. HEIMDALL devuelve modelos, vistas y tests de órdenes con `archivo:línea`.
 2. ATLAS escribe `docs/plans/AAAA-MM-DD-export-csv.md` con tres tasks y sus criterios
    de aceptación. Claude te lo presenta y esperás aprobarlo.
-3. FORGE implementa la task 1; AUDITOR revisa su diff; FORGE corrige lo que aparezca.
+3. SINDRI implementa la task 1; SALOMON revisa su diff; SINDRI corrige lo que aparezca.
    Se repite para las tasks 2 y 3.
-4. SENTINEL corre la suite y agrega casos: CSV vacío, acentos, 10 000 filas.
-5. SHIELD revisa permisos de la vista e inyección de fórmulas en el CSV.
-6. SCRIBE actualiza `README.md`, `CLAUDE.md` y `HISTORY.md`.
-7. AUDITOR revisa el cambio completo. Claude cierra con la evidencia de pruebas.
+4. ANUBIS corre la suite y agrega casos: CSV vacío, acentos, 10 000 filas.
+5. HECTOR revisa permisos de la vista e inyección de fórmulas en el CSV.
+6. SHAKESPEARE actualiza `README.md`, `CLAUDE.md` y `HISTORY.md`.
+7. SALOMON revisa el cambio completo. Claude cierra con la evidencia de pruebas.
 
 ## Reporte de uso
 
@@ -96,7 +96,7 @@ python -B tools/usage_report.py global
 
 ## Mantenimiento
 
-**Cambiar el modelo de un agente.** Para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle`,
+**Cambiar el modelo de un agente.** Para `atlas`, `sindri`, `anubis`, `shakespeare`, `hermes` y `heimdall`,
 la vía preferida es el nivel de `synclayer-config.json`: el instalador escribe su `model:` y su
 `effort:` al reinstalar (ver «Niveles» en el `README.md`; el efecto real de `effort:` en Claude Code
 no está verificado en una máquina real). Para cualquier agente también podés editar a mano la línea
@@ -198,15 +198,15 @@ Si un agente no usa el modelo esperado, revisá estas variables primero.
 
 ## Límites conocidos
 
-- **SENTINEL** tiene guarda en `Write`/`Edit`/`NotebookEdit` y en `Bash`. En `Bash` el modo
+- **ANUBIS** tiene guarda en `Write`/`Edit`/`NotebookEdit` y en `Bash`. En `Bash` el modo
   `tests-only` es estricto: acepta sólo comandos simples (sin `$`, backticks, `\`,
   subshells, `[[`, heredocs ni varias líneas) y escribe sólo en rutas de pruebas o
   temporales. Escribe un comando simple por llamada, con rutas literales y `/`. Sigue
   siendo una lista negra: los huecos confirmados están en el `README.md`.
-- AUDITOR, SHIELD y DEBUGGER no son de solo lectura real: corren tests y builds, que
+- SALOMON, HECTOR y SHERLOCK no son de solo lectura real: corren tests y builds, que
   ejecutan código arbitrario, y el hook no limita lecturas (`.env`) ni red.
-- «SENTINEL sólo escribe tests» (en sus herramientas de escritura) y «AUDITOR, SHIELD y
-  DEBUGGER no modifican nada» (en comandos conocidos) los hace cumplir `~/.claude/hooks/agent_guard.py`, enlazado desde el frontmatter
+- «ANUBIS sólo escribe tests» (en sus herramientas de escritura) y «SALOMON, HECTOR y
+  SHERLOCK no modifican nada» (en comandos conocidos) los hace cumplir `~/.claude/hooks/agent_guard.py`, enlazado desde el frontmatter
   (`hooks:`) de esos cuatro agentes. Es una heurística contra escrituras accidentales,
   no un sandbox: un intérprete en una línea (`python -c`, `node -e`, `bash -c`, `eval`,
   `xargs rm`, `cmd /c`, `python -m venv`) todavía puede escribir archivos. Tampoco cubre
@@ -238,7 +238,7 @@ Si un agente no usa el modelo esperado, revisá estas variables primero.
      `path`: usá `dest` para saber qué borrar o restaurar. Los `agents/<alias-anterior>.md` de un nombre
      anterior (`HUERFANO`) ya no figuran en el estado tras reescribirlo: quitalos a mano.
    - Si conservás los agentes, quitá antes el bloque `hooks:` del frontmatter de
-     `sentinel`, `auditor`, `shield` y `debugger`.
+     `anubis`, `salomon`, `hector` y `sherlock`.
 2. Restaurar la copia previa de `CLAUDE.md` sobre `~/.claude/CLAUDE.md`, o quitar de
    él la referencia a `~/.claude/rules/agentes.md`.
 3. Restaurar la copia previa de `settings.json` sobre `~/.claude/settings.json`, si

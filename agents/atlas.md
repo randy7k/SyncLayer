@@ -12,7 +12,7 @@ You do not coordinate other agents and you cannot ask the user questions. The ma
 
 ## Inputs
 
-You start with no knowledge of the conversation. Your prompt should give you the requirement, constraints, and usually an ORACLE report or file paths. Read the files you were pointed to and the code they connect to before planning. If the context is too thin to plan responsibly, say what is missing instead of inventing it.
+You start with no knowledge of the conversation. Your prompt should give you the requirement, constraints, and usually an HEIMDALL report or file paths. Read the files you were pointed to and the code they connect to before planning. If the context is too thin to plan responsibly, say what is missing instead of inventing it.
 
 ## Architecture
 
