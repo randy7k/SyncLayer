@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1803 pruebas, 367 saltadas (365 contra pwsh, que no está instalado, y 2 de
+`__pycache__`. La suite: 1810 pruebas, 367 saltadas (365 contra pwsh, que no está instalado, y 2 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), entre unos 43 y 70 minutos.
 Las pruebas de `install.ps1` corren en esta máquina contra Windows PowerShell 5.1. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
@@ -302,8 +302,10 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     línea. Al editarlos usa `<rol>` y `<alias>` como ejemplo, nunca un nombre de rol. El inventario de
     `tests/test_aliases.py` (`INVENTORY`) falla si aparece una forma nueva o cambia un conteo: actualízalo en el
     mismo cambio. `README.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` no se instalan ni se transforman.
-- Carpeta de planes (Fase 5, plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`; en curso, T1
-  a T4 hechas): `install.ps1` define `$PlansDirDefault`, `$PlansDirPattern` y `$PlansDirMaxLength` junto a
+- Carpeta de planes (contrato con las pruebas): `# Planes:` (una sola línea) y `function ConvertTo-PlansBytes` son
+  anclas de `patch_script` en `tests/test_install.py`; no las renombres ni las muevas sin ajustar las pruebas.
+- Carpeta de planes (Fase 5, plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`; T1
+  a T4 hechas; documentada en `README.md`, sección «Carpeta de planes», y en «Límites del instalador»): `install.ps1` define `$PlansDirDefault`, `$PlansDirPattern` y `$PlansDirMaxLength` junto a
   `$AliasRoles`. La referencia es `tests/plans_ref.py` (contrato: `script_constants` lee esas tres
   constantes de `install.ps1`) y las pruebas `tests/test_plans.py` (casos 1 a 9 y 31, sin PowerShell). El
   inventario falla si aparece una forma `<segmento>/plans/` distinta de `docs/plans/` (un alias válido podría
@@ -346,7 +348,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     al esquema 2) y la configuración nunca escrita ni respaldada. Abiertos a propósito (Minor, aserciones
     opcionales): respaldo del estado y de los otros nueve archivos en K1 a K3 del repo real, aserto redundante
     del esquema 2 y respaldo del estado ilegible con `-Force` final en K5.
-- Idioma del reporte de uso (Fase 5, mismo plan; T5 y T6 hechas): `project` y `global` aceptan `--lang es|en`
+- Idioma del reporte de uso (Fase 5, mismo plan; T5 y T6 hechas, documentado en el README): `project` y `global` aceptan `--lang es|en`
   (por defecto `es`; `inspect` no lo acepta) y `render_project_report` / `render_global_report` el parámetro
   `lang` (por defecto `es`). Detalle en «Reporte de uso», bullets «Catálogo de textos» e «Idioma».
   - `--lang` usa un `type=` propio (`_lang_arg`): lista cerrada `LANGS`, comparación exacta (`EN`, `en-US` y
@@ -375,6 +377,14 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   gestionado y transformado al instalar) usa `<nombre>` y `<alias>`, sin nombres de rol ni el literal de la carpeta
   de planes por defecto; `rules/agentes.md` no cambió. Las secciones nuevas del README no llevan porcentajes ni
   promesas de ahorro (`promise_hits`). Candidatas descartadas con motivo: ver la tabla del README y `HISTORY.md`.
+- Fase 5, T8: añade a `docs/agentes.md` el apartado «Cambiar la carpeta de planes» y la viñeta de `--lang` (archivo
+  gestionado y transformado: usa `<nombre>` y `<alias>`, sin nombres de rol ni el literal de la carpeta por defecto),
+  regenera el manifiesto y agrega el caso 47 a `tests/test_phase5_docs.py` (20 pruebas en el archivo; 1810 pruebas,
+  367 saltadas; suite completa en la corrida de cierre de T8). El README ya documentaba `plans_dir` y `--lang` (T3,
+  T5, T6, T7); T8 añadió límites, estructura y pruebas. El valor de `plans_dir` nunca es una ruta para el instalador.
+  Desde `# Planes:`, `$aliasBytes` lleva alias y carpeta. Las etiquetas del lector en español son identificadores y se
+  traducen en la salida, no en origen. Con carpeta efectiva y con alias reales, el efecto en Claude Code real no está
+  verificado (G1).
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
   cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
@@ -425,7 +435,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (365 en la última corrida de 1803 pruebas y 367 saltadas; las otras 2 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (365 en la última corrida de 1810 pruebas y 367 saltadas; las otras 2 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los

@@ -66,13 +66,15 @@ SyncLayer/
     ├── test_levels.py     Tabla de niveles, marcadores del README, guarda de promesas
     ├── levels_ref.py      Lector de la tabla y del estado esperado (auxiliar de las pruebas)
     ├── test_manifest.py
-    ├── test_phase5_docs.py  Documentación de la Fase 5 (perfiles por proyecto, casos 44 a 46)
+    ├── test_phase5_docs.py  Documentación de la Fase 5 (perfiles por proyecto, carpeta de planes e idioma, casos 44 a 47)
     ├── test_plans.py      Carpeta de planes: reglas y inventario, sin PowerShell
     ├── plans_ref.py       Referencia independiente de la carpeta de planes (auxiliar de las pruebas)
     ├── test_usage_report.py
     ├── test_usage_report_cli.py
     ├── test_usage_report_edges.py
     ├── test_usage_report_perf.py  Equivalencia y tope de trabajo del lector de transcripciones
+    ├── usage_golden_es.json  Salida de referencia del reporte en español (5 escenarios, proyecto y global)
+    ├── usage_golden_en.json  Salida de referencia del reporte en inglés (mismos escenarios)
     └── usage_synth.py     Transcripciones sintéticas para las pruebas del reporte
 ```
 
@@ -1084,7 +1086,9 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
   agente instalado con alias (ver «Alias») sale como `(otro agente)` y deja de atribuirse a SyncLayer. El
   reporte no lee la tabla de alias.
 - **Idioma `en`.** El reporte en inglés es una traducción del español; el español es la referencia. Las
-  claves del pie quedan en español. `argparse` repite en stderr los argumentos desconocidos (también
+  claves del pie quedan en español. Los mensajes de la CLI e `inspect` salen sólo en español. El idioma no se
+  guarda en ningún sitio: cada corrida lo recibe por `--lang`, y un reporte sustituye al del otro idioma en el
+  mismo destino. `argparse` repite en stderr los argumentos desconocidos (también
   `inspect --lang X`; ya ocurría antes de `--lang`). No existe la etiqueta «otra versión» (`lbl_other_version`)
   porque `versions_seen` es numérico. El efecto no se verificó con un `~/.claude` real (queda pendiente una corrida
   real de `global --lang en --stdout`).
@@ -1098,7 +1102,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1803 pruebas, 367 saltadas: 365 contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 2 de la rama POSIX del reporte de uso, que en Windows no corren. Las pruebas del instalador corren contra Windows PowerShell 5.1. Sólo biblioteca estándar, Python 3.12. La suite tarda entre unos 43 y 70 minutos en este equipo: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+1810 pruebas, 367 saltadas: 365 contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 2 de la rama POSIX del reporte de uso, que en Windows no corren. Las pruebas del instalador corren contra Windows PowerShell 5.1. Sólo biblioteca estándar, Python 3.12. La suite tarda entre unos 43 y 70 minutos en este equipo: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
 `tests/` permitido para `sentinel`.
 
@@ -1132,20 +1136,20 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-25** (T7 de la Fase 5 cerrada: 7 de 9 unidades).
+> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-25** (T8 de la Fase 5 cerrada: 8 de 9 unidades).
 
 ### Avance global
 
-**El proyecto completo va en 96%.** Cuenta las cinco fases con el mismo peso: (4 fases al 100 % + la fase 5 al 77,8 %) = (4 × 100 + 100 × 7 ÷ 9) ÷ 5 = 477,8 ÷ 5 = 95,6 % → 96 % (10 cuadros: 9,56 redondea a 10). La fase 5 ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md)) cuenta 7 de 9 unidades (T1, T2, T3, T4, T5, T6, T7) = 77,8 % → 78 % (8 cuadros: 7,78 redondea a 8). Con k unidades cerradas el global es 80 + 20 × k ÷ 9 (con k = 7: 80 + 15,6 = 95,6); sólo llega a 100 % al cerrar las nueve. Siguen pendientes del propietario, fuera del conteo, G1/V1 de las fases 3 y 4 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
+**El proyecto completo va en 98%.** Cuenta las cinco fases con el mismo peso: (4 fases al 100 % + la fase 5 al 88,9 %) = (4 × 100 + 100 × 8 ÷ 9) ÷ 5 = 488,9 ÷ 5 = 97,8 % → 98 % (10 cuadros: 9,78 redondea a 10). La fase 5 ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md)) cuenta 8 de 9 unidades (T1, T2, T3, T4, T5, T6, T7, T8) = 88,9 % → 89 % (9 cuadros: 8,89 redondea a 9). Con k unidades cerradas el global es 80 + 20 × k ÷ 9 (con k = 8: 80 + 17,8 = 97,8); sólo llega a 100 % al cerrar las nueve. Siguen pendientes del propietario, fuera del conteo, G1/V1 de las fases 3 y 4 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **96%** | 5 fases, mismo peso | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **98%** | 5 fases, mismo peso | |
 | **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
 | **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
 | **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Plan aprobado, cerrada en la rama `feat/esfuerzo-configurable` (T1 a T7 y cierre); la compuerta G1 del propietario sigue pendiente (verificación en Claude Code real; no bloquea) ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
 | **4. Nombres de agentes configurables** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Plan aprobado, cerrada en la rama `feat/nombres-configurables` (T1 a T8 y cierre); la compuerta G1/V1 del propietario no resta pero sí condiciona aplicar alias a su `~/.claude` real (V2): el efecto de los alias en Claude Code real no está verificado ([plan](docs/plans/2026-11-22-fase4-nombres-configurables.md), [exploración](docs/plans/2026-11-22-fase4-nombres-exploracion.md)) |
-| **5. Otras configuraciones dinámicas** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **78%** | 7 de 9 | Plan aprobado (2026-11-24, con los valores por defecto de P1 a P14), T1 a T7 cerradas, en la rama `feat/configuraciones-dinamicas`; la compuerta G1 del propietario no bloquea ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md), [backlog](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) |
+| **5. Otras configuraciones dinámicas** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | **89%** | 8 de 9 | Plan aprobado (2026-11-24, con los valores por defecto de P1 a P14), T1 a T8 cerradas, en la rama `feat/configuraciones-dinamicas`; la compuerta G1 del propietario no bloquea ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md), [backlog](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) |
 
 Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unidades planeadas. «Cerrada» = commiteada en la rama de la fase con su suite verde y la revisión de `auditor` sin hallazgos Critical ni Important; la integración a `main` se hace al cerrar la fase. Lo que falta probar en un entorno real (la instalación sobre el `~/.claude` verdadero) se lista aparte y no resta.
 
@@ -1225,7 +1229,7 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 |:--|:--|--:|:--|
 | Carpeta de planes | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 4 de 4 (T1, T2, T3, T4) |
 | Idioma del reporte de uso | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T5, T6) |
-| Documentación y cierre | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | **33%** | 1 de 3 (T7, T8, cierre) |
+| Documentación y cierre | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | **67%** | 2 de 3 (T7, T8, cierre) |
 
 - **Carpeta de planes**
   - ✅ Hecho: T1 tres constantes sin uso en `install.ps1` (`$PlansDirDefault`, `$PlansDirPattern`, `$PlansDirMaxLength`), referencia independiente en Python (`tests/plans_ref.py`, que lee esas constantes del script) y 43 pruebas (`tests/test_plans.py`: casos 1 a 9 y 31, sin PowerShell), con una comprobación de inventario que falla si aparece una forma `<segmento>/plans/` distinta de `docs/plans/`. Nada se aplica todavía: el instalador se comporta igual que antes (10 escenarios comparados byte a byte con la base). Revisada por `auditor` sin Critical.
@@ -1239,7 +1243,8 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
   - ⬜ Falta: nada.
 - **Documentación y cierre**
   - ✅ Hecho: T7 perfiles por proyecto y descartes (solo documentación): sección «Perfiles por proyecto» del README (tabla con la certeza de cada afirmación, «Desactivar un agente» con `permissions.deny` y `Agent(<nombre>)`, «Lo que no se configura y por qué») y ampliación de «Adaptar un agente a un proyecto» en `docs/agentes.md`. Lo no documentado por Claude Code (guarda sin `hooks:`, alias como nombre a igualar, efecto de `permissions.deny`) va marcado como no verificado (G1).
-  - ⬜ Falta: T8 documentación de la carpeta y del idioma; cierre (`sentinel`, `shield` y `auditor` sobre el cambio completo). Fuera del conteo y del propietario: G1 (perfiles, desactivar con `permissions.deny` y carpeta de planes en Claude Code real) y V2 (instalación real con `plans_dir` y una corrida real de `global --lang en --stdout`).
+  - ✅ Hecho también: T8 documentación de la carpeta de planes y del idioma del reporte: `docs/agentes.md` (apartado «Cambiar la carpeta de planes» y viñeta de `--lang`; archivo gestionado, manifiesto regenerado), README (límites del instalador y del reporte, estructura y pruebas), `CLAUDE.md`, `HISTORY.md` y el caso 47 en `tests/test_phase5_docs.py` (20 pruebas en el archivo; suite de 1810 pruebas, 367 saltadas; suite completa en la corrida de cierre de T8). La sección «Carpeta de planes» y `--lang` en la sinopsis y en la tabla ya venían de T3, T5, T6 y T7.
+  - ⬜ Falta: cierre (`sentinel`, `shield` y `auditor` sobre el cambio completo). Fuera del conteo y del propietario: G1 (perfiles, desactivar con `permissions.deny` y carpeta de planes en Claude Code real) y V2 (instalación real con `plans_dir` y una corrida real de `global --lang en --stdout`).
 
 ### Línea de tiempo
 
@@ -1292,8 +1297,9 @@ Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unida
 | 2026-11-24 | T5 de la Fase 5: catálogo de textos del reporte de uso con el español idéntico byte a byte (golden, 20 pruebas nuevas; sin `--lang` todavía); revisada por `auditor` | ✅ |
 | 2026-11-25 | T6 de la Fase 5: idioma `en` del reporte de uso y parámetro `--lang es\|en` en `project` y `global` (sin `--lang`, los bytes no cambian; efecto con un `~/.claude` real sin verificar) | ✅ |
 | 2026-11-25 | T7 de la Fase 5: perfiles por proyecto y candidatas descartadas (solo documentación: README y `docs/agentes.md`; lo no documentado por Claude Code va como no verificado) | ✅ |
-| **Ahora** | **T8 de la Fase 5** (documentación de la carpeta de planes y del idioma del reporte; luego el cierre). **Del propietario:** G1/V1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`, caso P10), V2 (aplicar los alias a su `~/.claude`), G1 de la fase 5 y las comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) | 🔄 |
-| Luego | Cierre de la Fase 5; tarea aparte de `Get-Prop` (P11) | ⬜ |
+| 2026-11-25 | T8 de la Fase 5: documentación de la carpeta de planes y del idioma del reporte de uso (README, `CLAUDE.md`, `HISTORY.md`; solo documentación; efecto en Claude Code real sin verificar) | ✅ |
+| **Ahora** | **Cierre de la Fase 5** (`sentinel`, `shield` y `auditor` sobre el cambio completo). **Del propietario:** G1/V1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`, caso P10), V2 (aplicar los alias a su `~/.claude`), G1 de la fase 5 y las comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) | 🔄 |
+| Luego | Tarea aparte de `Get-Prop` (P11) | ⬜ |
 
 Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
 

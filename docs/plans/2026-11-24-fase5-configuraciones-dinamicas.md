@@ -13,7 +13,10 @@ catálogo `en` (137 claves por idioma), parámetro `lang` de los dos generadores
 golden `tests/usage_golden_en.json`; suite de 1790 pruebas, 367 saltadas. T7 cerrada (2026-11-25): sección «Perfiles
 por proyecto» del `README.md` y ampliación de «Adaptar un agente a un proyecto» en `docs/agentes.md`; 13 pruebas
 nuevas en `tests/test_phase5_docs.py` (casos 44 a 46), manifiesto regenerado, suite de 1803 pruebas, 367 saltadas
-(suite completa: 1803 pruebas, OK, 367 saltadas).
+(suite completa: 1803 pruebas, OK, 367 saltadas). T8 cerrada (2026-11-25): apartado «Cambiar la carpeta de planes» y
+viñeta de `--lang` en `docs/agentes.md` (archivo gestionado), manifiesto regenerado, caso 47 en
+`tests/test_phase5_docs.py` (20 pruebas en el archivo), `README.md`, `CLAUDE.md` e `HISTORY.md`; suite de 1810
+pruebas, 367 saltadas (suite completa en la corrida de cierre de T8).
 
 Fuentes: [`2026-11-19-backlog-configuracion-y-reportes.md`](2026-11-19-backlog-configuracion-y-reportes.md)
 (Fase 5 y «Restricción de diseño: simple»),

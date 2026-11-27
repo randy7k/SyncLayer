@@ -6,7 +6,7 @@
 
 Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
 con los valores por defecto de P1 a P14; rama `feat/configuraciones-dinamicas`. 9 unidades (T1 a T8 y el
-cierre), 7 cerradas (T1 a T7, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar, y
+cierre), 8 cerradas (T1 a T8, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar, y
 el reporte de uso sale en español o en inglés con `--lang`.
 
 - Candidatas que entran: carpeta de planes configurable (clave `plans_dir` de `synclayer-config.json`,
@@ -22,6 +22,21 @@ el reporte de uso sale en español o en inglés con `--lang`.
   editarla a mano o un agente de proyecto. (e) estrictez de la guarda: exige transformar el bloque `hooks:`,
   hoy prohibido, y un modo sin guarda contradice la falla cerrada; no se ofrece nada.
 - Pendiente del propietario, fuera del conteo: G1 de la Fase 5 (no bloquea), V1 y V2.
+
+### Añadido (Fase 5, T8)
+
+- `docs/agentes.md` (archivo gestionado): apartado «Cambiar la carpeta de planes» y viñeta de `--lang` en «Reporte de
+  uso». Cambia el manifiesto, que queda regenerado (`python -B tools/build_manifest.py`).
+- Pruebas: caso 47 en `tests/test_phase5_docs.py` (20 pruebas en el archivo). Suite: 1810 pruebas, 367 saltadas;
+  suite completa en la corrida de cierre de T8.
+- `README.md`: «Estructura» con los dos golden del reporte (`tests/usage_golden_es.json`,
+  `tests/usage_golden_en.json`) y con los casos 44 a 47 de `test_phase5_docs.py`; «Límites del reporte de uso» con que
+  los mensajes de la CLI e `inspect` salen solo en español, que el idioma no se guarda y que un reporte sustituye al
+  del otro idioma; recuentos de «Pruebas». Ya estaban de T3, T5, T6 y T7: sección «Carpeta de planes», límites del
+  instalador de la carpeta, `--lang` en la sinopsis y en la tabla.
+- `CLAUDE.md`: nota de T8 y contrato de anclas de la carpeta de planes. Línea de tiempo del README: Fase 5 con 8 de 9
+  unidades (aritmética en la línea de tiempo del README).
+- G1 y V2 siguen siendo del propietario.
 
 ### Añadido (Fase 5, T7)
 

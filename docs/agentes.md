@@ -87,6 +87,8 @@ python -B tools/usage_report.py global
 - Por defecto cubre los últimos 30 días (UTC); `--since`, `--until` y `--all` cambian la ventana.
 - Compara llamadas, tokens por llamada, duración y herramientas. No mide la calidad del resultado,
   ni el costo real, ni afirma ahorro de tokens.
+- `--lang es|en` elige el idioma del texto fijo del reporte (por defecto `es`); sólo en `project` y
+  `global`. Un reporte en un idioma sustituye al del otro en el mismo destino.
 - Parámetros, códigos de salida y límites: `README.md` del repositorio («Reporte de uso» y
   «Límites del reporte de uso»).
 - Un agente con alias (ver «Cambiar el nombre de un agente») sale como `(otro agente)` y deja de
@@ -133,6 +135,24 @@ repositorio conserva los nombres originales.
   hace en el repositorio y se reinstala.
 - **No verificado.** El efecto de los alias en un Claude Code real (invocar al agente por su alias,
   nombres con `_` o `-`, el caso de dos archivos con el mismo `name:`) lo tiene que comprobar el
+  propietario; no está probado.
+
+**Cambiar la carpeta de planes.** Agregá en `~/.claude/synclayer-config.json` la clave `plans_dir`, una
+cadena con la carpeta nueva: `{ "plans_dir": "<carpeta>" }`. Al reinstalar, el instalador cambia la carpeta
+por defecto de los planes por la tuya en tres textos: el agente que escribe los planes, las reglas y esta
+guía. Sin la clave, o con el valor por defecto, no cambia nada.
+
+- **Formato.** De una a cuatro carpetas separadas por `/`, en minúsculas (`a-z`, `0-9`, `_` y `-`), hasta 32
+  caracteres cada una y 64 en total. Sin `..`, barra inicial o final, espacios, mayúsculas ni nombres de
+  dispositivo de Windows. Ningún trozo, partido por `-`, puede ser el nombre de un agente de SyncLayer. Las
+  reglas completas están en «Carpeta de planes» del `README.md`.
+- **Ensayá primero.** `-DryRun` muestra una línea `Planes: <valor>`. Un valor inválido da exit 1 antes de
+  escribir, también con `-DryRun`.
+- **Quitarla.** Borrá la clave y reinstalá: vuelve la carpeta por defecto. Una edición a mano de esos
+  tres textos sale `MODIFICADO` (exit 3) y hace falta `-Force` (con respaldo).
+- **Qué no hace.** No crea ni mueve la carpeta, ni los planes que ya existan en la anterior: es un cambio de
+  texto. Se combina con el nivel y los alias.
+- **No verificado.** Que el agente use la carpeta nueva en un Claude Code real lo tiene que comprobar el
   propietario; no está probado.
 
 **Cambiar herramientas.** Editá la línea `tools:`. Si se borra la línea, el agente
