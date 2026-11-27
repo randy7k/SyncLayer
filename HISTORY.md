@@ -2,6 +2,16 @@
 
 ## [Sin publicar]
 
+### Planificado (Fase 6)
+
+Plan `docs/plans/2026-11-27-fase6-renombrado-de-agentes.md`, aprobado por el propietario el 2026-11-27 con los
+valores por defecto de P1 a P16; rama prevista `feat/renombrado-de-agentes`, que arranca al cerrar la Fase 5.
+11 unidades (T1 a T10 y el cierre), 0 cerradas. Los nombres de los agentes pasan a ser `heimdall` (oracle),
+`hermes` (scout), `sindri` (forge), `anubis` (sentinel), `salomon` (auditor), `hector` (shield), `sherlock`
+(debugger) y `shakespeare` (scribe); `atlas` no cambia. Los nombres nuevos pasan a ser los roles; los viejos
+quedan en una tabla cerrada para avisar a quien ya los tenía instalados. El efecto en Claude Code real no está
+verificado (G1).
+
 ### Planificado (Fase 5)
 
 Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
