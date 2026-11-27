@@ -16,7 +16,7 @@ verificado (G1).
 
 Plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`, aprobado por el propietario el 2026-11-24
 con los valores por defecto de P1 a P14; rama `feat/configuraciones-dinamicas`. 9 unidades (T1 a T8 y el
-cierre), 8 cerradas (T1 a T8, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar, y
+cierre), 9 cerradas (T1 a T8 y el cierre, ver más abajo); la carpeta de planes se lee, se valida y se aplica al instalar, y
 el reporte de uso sale en español o en inglés con `--lang`.
 
 - Candidatas que entran: carpeta de planes configurable (clave `plans_dir` de `synclayer-config.json`,
@@ -32,6 +32,13 @@ el reporte de uso sale en español o en inglés con `--lang`.
   editarla a mano o un agente de proyecto. (e) estrictez de la guarda: exige transformar el bloque `hooks:`,
   hoy prohibido, y un modo sin guarda contradice la falla cerrada; no se ofrece nada.
 - Pendiente del propietario, fuera del conteo: G1 de la Fase 5 (no bloquea), V1 y V2.
+
+### Cierre de la Fase 5 (2026-11-27)
+
+- `sentinel`: suite completa de 1810 pruebas, 367 saltadas (364 contra pwsh y 3 de la rama POSIX), 0 fallos, 4536 s; los 47 casos del plan con prueba.
+- `shield`: sin Critical, High ni Medium (2 Low informativos: el valor de `plans_dir` entra literal en los prompts; con la clave repetida gana la última).
+- `auditor`: sin Critical ni Important; 3 Minor corregidos (136 claves por idioma, desglose de saltadas, comentarios de `install.ps1`).
+- Línea de tiempo del README: Fase 5 con 9 de 9 unidades (100 %); global 83 % con la Fase 6 en 0 de 11: (5 × 100 + 0) ÷ 6 = 83,33 %.
 
 ### Añadido (Fase 5, T8)
 
