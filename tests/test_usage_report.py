@@ -20,6 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import names as role_names  # noqa: E402  (fuente unica de los nombres de rol)
 import usage_report as ur  # noqa: E402
 import usage_synth as us  # noqa: E402
 
@@ -1251,6 +1252,7 @@ class ReaderAgentAndModel(ReaderBase):
     def test_synclayer_agents_match_agent_files(self):
         names = sorted(f[:-3] for f in os.listdir(os.path.join(ROOT, "agents")) if f.endswith(".md"))
         self.assertEqual(sorted(ur.SYNCLAYER_AGENTS), names)
+        self.assertEqual(sorted(ur.SYNCLAYER_AGENTS), role_names.ROLES)
 
     def test_agent_from_meta_and_default_agent_without_subagent_type(self):
         tree = us.Tree(self.base)

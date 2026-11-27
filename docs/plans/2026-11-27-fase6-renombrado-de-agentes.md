@@ -375,6 +375,14 @@ Reglas para todas:
   (por ejemplo `zeta-uno`), no los ocho nombres nuevos ni los viejos; así el caso 3 no se amplía ni se retira antes
   de T7. Si una prueba necesita de verdad un nombre real, se añade su archivo a la lista cerrada `OWN_FILES` con
   un comentario que lo justifique, y se anota en el cierre de la tarea.
+- Pendientes de T2 para T7 (5 Minor de `auditor`, sin Critical ni Important), en `tests/test_rename.py`: (1) el
+  caso 7 quita `DEBUGGER` y `SCRIBE_WORDS` de todo el texto y no vería un `DEBUGGER` literal en una cadena: usar
+  `tokenize` y quitar sólo los identificadores; (2) tras T7 `OLD_ROLES`, `test_case1_eight_pairs`, `ALLOWED_TOKENS`
+  y `_CONSTANT_TOKEN` salen de los valores de `names` y se rompen: tomar los nombres viejos de las claves de
+  `rr.RENAME` y los identificadores fijos como literales; (3) en el caso 8 las entradas `PURE` de `test_plans` y
+  `test_levels` no usan `names` (vacuas): quitarlas o anotarlo; (4) `run_with_mutated_names` debe restaurar
+  `sys.path`; (5) renombrar `test_case7_names_py_and_rename_ref_are_the_only_homes_of_the_names` y comparar el
+  conjunto de modos de `hooks:` en vez de `found[0]`. T7 no cierra sin resolverlos.
 - Aviso para T10 (hallazgo C de `auditor`): `test_case6_assumption7...` de `tests/test_rename.py` falla si otra
   prueba de `tests/` menciona `.svg`; el caso 24 de T10 necesita leer los SVG, así que T10 ajusta o retira esa
   comprobación en el mismo cambio y lo anota en su cierre.

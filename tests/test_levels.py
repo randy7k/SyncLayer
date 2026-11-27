@@ -22,10 +22,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "tools"))
 
 import build_manifest as bm  # noqa: E402
 import levels_ref as lr  # noqa: E402
+import names  # noqa: E402  (fuente unica de los nombres de rol)
+from names import ANALYST, DEVELOPER, PLANNER, QA, RESEARCHER, REVIEWER, WRITER  # noqa: E402
 
 POWERSHELL = shutil.which("powershell")
-AGENTS = ["atlas", "forge", "sentinel", "scribe", "scout", "oracle"]
-FIXED = ["auditor", "shield", "debugger"]
+AGENTS = list(names.LEVEL_ROLES)
+FIXED = list(names.FIXED)
 MODEL_ORDER = {"haiku": 0, "sonnet": 1, "opus": 2, "claude-fable-5-2": 3}
 EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4, "-": 5}
 OFFICIAL_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
@@ -186,16 +188,16 @@ class ClosedList(unittest.TestCase):
         self.assertEqual(single_assignment_problems(text), [])
         nl = chr(10)
         mutated = text.replace(nl + "function Get-LevelTableProblem",
-                               nl + "$LevelRows[3] = '4|forge|opus|max'" + nl + "function Get-LevelTableProblem")
+                               nl + "$LevelRows[3] = '4|" + DEVELOPER + "|opus|max'" + nl + "function Get-LevelTableProblem")
         self.assertNotEqual(mutated, text)
         self.assertEqual(single_assignment_problems(mutated), ["LevelRows"])
         mutated = text + nl + "$AllowedModels += 'gpt'" + nl
         self.assertEqual(single_assignment_problems(mutated), ["AllowedModels"])
-        mutated = text + nl + "$LevelAgents = @('auditor')" + nl
+        mutated = text + nl + "$LevelAgents = @('" + REVIEWER + "')" + nl
         self.assertEqual(single_assignment_problems(mutated), ["LevelAgents"])
 
     def test_case2_duplicate_row_is_rejected_by_the_reader(self):
-        ps = lr.script_text().replace("'1|oracle|haiku|-'", "'1|scout|sonnet|low'")
+        ps = lr.script_text().replace("'1|%s|haiku|-'" % ANALYST, "'1|%s|sonnet|low'" % RESEARCHER)
         with self.assertRaises(ValueError):
             lr.read_script_table(ps)
 
@@ -250,12 +252,12 @@ class Rules(unittest.TestCase):
         return table
 
     def test_mutation_r2(self):
-        self.assertTrue(r2_violations(self.mutated((3, "forge"), ("sonnet", "low"))))
-        self.assertTrue(r2_violations(self.mutated((4, "atlas"), ("sonnet", "medium"))))
-        self.assertTrue(r2_violations(self.mutated((1, "oracle"), ("sonnet", "-"))))
+        self.assertTrue(r2_violations(self.mutated((3, DEVELOPER), ("sonnet", "low"))))
+        self.assertTrue(r2_violations(self.mutated((4, PLANNER), ("sonnet", "medium"))))
+        self.assertTrue(r2_violations(self.mutated((1, ANALYST), ("sonnet", "-"))))
 
     def test_mutation_r3(self):
-        self.assertTrue(r3_violations(self.mutated((1, "scribe"), ("haiku", "low"))))
+        self.assertTrue(r3_violations(self.mutated((1, WRITER), ("haiku", "low"))))
 
     def test_mutation_r4(self):
         table = dict(self.table)
@@ -264,8 +266,8 @@ class Rules(unittest.TestCase):
         self.assertTrue(r4_violations(table))
 
     def test_mutation_r5(self):
-        self.assertTrue(r5_violations(self.mutated((2, "scout"), ("claude-fable-5-2", "-"))))
-        self.assertTrue(r5_violations(self.mutated((2, "scout"), ("sonnet", "ultra"))))
+        self.assertTrue(r5_violations(self.mutated((2, RESEARCHER), ("claude-fable-5-2", "-"))))
+        self.assertTrue(r5_violations(self.mutated((2, RESEARCHER), ("sonnet", "ultra"))))
 
 
 class RealAgentsRender(unittest.TestCase):
@@ -302,8 +304,8 @@ class RealAgentsRender(unittest.TestCase):
                     self.assertEqual(keep(fm_out), keep(src_lines[1:close_in]))
                     self.assertEqual(out[close_out:], src_lines[close_in:])
 
-    def test_case5_sentinel_hooks_block_is_identical(self):
-        src = self.real_bytes("sentinel")
+    def test_case5_qa_hooks_block_is_identical(self):
+        src = self.real_bytes(QA)
         text = src.decode("iso-8859-1")
         self.assertIn("\nhooks:", text)
 
@@ -312,12 +314,12 @@ class RealAgentsRender(unittest.TestCase):
             return lines[lines.index("hooks:"):lines.index("---", 1)]
 
         for level in (1, 2, 3, 4):
-            model, effort = lr.read_script_table()[(level, "sentinel")]
+            model, effort = lr.read_script_table()[(level, QA)]
             out = lr.render_expected(src, model, effort).decode("iso-8859-1")
             self.assertEqual(hooks(out), hooks(text), level)
 
     def test_case5_effort_is_inserted_right_after_model(self):
-        out = lr.render_expected(self.real_bytes("forge"), "sonnet", "low").decode("iso-8859-1").split("\n")
+        out = lr.render_expected(self.real_bytes(DEVELOPER), "sonnet", "low").decode("iso-8859-1").split("\n")
         i = out.index("model: sonnet")
         self.assertEqual(out[i + 1], "effort: low")
 
@@ -412,7 +414,7 @@ class TableValidationAtStartup(unittest.TestCase):
         cases = {
             "modelo": (row, "'%d|%s|gpt|%s'" % (lv, ag, ef)),
             "esfuerzo": (row, "'%d|%s|%s|ultra'" % (lv, ag, mo)),
-            "agente": (row, "'%d|auditor|%s|%s'" % (lv, mo, ef)),
+            "agente": (row, "'%d|%s|%s|%s'" % (lv, REVIEWER, mo, ef)),
             "nivel": (row, "'5|%s|%s|%s'" % (ag, mo, ef)),
             "repetida": ("'%d|%s|%s|%s'" % rows[1], row),
             "mal formada": (row, "'%d|%s|%s'" % (lv, ag, mo)),

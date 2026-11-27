@@ -12,8 +12,10 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import build_manifest as bm  # noqa: E402
+import names  # noqa: E402  (fuente unica de los nombres de rol)
 
 GIT = shutil.which("git")
 
@@ -23,20 +25,8 @@ GIT_ENV_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECT
 def clean_env():
     return {k: v for k, v in os.environ.items() if k not in GIT_ENV_VARS}
 
-TWELVE = [
-    "agents/atlas.md",
-    "agents/auditor.md",
-    "agents/debugger.md",
-    "agents/forge.md",
-    "agents/oracle.md",
-    "agents/scout.md",
-    "agents/scribe.md",
-    "agents/sentinel.md",
-    "agents/shield.md",
-    "docs/agentes.md",
-    "hooks/agent_guard.py",
-    "rules/agentes.md",
-]
+TWELVE = sorted(["agents/%s.md" % role for role in names.ROLES]
+                + ["docs/agentes.md", "hooks/agent_guard.py", "rules/agentes.md"])
 
 
 RESERVED = ["agents/" + n + ".md" for n in
@@ -105,7 +95,7 @@ class Render(unittest.TestCase):
             "schema": 1,
             "algorithm": "sha256",
             "eol": "lf",
-            "files": [{"path": "agents/atlas.md", "sha256": "0" * 64}],
+            "files": [{"path": "agents/%s.md" % names.PLANNER, "sha256": "0" * 64}],
         }
 
     def test_deterministic_ascii_lf_final_newline(self):

@@ -16,38 +16,46 @@ sys.path.insert(0, HERE)
 
 import aliases_ref as ar  # noqa: E402
 import levels_ref as lr  # noqa: E402
+import names  # noqa: E402  (fuente unica de los nombres de rol)
+from names import (ANALYST, DEBUGGER, DEVELOPER, PLANNER, QA, RESEARCHER, REVIEWER, SECURITY,  # noqa: E402
+                   WRITER)
 
-ROLES = ["atlas", "auditor", "debugger", "forge", "oracle", "scout", "scribe", "sentinel", "shield"]
-LEVEL_ROLES = ["atlas", "forge", "sentinel", "scribe", "scout", "oracle"]
+ROLES = list(names.ROLES)
+LEVEL_ROLES = list(names.LEVEL_ROLES)
 RESERVED = ["explore", "plan", "general-purpose", "claude", "statusline-setup", "claude-code-guide", "web-fetch",
             "fork", "output-style-setup"]
 YAML_WORDS = ["true", "false", "null", "yes", "no", "on", "off", "y", "n"]
 
 # Nueve alias validos a la vez (ninguno contiene un rol como palabra).
-NINE = {"atlas": "mapa", "auditor": "revisor", "debugger": "cazador", "forge": "dev", "oracle": "guia",
-        "scout": "explorador", "scribe": "redactor", "sentinel": "amigo-qa", "shield": "guardia"}
+NINE = {PLANNER: "mapa", REVIEWER: "revisor", DEBUGGER: "cazador", DEVELOPER: "dev", ANALYST: "guia",
+        RESEARCHER: "explorador", WRITER: "redactor", QA: "amigo-qa", SECURITY: "guardia"}
 
 # Caso 3: apariciones de cada rol por archivo, [minuscula, Capitalizada, MAYUSCULAS], con limite de palabra.
-# «escribe», «describe», «reescribe», «sobrescribe» y «escriben» no cuentan. Con la regla de E1 los
-# SENTINEL y AUDITOR de docs/agentes.md pegados a una comilla angular si cuentan (uno mas cada uno). Si la
+# «escribe», «describe», «reescribe», «sobrescribe» y «escriben» no cuentan. Con la regla de E1 las
+# mayusculas del QA y del revisor en docs/agentes.md, pegadas a una comilla angular, si cuentan (una mas cada uno). Si la
 # guia o las reglas ganan o pierden una mencion, esta tabla falla: hay que revisar el cambio y actualizarla.
 INVENTORY = {
-    "agents/atlas.md": {"atlas": [1, 0, 2], "oracle": [0, 0, 1]},
-    "agents/auditor.md": {"auditor": [1, 0, 2], "shield": [0, 0, 1]},
-    "agents/debugger.md": {"debugger": [1, 0, 2], "forge": [0, 0, 1]},
-    "agents/forge.md": {"atlas": [0, 0, 1], "forge": [1, 0, 2]},
-    "agents/oracle.md": {"oracle": [1, 0, 2]},
-    "agents/scout.md": {"scout": [1, 0, 2]},
-    "agents/scribe.md": {"scribe": [1, 0, 2]},
-    "agents/sentinel.md": {"sentinel": [1, 0, 2]},
-    "agents/shield.md": {"shield": [1, 0, 2]},
-    "rules/agentes.md": {"atlas": [5, 0, 0], "auditor": [10, 1, 0], "debugger": [2, 0, 0], "forge": [10, 1, 0],
-                         "oracle": [5, 0, 0], "scout": [3, 0, 0], "scribe": [4, 0, 0], "sentinel": [8, 0, 0],
-                         "shield": [8, 0, 0]},
-    "docs/agentes.md": {"atlas": [2, 0, 3], "auditor": [3, 0, 8], "debugger": [3, 0, 4], "forge": [4, 0, 6],
-                        "oracle": [2, 0, 4], "scout": [2, 0, 2], "scribe": [2, 0, 3], "sentinel": [4, 0, 6],
-                        "shield": [3, 0, 5]},
+    "agents/%s.md" % PLANNER: {PLANNER: [1, 0, 2], ANALYST: [0, 0, 1]},
+    "agents/%s.md" % REVIEWER: {REVIEWER: [1, 0, 2], SECURITY: [0, 0, 1]},
+    "agents/%s.md" % DEBUGGER: {DEBUGGER: [1, 0, 2], DEVELOPER: [0, 0, 1]},
+    "agents/%s.md" % DEVELOPER: {PLANNER: [0, 0, 1], DEVELOPER: [1, 0, 2]},
+    "agents/%s.md" % ANALYST: {ANALYST: [1, 0, 2]},
+    "agents/%s.md" % RESEARCHER: {RESEARCHER: [1, 0, 2]},
+    "agents/%s.md" % WRITER: {WRITER: [1, 0, 2]},
+    "agents/%s.md" % QA: {QA: [1, 0, 2]},
+    "agents/%s.md" % SECURITY: {SECURITY: [1, 0, 2]},
+    "rules/agentes.md": {PLANNER: [5, 0, 0], REVIEWER: [10, 1, 0], DEBUGGER: [2, 0, 0], DEVELOPER: [10, 1, 0],
+                         ANALYST: [5, 0, 0], RESEARCHER: [3, 0, 0], WRITER: [4, 0, 0], QA: [8, 0, 0],
+                         SECURITY: [8, 0, 0]},
+    "docs/agentes.md": {PLANNER: [2, 0, 3], REVIEWER: [3, 0, 8], DEBUGGER: [3, 0, 4], DEVELOPER: [4, 0, 6],
+                        ANALYST: [2, 0, 4], RESEARCHER: [2, 0, 2], WRITER: [2, 0, 3], QA: [4, 0, 6],
+                        SECURITY: [3, 0, 5]},
 }
+
+
+def mixed(word, i):
+    """El nombre con la letra i en mayuscula (una forma que no es ninguna de las tres)."""
+    return word[:i] + word[i].upper() + word[i + 1:]
 
 
 
@@ -119,22 +127,26 @@ class RepositoryInventory(unittest.TestCase):
                 self.assertEqual(other, [], "palabra con un rol que no es ninguna de las tres formas")
                 self.assertEqual({r: v for r, v in counts.items() if any(v)}, INVENTORY[rel])
 
-    def test_case3_scribe_substrings_do_not_count(self):
-        text = "escribe describe reescribe sobrescribe Describe escriben scribe SCRIBE Scribe"
+    def test_case3_writer_substrings_do_not_count(self):
+        text = "escribe describe reescribe sobrescribe Describe escriben %s %s %s" % (
+            WRITER, WRITER.capitalize(), WRITER.upper())
         counts, other = ar.inventory(text)
-        self.assertEqual(counts["scribe"], [1, 1, 1])
+        self.assertEqual(counts[WRITER], [1, 1, 1])
         self.assertEqual(other, [])
 
     def test_case3_inventory_detects_a_new_form(self):
-        counts, other = ar.inventory(u("la sCribe y el forge2 y x_sentinel y Sentinel\u00e9 y \u00f1forge"))
+        counts, other = ar.inventory(u("la %s y el %s2 y x_%s y %s\u00e9 y \u00f1%s" % (
+            mixed(WRITER, 1), DEVELOPER, QA, QA.capitalize(), DEVELOPER)))
         self.assertEqual(sorted(w for _r, w in other),
-                         sorted(["forge2", "sCribe", "x_sentinel", u("Sentinel\u00e9"), u("\u00f1forge")]))
-        self.assertEqual(counts["forge"], [0, 0, 0])
+                         sorted([DEVELOPER + "2", mixed(WRITER, 1), "x_" + QA, u(QA.capitalize() + "\u00e9"),
+                                 u("\u00f1" + DEVELOPER)]))
+        self.assertEqual(counts[DEVELOPER], [0, 0, 0])
 
     def test_case3_roles_next_to_punctuation_count_as_replaceable(self):
         # E1: la comilla angular, la raya y el espacio duro son limite, no letra.
-        counts, other = ar.inventory(u("\u00abSENTINEL s\u00f3lo escribe tests\u00bb y \u2014forge\u00a0"))
-        self.assertEqual((counts["sentinel"], counts["forge"], other), ([0, 0, 1], [1, 0, 0], []))
+        counts, other = ar.inventory(u("\u00ab%s s\u00f3lo escribe tests\u00bb y \u2014%s\u00a0" % (
+            QA.upper(), DEVELOPER)))
+        self.assertEqual((counts[QA], counts[DEVELOPER], other), ([0, 0, 1], [1, 0, 0], []))
 
     def test_case4_one_line_description_helper(self):
         # `front` son las lineas entre los dos --- : si description: es la ultima, la siguiente es el cierre.
@@ -145,13 +157,19 @@ class RepositoryInventory(unittest.TestCase):
 
     def test_case5_combining_marks_next_to_a_role_are_detected(self):
         import unicodedata
-        nfd = unicodedata.normalize("NFD", "forgé SCRIBÉ")  # "forge" y "SCRIBE" con U+0301 tras la e
-        self.assertEqual(nfd, "forge\u0301 SCRIBE\u0301")
-        self.assertEqual(ar.foreign_letter_hits(nfd), [("forge", "\u0301"), ("scribe", "\u0301")])
+        def composed(word):
+            # La palabra con su ultima letra precompuesta con el acento agudo (NFC).
+            return word[:-1] + unicodedata.normalize("NFC", word[-1] + "\u0301")
+
+        # DEVELOPER y WRITER en mayusculas, con U+0301 tras la ultima letra (forma NFD de la precompuesta).
+        nfd = unicodedata.normalize("NFD", composed(DEVELOPER) + " " + composed(WRITER.upper()))
+        self.assertEqual(nfd, DEVELOPER + "\u0301 " + WRITER.upper() + "\u0301")
+        want = sorted([(DEVELOPER, "\u0301"), (WRITER, "\u0301")], key=lambda hit: ar.roles().index(hit[0]))
+        self.assertEqual(ar.foreign_letter_hits(nfd), want)
         # El instalador lo reemplazaria y el acento quedaria sobre la primera letra del alias.
-        self.assertEqual(ar.transform_text(u(nfd), {"forge": "dev"}), u("dev\u0301 SCRIBE\u0301"))
+        self.assertEqual(ar.transform_text(u(nfd), {DEVELOPER: "dev"}), u("dev\u0301 " + WRITER.upper() + "\u0301"))
         # La forma precompuesta (NFC) no es marca combinante: es una letra de U+00C0 a U+00FF, que el limite respeta.
-        self.assertEqual(ar.foreign_letter_hits("forgeé"), [])
+        self.assertEqual(ar.foreign_letter_hits(DEVELOPER + "\u00e9"), [])
 
     def test_case4_real_frontmatter(self):
         for role in ROLES:
@@ -190,24 +208,25 @@ class RepositoryInventory(unittest.TestCase):
         for rel in ar.text_files():
             with self.subTest(file=rel):
                 self.assertEqual(ar.foreign_letter_hits(ar.utf8_text(rel)), [])
-        self.assertEqual(ar.foreign_letter_hits("forge\u0142 y \u0141SCRIBE"),
-                         [("forge", "\u0142"), ("scribe", "\u0141")])
-        self.assertEqual(ar.foreign_letter_hits("forge\u00e9 \u00abSCRIBE\u00bb"), [])
+        want = sorted([(DEVELOPER, "\u0142"), (WRITER, "\u0141")], key=lambda hit: ar.roles().index(hit[0]))
+        self.assertEqual(ar.foreign_letter_hits("%s\u0142 y \u0141%s" % (DEVELOPER, WRITER.upper())), want)
+        self.assertEqual(ar.foreign_letter_hits("%s\u00e9 \u00ab%s\u00bb" % (DEVELOPER, WRITER.upper())), [])
 
-    def test_case5_forge_inside_a_fenced_block_is_detected(self):
+    def test_case5_developer_inside_a_fenced_block_is_detected(self):
         # Mutacion sobre una copia en memoria: nada se escribe en docs/agentes.md.
         text = ar.repo_text("docs/agentes.md")
         self.assertIn("\n```\n", text)
-        mutated = text.replace("\n```\n", "\n```\nforge\n", 1)
+        mutated = text.replace("\n```\n", "\n```\n%s\n" % DEVELOPER, 1)
         self.assertNotEqual(mutated, text)
-        self.assertEqual(ar.role_hits_in_zones(mutated), [("forge", "forge")])
+        self.assertEqual(ar.role_hits_in_zones(mutated), [(DEVELOPER, DEVELOPER)])
 
     def test_case5_link_targets_and_urls_are_detected(self):
-        self.assertTrue(ar.role_hits_in_zones("ver [guia](agents/forge.md) aqui"))
-        self.assertTrue(ar.role_hits_in_zones("[x]: docs/Sentinel.md\n"))
-        self.assertTrue(ar.role_hits_in_zones("https://ejemplo.org/atlas/x"))
-        self.assertTrue(ar.role_hits_in_zones("~~~\nSHIELD\n~~~\n"))
-        self.assertEqual(ar.role_hits_in_zones("usa `forge` y FORGE en prosa, [forge](https://ejemplo.org/x)"), [])
+        self.assertTrue(ar.role_hits_in_zones("ver [guia](agents/%s.md) aqui" % DEVELOPER))
+        self.assertTrue(ar.role_hits_in_zones("[x]: docs/%s.md\n" % QA.capitalize()))
+        self.assertTrue(ar.role_hits_in_zones("https://ejemplo.org/%s/x" % PLANNER))
+        self.assertTrue(ar.role_hits_in_zones("~~~\n%s\n~~~\n" % SECURITY.upper()))
+        self.assertEqual(ar.role_hits_in_zones("usa `%s` y %s en prosa, [%s](https://ejemplo.org/x)" % (
+            DEVELOPER, DEVELOPER.upper(), DEVELOPER)), [])
 
 
 class ReferenceTransform(unittest.TestCase):
@@ -262,68 +281,72 @@ class ReferenceTransform(unittest.TestCase):
                     self.assertEqual(first_alias, first_level)
 
     def test_empty_effective_table_returns_the_canonical_bytes(self):
-        raw = b"---\r\nname: forge\r\ndescription: x\r\n---\r\ncuerpo forge\r\n"
-        for table in ({}, {"forge": "forge"}):
-            self.assertEqual(ar.transform_agent(raw, "forge", table), raw.replace(b"\r\n", b"\n"))
+        dev = DEVELOPER.encode("ascii")
+        raw = b"---\r\nname: " + dev + b"\r\ndescription: x\r\n---\r\ncuerpo " + dev + b"\r\n"
+        for table in ({}, {DEVELOPER: DEVELOPER}):
+            self.assertEqual(ar.transform_agent(raw, DEVELOPER, table), raw.replace(b"\r\n", b"\n"))
             self.assertEqual(ar.transform_doc(raw, table), raw.replace(b"\r\n", b"\n"))
 
     def test_agent_name_description_and_cross_references(self):
-        src = agent_source("forge", description="FORGE implements the ATLAS plan",
-                           body="You are FORGE. Ask scout; agents/forge.md y @agent-forge. Forge (Sonnet): ok\n")
-        out = ar.transform_agent(src, "forge", {"forge": "dev", "atlas": "mapa"}).decode("iso-8859-1")
+        src = agent_source(DEVELOPER, description="%s implements the %s plan" % (DEVELOPER.upper(), PLANNER.upper()),
+                           body="You are %s. Ask %s; agents/%s.md y @agent-%s. %s (Sonnet): ok\n" % (
+                               DEVELOPER.upper(), RESEARCHER, DEVELOPER, DEVELOPER, DEVELOPER.capitalize()))
+        out = ar.transform_agent(src, DEVELOPER, {DEVELOPER: "dev", PLANNER: "mapa"}).decode("iso-8859-1")
         self.assertIn("\nname: dev\n", out)
         self.assertIn("description: DEV implements the MAPA plan\n", out)
-        self.assertIn("You are DEV. Ask scout; agents/dev.md y @agent-dev. Dev (Sonnet): ok", out)
+        self.assertIn("You are DEV. Ask %s; agents/dev.md y @agent-dev. Dev (Sonnet): ok" % RESEARCHER, out)
         # Sin alias propio: name: intacto, el cuerpo cambia solo donde nombra al otro.
-        out = ar.transform_agent(src, "forge", {"atlas": "mapa"}).decode("iso-8859-1")
-        self.assertIn("\nname: forge\n", out)
-        self.assertIn("You are FORGE.", out)
+        out = ar.transform_agent(src, DEVELOPER, {PLANNER: "mapa"}).decode("iso-8859-1")
+        self.assertIn("\nname: %s\n" % DEVELOPER, out)
+        self.assertIn("You are %s." % DEVELOPER.upper(), out)
         self.assertIn("MAPA plan", out)
         self.assertNotIn("DEV", out)
 
     def test_body_name_line_is_body(self):
-        src = agent_source("forge", body="name: forge\n")
-        out = ar.transform_agent(src, "forge", {"forge": "dev"}).decode("iso-8859-1")
+        src = agent_source(DEVELOPER, body="name: %s\n" % DEVELOPER)
+        out = ar.transform_agent(src, DEVELOPER, {DEVELOPER: "dev"}).decode("iso-8859-1")
         self.assertTrue(out.endswith("---\nname: dev\n"), out)
 
     def test_defective_frontmatter_is_rejected(self):
-        table = {"forge": "dev"}
-        good = agent_source("forge")
-        ar.transform_agent(good, "forge", table)
+        table = {DEVELOPER: "dev"}
+        good = agent_source(DEVELOPER)
+        ar.transform_agent(good, DEVELOPER, table)
         text = good.decode("iso-8859-1")
+        name_line = "name: %s\n" % DEVELOPER
         bad = {
-            "sin name": text.replace("name: forge\n", ""),
-            "name duplicado": text.replace("name: forge\n", "name: forge\nname: forge\n"),
-            "name con otro valor": text.replace("name: forge\n", "name: otro\n"),
+            "sin name": text.replace(name_line, ""),
+            "name duplicado": text.replace(name_line, name_line + name_line),
+            "name con otro valor": text.replace(name_line, "name: otro\n"),
             "description multilinea": text.replace("description: descripcion de prueba\n",
                                                    "description: descripcion\n  sigue aqui\n"),
             "sin description": text.replace("description: descripcion de prueba\n", ""),
             "description duplicada": text.replace("tools:", "description: otra\ntools:"),
             "description con indicador": text.replace("description: descripcion", "description: *descripcion"),
-            "rol en tools": text.replace("tools: Read, Grep", "tools: Agent(forge), Read"),
-            "rol en hooks": text.replace("tools: Read, Grep", "tools: Read\nhooks:\n  x: forge"),
+            "rol en tools": text.replace("tools: Read, Grep", "tools: Agent(%s), Read" % DEVELOPER),
+            "rol en hooks": text.replace("tools: Read, Grep", "tools: Read\nhooks:\n  x: %s" % DEVELOPER),
             "sin cierre": text.rsplit("---", 1)[0],
             "sin apertura": text[4:],
         }
         for label, data in bad.items():
             with self.subTest(label):
                 with self.assertRaises(ValueError):
-                    ar.transform_agent(data.encode("iso-8859-1"), "forge", table)
+                    ar.transform_agent(data.encode("iso-8859-1"), DEVELOPER, table)
 
     def test_crlf_and_high_bytes(self):
-        lf = agent_source("forge", body="Ca\xf1on \xe2\x80\x94 FORGE y \xc2\xabFORGE\n")
+        lf = agent_source(DEVELOPER, body="Ca\xf1on \xe2\x80\x94 %s y \xc2\xab%s\n" % (DEVELOPER.upper(), DEVELOPER.upper()))
         crlf = lf.replace(b"\n", b"\r\n")
-        a = ar.transform_agent(lf, "forge", {"forge": "dev"})
-        self.assertEqual(ar.transform_agent(crlf, "forge", {"forge": "dev"}), a)
+        a = ar.transform_agent(lf, DEVELOPER, {DEVELOPER: "dev"})
+        self.assertEqual(ar.transform_agent(crlf, DEVELOPER, {DEVELOPER: "dev"}), a)
         # Pegado a la comilla angular un nombre si cambia (E1); la raya tambien es limite.
         self.assertIn(b"\xc2\xabDEV", a)
         self.assertIn(b"\xe2\x80\x94 DEV y", a)
 
     def test_state_for3(self):
-        manifest = {"files": [{"path": "agents/sentinel.md", "sha256": "a" * 64},
+        qa_path = "agents/%s.md" % QA
+        manifest = {"files": [{"path": qa_path, "sha256": "a" * 64},
                               {"path": "rules/agentes.md", "sha256": "b" * 64}]}
-        out = ar.state_for3(manifest, {"agents/sentinel.md": "c" * 64}, 3,
-                            {"agents/sentinel.md": "agents/amigo-qa.md"})
+        out = ar.state_for3(manifest, {qa_path: "c" * 64}, 3,
+                            {qa_path: "agents/amigo-qa.md"})
         import json
         obj = json.loads(out)
         self.assertEqual(list(obj), ["schema", "algorithm", "eol", "files"])
@@ -336,9 +359,9 @@ class ReferenceTransform(unittest.TestCase):
         self.assertEqual(out, (json.dumps(obj, indent=2, ensure_ascii=True) + "\n").encode("ascii"))
 
     def test_dest_for(self):
-        self.assertEqual(ar.dest_for("agents/sentinel.md", {"sentinel": "amigo-qa"}), "agents/amigo-qa.md")
-        self.assertEqual(ar.dest_for("agents/forge.md", {"sentinel": "amigo-qa"}), "agents/forge.md")
-        self.assertEqual(ar.dest_for("agents/forge.md", {"forge": "forge"}), "agents/forge.md")
+        self.assertEqual(ar.dest_for("agents/%s.md" % QA, {QA: "amigo-qa"}), "agents/amigo-qa.md")
+        self.assertEqual(ar.dest_for("agents/%s.md" % DEVELOPER, {QA: "amigo-qa"}), "agents/%s.md" % DEVELOPER)
+        self.assertEqual(ar.dest_for("agents/%s.md" % DEVELOPER, {DEVELOPER: DEVELOPER}), "agents/%s.md" % DEVELOPER)
         self.assertEqual(ar.dest_for("rules/agentes.md", NINE), "rules/agentes.md")
         self.assertEqual(ar.dest_for("hooks/agent_guard.py", NINE), "hooks/agent_guard.py")
 
@@ -347,85 +370,99 @@ class WordBoundary(unittest.TestCase):
     """Formas del alias, limite de palabra y una sola pasada."""
 
     def test_forms_are_ordinal_and_distinct(self):
-        self.assertEqual(ar.forms({"forge": "dev"}), {"forge": "dev", "Forge": "Dev", "FORGE": "DEV"})
-        self.assertEqual(ar.forms({"sentinel": "amigo-qa"}),
-                         {"sentinel": "amigo-qa", "Sentinel": "Amigo-qa", "SENTINEL": "AMIGO-QA"})
-        self.assertEqual(ar.forms({"forge": "forge"}), {})
+        D, Dc, DU = DEVELOPER, DEVELOPER.capitalize(), DEVELOPER.upper()
+        self.assertEqual(ar.forms({D: "dev"}), {D: "dev", Dc: "Dev", DU: "DEV"})
+        self.assertEqual(ar.forms({QA: "amigo-qa"}),
+                         {QA: "amigo-qa", QA.capitalize(): "Amigo-qa", QA.upper(): "AMIGO-QA"})
+        self.assertEqual(ar.forms({D: D}), {})
 
     def test_four_forms_of_the_name(self):
-        t = {"forge": "dev"}
-        self.assertEqual(ar.transform_text("`forge` Forge (Sonnet): FORGE @agent-forge agents/forge.md", t),
+        D, Dc, DU = DEVELOPER, DEVELOPER.capitalize(), DEVELOPER.upper()
+        t = {D: "dev"}
+        self.assertEqual(ar.transform_text("`%s` %s (Sonnet): %s @agent-%s agents/%s.md" % (D, Dc, DU, D, D), t),
                          "`dev` Dev (Sonnet): DEV @agent-dev agents/dev.md")
-        t = {"sentinel": "amigo-qa"}
-        self.assertEqual(ar.transform_text("@agent-sentinel Sentinel SENTINEL", t),
+        t = {QA: "amigo-qa"}
+        self.assertEqual(ar.transform_text("@agent-%s %s %s" % (QA, QA.capitalize(), QA.upper()), t),
                          "@agent-amigo-qa Amigo-qa AMIGO-QA")
 
-    def test_scribe_substrings_are_untouched(self):
-        t = {"scribe": "redactor"}
+    def test_writer_substrings_are_untouched(self):
+        t = {WRITER: "redactor"}
         text = "escribe describe reescribe sobrescribe Describe escriben Escribe"
         self.assertEqual(ar.transform_text(text, t), text)
-        self.assertEqual(ar.transform_text("scribe, Scribe y SCRIBE", t), "redactor, Redactor y REDACTOR")
+        self.assertEqual(ar.transform_text("%s, %s y %s" % (WRITER, WRITER.capitalize(), WRITER.upper()), t),
+                         "redactor, Redactor y REDACTOR")
 
     def test_other_spellings_and_glued_words_are_untouched(self):
-        t = {"forge": "dev"}
-        for text in ("sCribe forge2 xforge forge_x _forge Forges FORGEs forgeX", "sCribe", "fOrge", "foRGE"):
+        D, Dc, DU = DEVELOPER, DEVELOPER.capitalize(), DEVELOPER.upper()
+        t = {D: "dev"}
+        glued_text = "%s %s2 x%s %s_x _%s %ss %ss %sX" % (mixed(WRITER, 1), D, D, D, D, Dc, DU, D)
+        for text in (glued_text, mixed(WRITER, 1), mixed(D, 1), D[:2] + D[2:].upper()):
             self.assertEqual(ar.transform_text(text, t), text)
-        for glued, expected in (("-forge-", "-dev-"), ("/forge.", "/dev."), ("(forge)", "(dev)"), ("@forge", "@dev")):
+        for glued, expected in (("-%s-" % D, "-dev-"), ("/%s." % D, "/dev."), ("(%s)" % D, "(dev)"),
+                                ("@%s" % D, "@dev")):
             self.assertEqual(ar.transform_text(glued, t), expected)
 
     def test_single_pass_does_not_rescan_replacements(self):
-        # Reemplazos sucesivos rol por rol darian "oracle-a-a": forge pasa a scout-a y scout se volveria a reemplazar.
-        t = {"forge": "scout-a", "scout": "oracle-a"}
-        self.assertEqual(ar.transform_text("forge scout", t), "scout-a oracle-a")
-        t = {"forge": "qa", "scout": "qa2"}
-        self.assertEqual(ar.transform_text("forge scout qa2", t), "qa qa2 qa2")
+        # Reemplazos sucesivos rol por rol darian "<analista>-a-a": el desarrollador pasa a "<investigador>-a" y el
+        # investigador se volveria a reemplazar.
+        t = {DEVELOPER: RESEARCHER + "-a", RESEARCHER: ANALYST + "-a"}
+        self.assertEqual(ar.transform_text("%s %s" % (DEVELOPER, RESEARCHER), t),
+                         "%s-a %s-a" % (RESEARCHER, ANALYST))
+        t = {DEVELOPER: "qa", RESEARCHER: "qa2"}
+        self.assertEqual(ar.transform_text("%s %s qa2" % (DEVELOPER, RESEARCHER), t), "qa qa2 qa2")
 
     def test_swap_is_a_single_pass(self):
-        self.assertEqual(ar.transform_text("forge scribe", {"forge": "scribe", "scribe": "forge"}), "scribe forge")
+        self.assertEqual(ar.transform_text("%s %s" % (DEVELOPER, WRITER), {DEVELOPER: WRITER, WRITER: DEVELOPER}),
+                         "%s %s" % (WRITER, DEVELOPER))
 
 
 class HighByteBoundary(unittest.TestCase):
     """Caso 55 (E1): letra = [A-Za-z0-9_] o la pareja C3 + continuacion; todo otro byte alto es limite."""
 
-    T = {"forge": "dev", "scribe": "redactor", "sentinel": "amigo-qa"}
+    T = {DEVELOPER: "dev", WRITER: "redactor", QA: "amigo-qa"}
 
     def test_case55_punctuation_and_symbols_are_a_boundary(self):
         marks = ["\u00ab", "\u00bb", "\u00bf", "\u00a1", "\u201c", "\u201d", "\u2018", "\u2019", "\u2014",
                  "\u2013", "\u2026", "\u2192", "\u00a0", "\u2225"]
         for mark in marks:
             with self.subTest(mark=hex(ord(mark))):
-                self.assertEqual(ar.transform_text(u(mark + "forge"), self.T), u(mark + "dev"))
-                self.assertEqual(ar.transform_text(u("FORGE" + mark), self.T), u("DEV" + mark))
-                self.assertEqual(ar.transform_text(u(mark + "Sentinel" + mark), self.T), u(mark + "Amigo-qa" + mark))
+                self.assertEqual(ar.transform_text(u(mark + DEVELOPER), self.T), u(mark + "dev"))
+                self.assertEqual(ar.transform_text(u(DEVELOPER.upper() + mark), self.T), u("DEV" + mark))
+                self.assertEqual(ar.transform_text(u(mark + QA.capitalize() + mark), self.T),
+                                 u(mark + "Amigo-qa" + mark))
 
     def test_case55_the_sentence_of_the_guide(self):
-        text = u("\u00abSENTINEL s\u00f3lo escribe tests\u00bb y \u00abSCRIBE, FORGE y")
+        text = u("\u00ab%s s\u00f3lo escribe tests\u00bb y \u00ab%s, %s y" % (
+            QA.upper(), WRITER.upper(), DEVELOPER.upper()))
         self.assertEqual(ar.transform_text(text, self.T),
                          u("\u00abAMIGO-QA s\u00f3lo escribe tests\u00bb y \u00abREDACTOR, DEV y"))
 
     def test_case55_an_accented_letter_next_to_the_name_is_not_a_boundary(self):
-        for text in ("Sentinel\u00e9", "\u00f1forge", "\u00e9SCRIBE", "SCRIBE\u00c1", "forge\u00fc", "\u00d1FORGE"):
+        D, DU = DEVELOPER, DEVELOPER.upper()
+        for text in (QA.capitalize() + "\u00e9", "\u00f1" + D, "\u00e9" + WRITER.upper(), WRITER.upper() + "\u00c1",
+                     D + "\u00fc", "\u00d1" + DU):
             with self.subTest(text=text):
                 self.assertEqual(ar.transform_text(u(text), self.T), u(text))
 
-    def test_case55_scribe_substrings_still_untouched(self):
+    def test_case55_writer_substrings_still_untouched(self):
         text = u("\u00abescribe\u00bb describe reescribe sobrescribe \u00bfEscribe?")
         self.assertEqual(ar.transform_text(text, self.T), text)
 
     def test_case55_recognised_limits_of_the_rule(self):
         # Limites reconocidos del plan, fijados para que un cambio no pase desapercibido.
         # La multiplicacion y la division (C3 97 y C3 B7) cuentan como letra: no hay coincidencia pegada a ellas.
-        for text in ("\u00d7forge", "forge\u00f7", "\u00f7FORGE", "SCRIBE\u00d7"):
+        D, DU, WU = DEVELOPER, DEVELOPER.upper(), WRITER.upper()
+        for text in ("\u00d7" + D, D + "\u00f7", "\u00f7" + DU, WU + "\u00d7"):
             self.assertEqual(ar.transform_text(u(text), self.T), u(text), text)
         # Una letra fuera de U+00C0 a U+00FF es limite (el caso 5 comprueba que ningun texto real la usa).
-        self.assertEqual(ar.transform_text(u("\u0142forge forge\u0141 \u0152SCRIBE"), self.T),
+        self.assertEqual(ar.transform_text(u("\u0142%s %s\u0141 \u0152%s" % (D, D, WU)), self.T),
                          u("\u0142dev dev\u0141 \u0152REDACTOR"))
         # Un \xC3 suelto y una continuacion sin \xC3 delante son limite.
-        self.assertEqual(ar.transform_text("\xc3forge forge\xc3 \xc3 forge", self.T), "\xc3dev dev\xc3 \xc3 dev")
-        self.assertEqual(ar.transform_text("\xa9forge forge\xa9 \xc2\xa9SCRIBE", self.T),
+        self.assertEqual(ar.transform_text("\xc3%s %s\xc3 \xc3 %s" % (D, D, D), self.T), "\xc3dev dev\xc3 \xc3 dev")
+        self.assertEqual(ar.transform_text("\xa9%s %s\xa9 \xc2\xa9%s" % (D, D, WU), self.T),
                          "\xa9dev dev\xa9 \xc2\xa9REDACTOR")
         # \xC3 seguido de un byte fuera de 0x80 a 0xBF no forma una letra.
-        self.assertEqual(ar.transform_text("\xc3\xc0forge", self.T), "\xc3\xc0dev")
+        self.assertEqual(ar.transform_text("\xc3\xc0" + D, self.T), "\xc3\xc0dev")
 
     def test_case55_pattern_has_no_variable_width_lookbehind_nor_ignorecase(self):
         pat = ar._pattern(ar.forms(self.T))
@@ -446,83 +483,87 @@ class TableValidation(unittest.TestCase):
                 self.assertNotIn(value, problem, "el mensaje no debe traer el valor del alias")
 
     def test_valid_tables(self):
-        for ok in ({}, {"forge": "dev"}, NINE, {"forge": "forge"}, {"forge": "a" * 64},
-                   {"sentinel": "amigo-qa", "forge": "dev"}, {"forge": "forge_2"}, {"forge": "forgery"},
-                   {"forge": "sentinels"}, {"forge": "com10"}, {"forge": "yes-no"}, {"forge": "x1"}):
+        D = DEVELOPER
+        for ok in ({}, {D: "dev"}, NINE, {D: D}, {D: "a" * 64},
+                   {QA: "amigo-qa", D: "dev"}, {D: D + "_2"}, {D: D + "ry"},
+                   {D: QA + "s"}, {D: "com10"}, {D: "yes-no"}, {D: "x1"}):
             with self.subTest(ok=ok):
                 self.assertIsNone(ar.validate_table(ok))
 
     def test_types_and_keys(self):
-        for bad in (None, [], ["forge"], "forge", 3, True):
+        for bad in (None, [], [DEVELOPER], DEVELOPER, 3, True):
             self.assertProblem(bad, "aliases debe ser un objeto")
-        for key in ("qa", "Forge", "", "agents"):
+        for key in ("qa", DEVELOPER.capitalize(), "", "agents"):
             self.assertProblem({key: "dev"}, "rol desconocido en aliases")
         for value in (None, 3, True, ["dev"], {"a": "b"}):
-            self.assertProblem({"forge": value}, "debe ser texto")
+            self.assertProblem({DEVELOPER: value}, "debe ser texto")
 
     def test_v1_character_set_and_length(self):
         for bad in ("", "Dev", "DEV", "a b", "a:b", "a.b", "a/b", "a\\b", "-dev", "1dev", "123", "1e3", "0x1f",
                     "_dev", "a" * 65, "dév", "dev\n", "dev\nhooks", "a#b", "'dev'"):
             with self.subTest(bad=bad):
-                self.assertProblem({"forge": bad}, "solo admite a-z, 0-9, _ y -")
+                self.assertProblem({DEVELOPER: bad}, "solo admite a-z, 0-9, _ y -")
 
     def test_v1_ordinal_names_fail_by_case(self):
-        for bad in ("Explore", "PLAN", "Forge"):
-            self.assertProblem({"scribe": bad}, "solo admite a-z, 0-9, _ y -")
+        for bad in ("Explore", "PLAN", DEVELOPER.capitalize()):
+            self.assertProblem({WRITER: bad}, "solo admite a-z, 0-9, _ y -")
 
     def test_v2_yaml_words(self):
         for word in YAML_WORDS:
             with self.subTest(word=word):
-                self.assertProblem({"forge": word}, "palabra reservada de YAML")
+                self.assertProblem({DEVELOPER: word}, "palabra reservada de YAML")
 
     def test_v3_windows_reserved_names(self):
         for word in ("con", "prn", "aux", "nul", "com0", "com1", "com9", "lpt0", "lpt1", "lpt9"):
             with self.subTest(word=word):
-                self.assertProblem({"forge": word}, "nombre reservado de Windows")
+                self.assertProblem({DEVELOPER: word}, "nombre reservado de Windows")
         for ok in ("com10", "lpt10", "conx", "nulo"):
-            self.assertIsNone(ar.validate_table({"forge": ok}), ok)
+            self.assertIsNone(ar.validate_table({DEVELOPER: ok}), ok)
 
     def test_v4_builtin_agents(self):
         for word in RESERVED:
             with self.subTest(word=word):
-                self.assertProblem({"forge": word}, "agente integrado de Claude Code")
-        self.assertIsNone(ar.validate_table({"forge": "explorer"}))
-        self.assertIsNone(ar.validate_table({"forge": "planner"}))
+                self.assertProblem({DEVELOPER: word}, "agente integrado de Claude Code")
+        self.assertIsNone(ar.validate_table({DEVELOPER: "explorer"}))
+        self.assertIsNone(ar.validate_table({DEVELOPER: "planner"}))
 
     def test_v5_alias_equal_to_another_role_and_cycles(self):
-        self.assertProblem({"forge": "scribe"}, "nombre de otro agente de SyncLayer")
-        self.assertProblem({"forge": "scribe", "scribe": "forge"}, "nombre de otro agente de SyncLayer")
-        self.assertProblem({"forge": "scribe", "scribe": "sentinel", "sentinel": "forge"},
-                           "nombre de otro agente de SyncLayer")
-        self.assertIsNone(ar.validate_table({"forge": "forge", "scribe": "scribe"}))
+        D, W = DEVELOPER, WRITER
+        self.assertProblem({D: W}, "nombre de otro agente de SyncLayer")
+        self.assertProblem({D: W, W: D}, "nombre de otro agente de SyncLayer")
+        self.assertProblem({D: W, W: QA, QA: D}, "nombre de otro agente de SyncLayer")
+        self.assertIsNone(ar.validate_table({D: D, W: W}))
 
     def test_v6_duplicates(self):
-        self.assertProblem({"forge": "dev", "scribe": "dev"}, "forge y scribe tienen el mismo alias")
-        self.assertIsNone(ar.validate_table({"forge": "dev", "scribe": "dev2"}))
+        first, second = sorted([DEVELOPER, WRITER], key=ar.roles().index)   # el mensaje sigue el orden de los roles
+        self.assertProblem({DEVELOPER: "dev", WRITER: "dev"}, "%s y %s tienen el mismo alias" % (first, second))
+        self.assertIsNone(ar.validate_table({DEVELOPER: "dev", WRITER: "dev2"}))
 
     def test_v7_alias_containing_a_role(self):
-        for bad in ("dev-sentinel", "forge-2", "sentinel-dev", "a-forge-b", "x-scribe"):
+        for bad in ("dev-" + QA, DEVELOPER + "-2", QA + "-dev", "a-%s-b" % DEVELOPER, "x-" + WRITER):
             with self.subTest(bad=bad):
-                self.assertProblem({"oracle": bad}, "contiene el nombre de un agente de SyncLayer")
+                self.assertProblem({ANALYST: bad}, "contiene el nombre de un agente de SyncLayer")
         # El alias del propio rol tampoco puede contener el rol (la salida lo dejaria).
-        self.assertProblem({"forge": "forge-2"}, "contiene el nombre de un agente de SyncLayer")
+        self.assertProblem({DEVELOPER: DEVELOPER + "-2"}, "contiene el nombre de un agente de SyncLayer")
 
     def test_v8_manifest_collision(self):
-        paths = ["agents/forge.md", "agents/dev.md", "agents/scribe.md", "rules/agentes.md"]
-        self.assertProblem({"forge": "dev"}, "coincide con otro archivo del manifiesto", manifest_paths=paths)
-        self.assertIsNone(ar.validate_table({"forge": "dev"}))
-        self.assertIsNone(ar.validate_table({"forge": "dev2"}, manifest_paths=paths))
-        self.assertIsNone(ar.validate_table({"forge": "dev", "scribe": "otro"}, manifest_paths=["agents/forge.md"]))
+        D = DEVELOPER
+        paths = ["agents/%s.md" % D, "agents/dev.md", "agents/%s.md" % WRITER, "rules/agentes.md"]
+        self.assertProblem({D: "dev"}, "coincide con otro archivo del manifiesto", manifest_paths=paths)
+        self.assertIsNone(ar.validate_table({D: "dev"}))
+        self.assertIsNone(ar.validate_table({D: "dev2"}, manifest_paths=paths))
+        self.assertIsNone(ar.validate_table({D: "dev", WRITER: "otro"}, manifest_paths=["agents/%s.md" % D]))
 
     def test_v8_covers_roles_whose_file_is_not_in_the_manifest(self):
         # E2: el destino de cualquier alias efectiva se compara con todas las rutas, este o no el rol en el manifiesto.
+        D = DEVELOPER
         paths = ["agents/alfa.md", "rules/agentes.md"]
-        self.assertProblem({"forge": "alfa"}, "coincide con otro archivo del manifiesto", manifest_paths=paths)
-        self.assertProblem({"forge": "alfa"}, "coincide con otro archivo del manifiesto",
-                           manifest_paths=paths + ["agents/forge.md"])
-        for ok in ({"forge": "beta"}, {"forge": "forge"}, {}):
+        self.assertProblem({D: "alfa"}, "coincide con otro archivo del manifiesto", manifest_paths=paths)
+        self.assertProblem({D: "alfa"}, "coincide con otro archivo del manifiesto",
+                           manifest_paths=paths + ["agents/%s.md" % D])
+        for ok in ({D: "beta"}, {D: D}, {}):
             self.assertIsNone(ar.validate_table(ok, manifest_paths=paths), ok)
-            self.assertIsNone(ar.validate_table(ok, manifest_paths=paths + ["agents/forge.md"]), ok)
+            self.assertIsNone(ar.validate_table(ok, manifest_paths=paths + ["agents/%s.md" % D]), ok)
 
 
 if __name__ == "__main__":

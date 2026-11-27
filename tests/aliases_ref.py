@@ -19,11 +19,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "tools"))
 
 import build_manifest as bm  # noqa: E402
 import levels_ref as lr  # noqa: E402
+import names  # noqa: E402
 
 ROOT = lr.ROOT
 
-# Nombres con «scribe» dentro que no son el agente: no se tocan (limite de palabra).
-SCRIBE_WORDS = {"escribe", "escriben", "describe", "reescribe", "sobrescribe"}
+# Palabras que llevan el nombre de un rol como subcadena sin ser el agente: no se tocan (limite de palabra).
+# Por rol: hoy solo el escritor (las palabras espanolas con su nombre dentro); cualquier otro rol no tiene ninguna.
+SCRIBE_WORDS = {names.WRITER: {"escribe", "escriben", "describe", "reescribe", "sobrescribe"}}
 
 # Limite de palabra (3.5, enmienda E1), sobre el texto decodificado en ISO-8859-1 (un byte, un caracter):
 # letra = [A-Za-z0-9_] o la pareja \xC3 + [\x80-\xBF] (U+00C0 a U+00FF en UTF-8); todo lo demas es limite.
@@ -377,8 +379,8 @@ def inventory(text):
     """Clasifica cada palabra (con la definicion de letra de E1) que contiene un rol, sin distinguir mayusculas.
 
     Devuelve (counts, other): counts {rol: [minuscula, Capitalizada, MAYUSCULAS]} de formas que casan
-    (reemplazables); other: palabras que no son ninguna forma ni una de SCRIBE_WORDS (sin clasificar, por
-    ejemplo `Sentinel` + e acentuada o `forge2`). Una forma pegada a puntuacion, comillas angulares, rayas o espacio duro
+    (reemplazables); other: palabras que no son ninguna forma ni una de SCRIBE_WORDS del rol (sin clasificar, por
+    ejemplo el nombre de un rol capitalizado + e acentuada o el nombre + `2`). Una forma pegada a puntuacion, comillas angulares, rayas o espacio duro
     es una palabra por si sola: cuenta como reemplazable."""
     counts = {r: [0, 0, 0] for r in roles()}
     other = []
@@ -389,7 +391,7 @@ def inventory(text):
             variants = form_variants(role)
             if word in variants:
                 counts[role][variants.index(word)] += 1
-            elif role == "scribe" and low in SCRIBE_WORDS:
+            elif low in SCRIBE_WORDS.get(role, ()):
                 continue
             else:
                 other.append((role, word))
