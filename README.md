@@ -1240,18 +1240,18 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Resumen; el detalle (frentes por fase, línea de tiempo completa y reglas de cálculo) está en [PLAN.md](PLAN.md). Se actualiza en el mismo commit que cierra una sub-fase. Última actualización: **2026-11-27** (T8 de la Fase 6 cerrada: 8 de 11 unidades).
+> **Sección viva.** Resumen; el detalle (frentes por fase, línea de tiempo completa y reglas de cálculo) está en [PLAN.md](PLAN.md). Se actualiza en el mismo commit que cierra una sub-fase. Última actualización: **2026-11-27** (T9 de la Fase 6 cerrada: 9 de 11 unidades).
 
-**El proyecto completo va en 95%:** seis fases con el mismo peso, (5 × 100 + 100 × 8 ÷ 11) ÷ 6 = 95,45 % → 95 % (10 cuadros). Cada sub-fase cuenta una unidad; «cerrada» = commiteada en la rama de la fase con su suite verde y `auditor` sin Critical ni Important.
+**El proyecto completo va en 97%:** seis fases con el mismo peso, (5 × 100 + 100 × 9 ÷ 11) ÷ 6 = 96,97 % → 97 % (10 cuadros). Cada sub-fase cuenta una unidad; «cerrada» = commiteada en la rama de la fase con su suite verde y `auditor` sin Critical ni Important.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **95%** | 6 fases | |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **97%** | 6 fases | |
 | 1. Instalador | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada |
 | 2. Reporte de uso de agentes | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada |
 | 3. Esfuerzo configurable | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Cerrada (G1 pendiente) |
 | 4. Nombres de agentes configurables | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada (G1/V1 pendiente) |
 | 5. Otras configuraciones dinámicas | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada (G1 pendiente) |
-| 6. Renombrado de agentes | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | **73%** | 8 de 11 | En curso |
+| 6. Renombrado de agentes | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **82%** | 9 de 11 | En curso |
 
-**Ahora:** T9 de la Fase 6 (`CLAUDE.md`, historial, documentos de marca y backlog). Pendiente del propietario, fuera del conteo: G1/V1 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
+**Ahora:** T10 de la Fase 6 (assets de marca). Pendiente del propietario, fuera del conteo: G1/V1 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.

@@ -2,13 +2,31 @@
 
 ## [Sin publicar]
 
+### Equivalencia de nombres de agentes (Fase 6)
+
+Los ocho agentes cambian de nombre; `atlas` no cambia. Las entradas históricas de este archivo conservan los nombres
+de su época: se leen con esta tabla. Sin tilde en ningún archivo, identificador ni texto. Para quien ya tiene
+instalados los nombres anteriores: ver la sección «Nombres anteriores» del `README.md`. El efecto en Claude Code
+real no está verificado (G1).
+
+| Anterior | Actual |
+|---|---|
+| `oracle` | `heimdall` |
+| `scout` | `hermes` |
+| `forge` | `sindri` |
+| `sentinel` | `anubis` |
+| `auditor` | `salomon` |
+| `shield` | `hector` |
+| `debugger` | `sherlock` |
+| `scribe` | `shakespeare` |
+
 ### Planificado (Fase 6)
 
 _Cambio de documentación (2026-11-27): el detalle de «Línea de tiempo y avance» (frentes por fase, línea de tiempo completa y «Cómo se mantiene») pasó del `README.md` a `PLAN.md`; el README conserva un resumen y el enlace._
 
 Plan `docs/plans/2026-11-27-fase6-renombrado-de-agentes.md`, aprobado por el propietario el 2026-11-27 con los
 valores por defecto de P1 a P16; rama `feat/renombrado-de-agentes`, creada desde `main` tras integrar la Fase 5.
-11 unidades (T1 a T10 y el cierre), 8 cerradas (T1 a T8). Los nombres de los agentes pasan a ser `heimdall` (oracle),
+11 unidades (T1 a T10 y el cierre), 9 cerradas (T1 a T9). Los nombres de los agentes pasan a ser `heimdall` (oracle),
 `hermes` (scout), `sindri` (forge), `anubis` (sentinel), `salomon` (auditor), `hector` (shield), `sherlock`
 (debugger) y `shakespeare` (scribe); `atlas` no cambia. Los nombres nuevos pasan a ser los roles; los viejos
 quedan en una tabla cerrada para avisar a quien ya los tenía instalados. El efecto en Claude Code real no está
@@ -22,6 +40,7 @@ verificado (G1).
 - T6 cerrada (2026-11-27): nombres anteriores en el reporte de uso con la lista vacía: `SYNCLAYER_LEGACY_AGENTS = frozenset()` en `tools/usage_report.py`; `classify_agent` clasifica como SyncLayer lo que esté en `SYNCLAYER_AGENTS` o en esa lista. Lector y agregado sin otro cambio; goldens es/en sin regenerar; sin texto nuevo en `CATALOG`; `ReportPurity.REACHABLE` sin cambio. 3 pruebas nuevas (casos 15 y 16, nombres de fantasía; la lista atada a `names.LEGACY`, sin solape con `SYNCLAYER_AGENTS` ni con `BUILTIN_AGENTS`, sin `:`). `auditor` sin Critical ni Important (3 Minor corregidos). Matiz para la documentación de T8: quien conserve nombres viejos como alias (P3) los verá en el conjunto SyncLayer con el nombre viejo. Línea de tiempo: Fase 6 con 6 de 11 (55 %), global 92 %: (5 × 100 + 100 × 6 ÷ 11) ÷ 6 = 92,42 %.
 - T7 cerrada (2026-11-27): cambio atómico. Los ocho agentes pasan a `heimdall`, `hermes`, `sindri`, `anubis`, `salomon`, `hector`, `sherlock` y `shakespeare` (`git mv`; `atlas` igual); los once textos gestionados son la salida de `rename_ref.expected_texts()` (hashes de `tests/rename_expected.json`); `install.ps1` con `$AliasRoles`, `$LevelAgents`, `$LevelRows` nuevos y `$LegacyRoles` con los ocho pares `viejo|nuevo`; `SYNCLAYER_AGENTS` y `SYNCLAYER_LEGACY_AGENTS` con los ocho nombres viejos; tabla de niveles del README (24 celdas iguales); `agents_data.py`; manifiesto regenerado. `hooks/agent_guard.py`, `hooks:`, `tools:`, `model:` y `color:` sin cambio. `tests/test_rename.py` reescrito (casos 17 a 21) y 5 pruebas `test_f6t7_*` con PowerShell 5.1: instalación limpia, actualización sobre una instalación vieja simulada (8 huérfanos con aviso, ningún archivo viejo tocado) y nombres viejos como alias. Suite completa 1918 pruebas: 6 subtests de `test_t2_case14` fallaron por el orden alfabético nuevo; corregida. Revisada por `auditor` (sin Critical ni Important) y `shield` (sin Critical, High ni Medium; un Low: un alias puede ser el nombre viejo de otro rol, por ejemplo `anubis` -> `auditor`; se documentará como límite en T8). Queda desfasado hasta T8 a T10: prosa del README, `CLAUDE.md`, `docs/brand/`, SVG, `agents/shakespeare.md` (menciona el README en vez de `PLAN.md`), prueba puente y fixture.
 - T8 cerrada (2026-11-27): README y guía con los nombres nuevos: sección «Nombres anteriores» (tabla viejo a nuevo, qué ve quien reinstala, conservar los viejos como alias, reporte de uso) y límites nuevos (estado ausente, agente propio con un nombre actual, V7 y alias que es el nombre anterior de otro rol, hallazgo Low de `shield` de T7); `docs/agentes.md` con `<nombre>`; `agents/shakespeare.md` apunta al README resumen y a `PLAN.md`; retirados la prueba puente, `tests/rename_expected.json` y la maquinaria muerta de `rename_ref.py` y `aliases_ref.py`; `tests/test_phase6_docs.py` (casos 22 y 23, 17 pruebas más mutantes); manifiesto regenerado. Revisada por `auditor` (sin Critical ni Important; 6 Minor corregidos). El recuento de la suite queda pendiente de la corrida de cierre.
+- T9 cerrada (2026-11-27): `CLAUDE.md` (arquitectura, convenciones y «Comportamientos no obvios» con los nombres nuevos, contrato de `tests/names.py`, `$LegacyRoles`, lista de anteriores del reporte, regla sin tilde, nombres propios, y un bloque marcado «Nombres anteriores (hecho histórico)»), esta tabla, `docs/brand/voice-and-tone.md`, `docs/brand/claude-design-handoff.md` y el backlog con los nombres nuevos; el caso 22 de `tests/test_phase6_docs.py` cubre ahora `CLAUDE.md` y `docs/brand/`. El recuento de la suite queda pendiente de la corrida de cierre.
 
 ### Planificado (Fase 5)
 

@@ -21,7 +21,8 @@ Plain, technical, present tense, concrete verbs. Say what the project does and w
 Reglas de escritura:
 
 - Frases de 20 palabras o menos; voz activa; un término por cosa.
-- Nombres de agentes en minúsculas y monoespaciado en prosa (`forge`, `auditor`); en tablas de catálogo igual.
+- Nombres de agentes en minúsculas y monoespaciado en prosa (`sindri`, `salomon`); en tablas de catálogo igual.
+- Los nombres de agentes se escriben siempre sin tilde (`salomon`, `hector`), también en prosa: son identificadores de archivo. Los nombres anteriores sólo aparecen en la sección «Nombres anteriores» del README, en el bloque marcado de `CLAUDE.md`, en el historial y en los planes de fases cerradas.
 - No prometer lo que el repositorio no hace. Lo futuro se rotula «planned» o «not yet».
 - Los límites van junto a la afirmación, no en una nota al pie.
 
@@ -51,7 +52,7 @@ SyncLayer keeps the working practice around AI coding assistants in one place in
 3. *The honest part:* what the guard enforces, what it only discourages, and what it cannot stop.
 
 **Long presentation (outline)**
-Problem → the star orchestration model → the nine roles → a worked example (task → forge → auditor → sentinel → scribe) → guardrails and their limits → how it is installed → what is planned and what is not.
+Problem → the star orchestration model → the nine roles → a worked example (task → sindri → salomon → anubis → shakespeare) → guardrails and their limits → how it is installed → what is planned and what is not.
 
 ## Tone by context
 
