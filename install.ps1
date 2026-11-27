@@ -1605,13 +1605,13 @@ try {
     }
 
     # Nivel: bytes a escribir por archivo. Con el nivel 5 (el repositorio) son los bytes de $aliasBytes (los canonicos
-    # del origen, con alias si hay tabla efectiva) y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
+    # del origen, con alias y carpeta de planes si hay tabla efectiva) y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
     # manifiesto pasan por ConvertTo-LevelBytes con su celda de $LevelRows; el resto (auditor, shield,
-    # debugger, el hook, las reglas, la guia) queda en los bytes de $aliasBytes (los del origen, o con alias si hay tabla efectiva). Un error de renderizado es un
+    # debugger, el hook, las reglas, la guia) queda en los bytes de $aliasBytes (los del origen, o con alias y carpeta de planes si los hay). Un error de renderizado es un
     # defecto del origen que el manifiesto no detecta: exit 1 antes de escribir, tambien en -DryRun.
     # $outHash (hash de $outBytes) es lo que clasifica, verifica y se guarda en el estado como written.
-    # Sin tabla efectiva de alias, con el nivel 5 los mensajes de verificacion dicen lo de siempre (el manifiesto):
-    # quien no configura nada ve la misma salida que antes, salvo la linea Nivel:. Con alias se anade "y los alias".
+    # Sin tabla efectiva de alias ni carpeta de planes efectiva, con el nivel 5 los mensajes de verificacion dicen lo de siempre (el manifiesto):
+    # quien no configura nada ve la misma salida que antes, salvo la linea Nivel:. Con alias se anade "y los alias"; con carpeta de planes efectiva, "y la carpeta de planes".
     # Con el nivel 1 a 4 el hash esperado ya no es el del manifiesto.
     $verifyWhat = 'el manifiesto'
     if ($level -ne 5) { $verifyWhat = 'lo esperado para el nivel ' + $level }

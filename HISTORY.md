@@ -50,12 +50,12 @@ el reporte de uso sale en español o en inglés con `--lang`.
 - `docs/agentes.md`: «Adaptar un agente a un proyecto» ampliado (texto con `<nombre>` y `<alias>`). Cambia un
   archivo gestionado: hay que regenerar el manifiesto (`python -B tools/build_manifest.py`). `rules/agentes.md` no
   cambia.
-- Pruebas: `tests/test_phase5_docs.py` (13 pruebas, casos 44 a 46). Suite: 1803 pruebas, 367 saltadas (365
-  contra pwsh y 2 de la rama POSIX); suite completa: 1803 pruebas, OK, 367 saltadas.
+- Pruebas: `tests/test_phase5_docs.py` (13 pruebas, casos 44 a 46). Suite: 1803 pruebas, 367 saltadas (364
+  contra pwsh y 3 de la rama POSIX); suite completa: 1803 pruebas, OK, 367 saltadas.
 
 ### Añadido (Fase 5, T6)
 
-- Idioma del reporte de uso: `LANGS = ("es", "en")`, catálogo `en` de 137 claves por idioma (mismo juego de claves
+- Idioma del reporte de uso: `LANGS = ("es", "en")`, catálogo `en` de 136 claves por idioma (mismo juego de claves
   que `es`; traducción fiel, ASCII, sin promesas de ahorro, calidad ni costo). `render_project_report` y
   `render_global_report` aceptan `lang` (por defecto `es`); un valor que no sea la cadena `es` ni `en` lanza
   `ValueError` con mensaje fijo, sin eco.
@@ -71,7 +71,7 @@ el reporte de uso sale en español o en inglés con `--lang`.
 - Pruebas: golden `tests/usage_golden_en.json` (mismos cinco escenarios y receta que el del español),
   `ReportGoldenEn`, `ReportCatalogCoverageEn`, `ReportCatalogEn`, `ReportLang`, `LangOption` (CLI) y
   `LangPrivacyEndToEnd` (bordes). `ReportTextsOutsideCatalog` baja a 7 excepciones (`integrado`, `(no cadena)` y
-  `(vacio)` pasan al catálogo). Suite: 1790 pruebas, 367 saltadas (365 contra pwsh y 2 de la rama POSIX).
+  `(vacio)` pasan al catálogo). Suite: 1790 pruebas, 367 saltadas (364 contra pwsh y 3 de la rama POSIX).
 - Límites: el reporte `en` es traducción; las claves del pie siguen en español; `argparse` repite en stderr los
   argumentos desconocidos (también `inspect --lang X`, ya ocurría antes); `lbl_other_version` no existe porque
   `versions_seen` es numérico. El efecto con un `~/.claude` real no se verificó (V2 del propietario).
@@ -79,7 +79,7 @@ el reporte de uso sale en español o en inglés con `--lang`.
 ### Añadido (Fase 5, T5)
 
 - Catálogo de textos del reporte de uso en `tools/usage_report.py`: `LANGS = ("es",)`, `DEFAULT_LANG = "es"` y
-  `CATALOG` inmutable (`MappingProxyType` en dos capas; unas 150 claves por idioma, mismo juego de claves, tuplas
+  `CATALOG` inmutable (`MappingProxyType` en dos capas; 120 claves por idioma, mismo juego de claves, tuplas
   y marcadores `%d`/`%s`/`%%` con la misma forma). Los 28 generadores internos, de `_legend` a
   `render_global_report`, reciben el catálogo ya resuelto `t` y leen `t["clave"]`. Las constantes de texto del
   módulo (`HOW_TO_READ`, `PRIVACY_NOTES`, `NOTE_*`, `LEGEND_SMALL`, `UNKNOWN_WARNING`, `GLOBAL_*`) quedan como
@@ -100,7 +100,7 @@ el reporte de uso sale en español o en inglés con `--lang`.
   `WARN_*`, `RANGE_*`, `READ_QUALITY_LABELS`, `OTHER_*`, `(vacio)`/`(no cadena)`) no están en el catálogo y se
   traducirán con tabla cerrada; `REPEAT_LIMITATIONS` y `SKILL_LIMITATIONS` se referencian, no se copian; el
   catálogo `en` debe tener las mismas 17 entradas y el mismo orden en `q_problems`.
-- Pruebas: 1735 pruebas, 367 saltadas (365 contra pwsh y 2 de la rama POSIX del reporte de uso); unos 48 minutos.
+- Pruebas: 1735 pruebas, 367 saltadas (364 contra pwsh y 3 de la rama POSIX del reporte de uso); unos 48 minutos.
 
 ### Añadido (Fase 5, T4)
 
@@ -121,7 +121,7 @@ el reporte de uso sale en español o en inglés con `--lang`.
   sin `plans_dir`). Abiertos a propósito (Minor, aserciones opcionales): respaldo del estado y de los otros nueve
   archivos en K1 a K3 del repo real, aserto redundante del esquema 2, respaldo del estado ilegible con `-Force`
   final en K5. `shield`: no aplica (sin código de producción; la interacción ya la revisó en T3).
-- Pruebas: 10 `test_f5t4_*`. Suite: 1715 pruebas, 367 saltadas (365 contra pwsh y 2 de la rama POSIX del reporte
+- Pruebas: 10 `test_f5t4_*`. Suite: 1715 pruebas, 367 saltadas (364 contra pwsh y 3 de la rama POSIX del reporte
   de uso).
 
 ### Añadido (Fase 5, T3)
@@ -147,7 +147,7 @@ el reporte de uso sale en español o en inglés con `--lang`.
 - Efecto en un Claude Code real (que `atlas` use la carpeta): NO verificado (G1 del propietario).
 - `auditor` y `shield`: sin Critical ni Important de código; Lows y Minors corregidos (comentarios y 4 bordes del
   límite izquierdo en el fixture).
-- Pruebas: 37 `test_f5t3_*`. Suite: 1695 pruebas, 357 saltadas (355 contra pwsh y 2 de la rama POSIX del reporte
+- Pruebas: 37 `test_f5t3_*`. Suite: 1695 pruebas, 357 saltadas (354 contra pwsh y 3 de la rama POSIX del reporte
   de uso).
 
 ### Añadido (Fase 5, T2)

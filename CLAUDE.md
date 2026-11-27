@@ -9,7 +9,7 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1810 pruebas, 367 saltadas (365 contra pwsh, que no está instalado, y 2 de
+`__pycache__`. La suite: 1810 pruebas, 367 saltadas (364 contra pwsh, que no está instalado, y 3 de
 la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), entre unos 43 y 70 minutos.
 Las pruebas de `install.ps1` corren en esta máquina contra Windows PowerShell 5.1. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
@@ -435,7 +435,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (365 en la última corrida de 1810 pruebas y 367 saltadas; las otras 2 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (364 en la última corrida de 1810 pruebas y 367 saltadas; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los
@@ -480,7 +480,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   - El instalador no instala la herramienta ni toca `synclayer-usage.md` ni `settings.json`.
   - Catálogo de textos (Fase 5, T5 y T6): `LANGS = ("es", "en")`, `DEFAULT_LANG = "es"` y `CATALOG`, inmutable
     (`MappingProxyType` en dos capas: idioma y claves). Un diccionario por idioma (`_ES`, `_EN`) con el mismo
-    juego de claves (137 por idioma); por clave, mismo tipo (tupla o cadena), misma longitud de tupla y mismos marcadores
+    juego de claves (136 por idioma); por clave, mismo tipo (tupla o cadena), misma longitud de tupla y mismos marcadores
     `%d`/`%s`/`%%`. Los 28 generadores internos, de `_legend` a `render_global_report`, reciben el catálogo ya
     resuelto `t` como primer argumento y leen `t["clave"]`. No hay estado global mutable que decida el texto. Las
     firmas públicas no cambian. Las constantes de texto del módulo (`HOW_TO_READ`, `PRIVACY_NOTES`, `NOTE_*`,

@@ -134,6 +134,18 @@ mantenimiento; se proponen sólo las que valgan la pena:
 - Perfiles por proyecto (`.claude/agents/` ya reemplaza al global; ver si basta con documentarlo).
 - Descartar explícitamente lo que añada complejidad sin valor, y decir por qué.
 
+## Candidata (2026-11-27): «Install as app» de Anthropic
+
+**Pedido.** Evaluar la función «Install as app» de Anthropic (nombre dado por el propietario; sin
+verificar qué es ni cómo funciona) para distribuir o instalar este módulo, como alternativa o
+complemento a `install.ps1`.
+
+**Etapa 1 (exploración, sin código).** `scout` confirma con documentación oficial qué es la función, en
+qué productos existe (Claude Code, escritorio, web), qué se puede empaquetar con ella (agentes, reglas,
+hooks, `docs/`) y si permite lo que hoy hace el instalador: hash canónico, respaldo, niveles, alias,
+carpeta de planes y `-DryRun`. Después se decide si encaja, se descarta con motivo o se desglosa en
+unidades. Hasta entonces no hay estimación ni fase asignada.
+
 ## Orden sugerido
 
 1. Terminar el instalador (la configuración se apoya en él).
