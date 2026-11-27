@@ -8,11 +8,13 @@ archivo y muestra el plan. Sin -DryRun respalda lo que va a sobrescribir (verifi
 el hook primero (temporal en la misma carpeta + movimiento), verifica el destino y escribe el
 estado <Target>/synclayer-manifest.json. Nunca borra. No hace rollback: si falla, informa.
 
-Configuracion: <Target>/synclayer-config.json es opcional y tiene dos campos, ambos opcionales: level (entero
-de 1 a 5; sin archivo, o con un objeto vacio, el nivel es 5) y aliases (Fase 4: objeto rol a alias; se lee, se
+Configuracion: <Target>/synclayer-config.json es opcional y tiene tres campos, todos opcionales: level (entero
+de 1 a 5; sin archivo, o con un objeto vacio, el nivel es 5), aliases (Fase 4: objeto rol a alias; se lee, se
 valida entera, se muestra con una linea Alias: por alias y se aplica: el agente se instala en agents/<alias>.md con
 name: <alias> y los textos gestionados cambian el nombre del rol por el alias; sin aliases o con aliases vacio no
-cambia nada). Un archivo invalido, o una carpeta o un enlace con ese
+cambia nada) y plans_dir (Fase 5: carpeta de planes, de 1 a 4 carpetas en minusculas separadas por /; se lee, se valida,
+se muestra con una linea Planes: y se aplica: el literal docs/plans/ del cuerpo de atlas, de rules/agentes.md y de docs/agentes.md
+se cambia por <carpeta>/; sin la clave, o igual a docs/plans, no cambia nada). Un archivo invalido, o una carpeta o un enlace con ese
 nombre, detiene la instalacion con exit 1 antes de escribir nada (tambien con -DryRun). Con el nivel 1 a 4, el
 instalador reescribe model: y effort: del frontmatter de los seis agentes modificables (atlas, forge, sentinel,
 scribe, scout, oracle) con los valores de la tabla de niveles; auditor, shield, debugger y el resto quedan como
@@ -86,6 +88,16 @@ $ConfigMaxBytes = 65536
 $AliasRoles = @('atlas', 'auditor', 'debugger', 'forge', 'oracle', 'scout', 'scribe', 'sentinel', 'shield')
 $ReservedAliases = @('explore', 'plan', 'general-purpose', 'claude', 'statusline-setup', 'claude-code-guide', 'web-fetch', 'fork', 'output-style-setup')
 $YamlWords = @('true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n')
+
+# Datos de la carpeta de planes (Fase 5, clave plans_dir). Los usa Get-PlansDirProblem (validacion) y ConvertTo-PlansBytes
+# (T3, aplicacion a los textos; $PlansDirDefault es el literal que se reemplaza): una definicion por linea. Contrato con
+# tests/test_plans.py y tests/plans_ref.py: son los mismos que los de la referencia. $PlansDirPattern: de una a cuatro
+# carpetas separadas por /, en minusculas; el alfabeto cerrado [a-z0-9_/-] impide salir del code span donde se inserta y romper el Markdown. El valor es
+# texto de un alfabeto cerrado (puede formar palabras unidas por guiones; quien edita la configuracion ya puede editar los
+# agentes). En .NET la expresion usa \z (con \Z y $ un salto de linea final pasaria).
+$PlansDirDefault = 'docs/plans'
+$PlansDirPattern = '^[a-z0-9][a-z0-9_-]{0,31}(/[a-z0-9][a-z0-9_-]{0,31}){0,3}\z'
+$PlansDirMaxLength = 64
 
 # Tabla de niveles (Fase 3). La usa el renderizado de los niveles 1 a 4 (ConvertTo-LevelBytes). Una fila
 # por linea, nivel|agente|modelo|esfuerzo, con - para "sin effort:". El nivel 5 es el repositorio y
@@ -615,13 +627,16 @@ function Format-SafeShort([string]$Text) {
 # Lee y valida <Target>/synclayer-config.json (entrada no confiable) y devuelve el nivel (entero de 1 a 5;
 # un objeto vacio es el nivel 5). Lectura unica: se abre una vez (solo lectura) y se leen como maximo
 # $ConfigMaxBytes mas uno, asi el tope vale sobre lo leido y no sobre una medida previa. UTF-8 estricto, con
-# o sin BOM. Raiz: un objeto. Claves: lista cerrada (level y aliases, las dos opcionales), comparadas de forma
-# ordinal. level: entero de 1 a 5 (ni texto, ni decimal, ni bool, ni null). aliases (Fase 4): un objeto; la
+# o sin BOM. Raiz: un objeto. Claves: lista cerrada (level, aliases y plans_dir, las tres opcionales), comparadas
+# de forma ordinal. level: entero de 1 a 5 (ni texto, ni decimal, ni bool, ni null). aliases (Fase 4): un objeto; la
 # misma lectura deja sus pares clave/valor, sin validar, en $script:ConfigAliasPairs (el archivo no se abre otra
-# vez) y Get-AliasTableProblem los valida. Lanza un motivo fijo y escapado: nunca el contenido del archivo ni
+# vez) y Get-AliasTableProblem los valida. plans_dir (Fase 5): la misma lectura deja el valor crudo, sin validar, en
+# $script:ConfigPlansPair (hashtable con la clave Value; $null si la clave no esta) y Get-PlansDirProblem lo valida.
+# Lanza un motivo fijo y escapado: nunca el contenido del archivo ni
 # el texto de .NET. El llamador comprueba antes que no sea carpeta ni punto de reanalisis.
 function Read-LevelConfig([string]$FilePath) {
     $script:ConfigAliasPairs = New-Object System.Collections.Generic.List[object]
+    $script:ConfigPlansPair = $null
     try {
         $fs = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
     }
@@ -656,7 +671,7 @@ function Read-LevelConfig([string]$FilePath) {
     if ([string]::IsNullOrWhiteSpace($text)) { throw 'JSON invalido (archivo vacio)' }
     # El ConvertFrom-Json de 5.1 (JavaScriptSerializer) descarta en silencio la clave __type, tambien escrita
     # con escapes de la forma backslash-u y cuatro hex, antes de que se pueda comprobar la lista cerrada de
-    # claves. Un archivo valido solo tiene las claves level y aliases: cualquier aparicion de __type (comparacion ordinal,
+    # claves. Un archivo valido solo tiene las claves level, aliases y plans_dir: cualquier aparicion de __type (comparacion ordinal,
     # con esos escapes ya resueltos) se rechaza.
     if (Test-TextHasTypeKey $text) {
         throw 'clave desconocida: __type (el instalador puede ser anterior al archivo)'
@@ -672,7 +687,7 @@ function Read-LevelConfig([string]$FilePath) {
         throw 'debe ser un objeto'
     }
     foreach ($p in $m.PSObject.Properties) {
-        if (-not ((Test-OrdinalEqual $p.Name 'level') -or (Test-OrdinalEqual $p.Name 'aliases'))) {
+        if (-not ((Test-OrdinalEqual $p.Name 'level') -or (Test-OrdinalEqual $p.Name 'aliases') -or (Test-OrdinalEqual $p.Name 'plans_dir'))) {
             throw ('clave desconocida: ' + (Format-SafeShort $p.Name) + ' (el instalador puede ser anterior al archivo)')
         }
     }
@@ -692,6 +707,12 @@ function Read-LevelConfig([string]$FilePath) {
         foreach ($ap in $av.PSObject.Properties) {
             $script:ConfigAliasPairs.Add(@{ Key = [string]$ap.Name; Value = $ap.Value })
         }
+    }
+    # plans_dir (Fase 5): solo se guarda el valor crudo (Get-PropRaw, tipo estricto: una lista de un elemento no es una
+    # cadena); Get-PlansDirProblem decide si vale. Con la clave repetida gana la ultima (comportamiento de 5.1).
+    $plansProp = Get-PropRaw $m 'plans_dir'
+    if ($null -ne $plansProp) {
+        $script:ConfigPlansPair = @{ Value = $plansProp.Value }
     }
     return $levelResult
 }
@@ -799,6 +820,32 @@ function Get-DestRelProblem($DestRel, $ManifestPaths) {
         elseif (-not $same) { return ($who + ' cambia en un archivo fijo') }
         if (-not $seen.Add($d)) { return ($who + ' repite la de otro rol') }
         if (-not $same -and $manifestSet.Contains($d)) { return ($who + ' coincide con un archivo del manifiesto') }
+    }
+    return $null
+}
+
+# Carpeta de planes (Fase 5, T2). Funcion pura, sin E/S: devuelve el motivo del primer problema de plans_dir (texto
+# fijo, nunca el valor) o $null si es valido. L1 es una cadena; L2 y L3 la forma (de una a cuatro carpetas en
+# minuscula, hasta 64 caracteres; $PlansDirPattern ya excluye ".." y "\", ":", espacios, comillas y no ASCII); L4 ningun
+# segmento es un nombre de dispositivo de Windows (la misma regex que el alias: $AllowedPattern); L5 ningun trozo de
+# un segmento, partido por guion, es un nombre de $AliasRoles. Comparaciones ordinales, sin IgnoreCase. El valor es
+# texto que se mostrara y se insertara en textos (T3): el instalador no lo usa como ruta.
+function Get-PlansDirProblem($Value) {
+    if (-not ($Value -is [string])) { return 'plans_dir debe ser texto' }
+    $opts = [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+    if ($Value.Length -gt $PlansDirMaxLength -or -not [regex]::IsMatch($Value, $PlansDirPattern, $opts)) {
+        return 'plans_dir solo admite de 1 a 4 carpetas separadas por /, en minusculas (a-z, 0-9, _ y -; cada una empieza por letra o digito y tiene hasta 32 caracteres) y hasta 64 caracteres en total'
+    }
+    $segments = $Value.Split('/')
+    foreach ($segment in $segments) {
+        if (-not [regex]::IsMatch('agents/' + $segment + '.md', $AllowedPattern, $opts)) {
+            return 'plans_dir contiene un nombre reservado de Windows'
+        }
+    }
+    foreach ($segment in $segments) {
+        foreach ($token in $segment.Split('-')) {
+            if (Test-OrdinalIn $AliasRoles $token) { return 'plans_dir contiene el nombre de un agente de SyncLayer' }
+        }
     }
     return $null
 }
@@ -1211,6 +1258,125 @@ function ConvertTo-AliasBytes([byte[]]$Canon, [string]$Kind, [string]$Role, $For
     return , $aliasResult
 }
 
+# Carpeta de planes (Fase 5, T3). Posiciones de cada coincidencia del literal de la carpeta por defecto (docs/plans/) con
+# limite izquierdo: el caracter anterior no existe o no es de A-Z, a-z, 0-9, _, ., / ni -. Asi mydocs/plans/ y x/docs/plans/ no
+# casan. Recorrido manual con IndexOf ordinal (no usa la expresion de la autocomprobacion de ConvertTo-PlansBytes: dos caminos
+# distintos para el mismo resultado). Funcion pura; devuelve una lista (sin desenrollar) de indices de izquierda a derecha.
+function Get-PlansMatchIndexes([string]$Text) {
+    $literal = $PlansDirDefault + '/'
+    $hits = New-Object System.Collections.Generic.List[int]
+    $pos = 0
+    while ($true) {
+        $idx = $Text.IndexOf($literal, $pos, [System.StringComparison]::Ordinal)
+        if ($idx -lt 0) { break }
+        $blocked = $false
+        if ($idx -gt 0) {
+            $c = [int]$Text[$idx - 1]
+            $blocked = (($c -ge 65 -and $c -le 90) -or ($c -ge 97 -and $c -le 122) -or ($c -ge 48 -and $c -le 57) -or
+                $c -eq 95 -or $c -eq 46 -or $c -eq 47 -or $c -eq 45)
+        }
+        if (-not $blocked) { $hits.Add($idx) }
+        $pos = $idx + 1
+    }
+    return , $hits
+}
+
+# Sustituye cada coincidencia por <carpeta>/ en una sola pasada, de izquierda a derecha (lo ya reemplazado no se examina
+# otra vez). La carpeta ya paso Get-PlansDirProblem: alfabeto cerrado, nunca una ruta del sistema de archivos.
+function ConvertTo-PlansText([string]$Text, [string]$PlansDir) {
+    $hits = Get-PlansMatchIndexes $Text
+    $sb = New-Object System.Text.StringBuilder
+    $pos = 0
+    for ($k = 0; $k -lt $hits.Count; $k++) {
+        [void]$sb.Append($Text, $pos, $hits[$k] - $pos)
+        [void]$sb.Append($PlansDir + '/')
+        $pos = $hits[$k] + $PlansDirDefault.Length + 1
+    }
+    [void]$sb.Append($Text, $pos, $Text.Length - $pos)
+    return $sb.ToString()
+}
+
+# Carpeta de planes (Fase 5, T3): aplica plans_dir a un archivo gestionado, dentro de $Bytes (los bytes con alias; el hook y los
+# demas archivos no pasan por aqui). Kind = agent (agents/<rol>.md de los nueve) o text (rules/agentes.md y docs/agentes.md).
+# Funcion PURA: sin E/S, decodifica en ISO-8859-1 (un byte, un caracter: los bytes altos se conservan) y trabaja por lineas LF.
+# Falla cerrada (lanza): el llamador lo convierte en exit 1 antes de escribir. Solo se llama con carpeta efectiva.
+#  agent: primera linea ---, cierre = primera linea posterior de tres guiones exactos; una coincidencia dentro del frontmatter es
+#   un error (no se reescribe una description: ni un bloque hooks:); solo se sustituye en el cuerpo.
+#  text: todo el contenido, sin excepciones por bloques de codigo ni enlaces.
+#  Autocomprobacion del resultado releido: mismo numero de lineas, en un agente el frontmatter identico y el cierre en el mismo
+#   indice, recorrido en paralelo (fuera de las coincidencias, iguales; en cada una, <carpeta>/) con la expresion de limite
+#   izquierdo y numero de reemplazos igual al de coincidencias.
+function ConvertTo-PlansBytes([byte[]]$Bytes, [string]$Kind, [string]$PlansDir) {
+    $ord = [System.StringComparison]::Ordinal
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $lf = [string][char]10
+    $isAgent = Test-OrdinalEqual $Kind 'agent'
+    if (-not ($isAgent -or (Test-OrdinalEqual $Kind 'text'))) { throw 'tipo de archivo desconocido' }
+    if ($null -ne (Get-PlansDirProblem $PlansDir)) { throw 'la carpeta de planes no es valida' }
+    $lines = $latin1.GetString($Bytes).Split([char]10)
+    $close = -1
+    $outLines = New-Object System.Collections.Generic.List[string]
+    if ($isAgent) {
+        if ($lines.Count -lt 2 -or -not [string]::Equals($lines[0], '---', $ord)) { throw 'la primera linea no es ---' }
+        for ($i = 1; $i -lt $lines.Count; $i++) {
+            if ([string]::Equals($lines[$i], '---', $ord)) { $close = $i; break }
+        }
+        if ($close -lt 0) { throw 'frontmatter sin cierre' }
+        for ($i = 0; $i -le $close; $i++) {
+            if ((Get-PlansMatchIndexes $lines[$i]).Count -gt 0) { throw 'referencia a la carpeta de planes en el frontmatter' }
+        }
+        $outLines.AddRange([string[]]$lines)
+        $bodyIn = New-Object System.Collections.Generic.List[string]
+        for ($i = $close + 1; $i -lt $lines.Count; $i++) { $bodyIn.Add($lines[$i]) }
+        # Solo si hay lineas tras el cierre: un archivo que termina en --- sin LF final no tiene cuerpo.
+        if ($bodyIn.Count -gt 0) {
+            $bodyOut = (ConvertTo-PlansText ([string]::Join($lf, $bodyIn.ToArray())) $PlansDir).Split([char]10)
+            $outLines.RemoveRange($close + 1, $outLines.Count - $close - 1)
+            $outLines.AddRange([string[]]$bodyOut)
+        }
+    }
+    else {
+        $outLines.AddRange([string[]]((ConvertTo-PlansText ([string]::Join($lf, $lines)) $PlansDir).Split([char]10)))
+    }
+    $plansResult = $latin1.GetBytes([string]::Join($lf, $outLines.ToArray()))
+
+    # Autocomprobacion: se relee el resultado y se compara con la entrada.
+    $chk = $latin1.GetString($plansResult).Split([char]10)
+    if ($chk.Count -ne $lines.Count) { throw 'autocomprobacion: cambio el numero de lineas' }
+    if ($isAgent) {
+        $chkClose = -1
+        for ($i = 1; $i -lt $chk.Count; $i++) {
+            if ([string]::Equals($chk[$i], '---', $ord)) { $chkClose = $i; break }
+        }
+        if ($chk.Count -lt 2 -or -not [string]::Equals($chk[0], '---', $ord) -or $chkClose -ne $close) {
+            throw 'autocomprobacion: cambio el cierre del frontmatter'
+        }
+        for ($i = 0; $i -le $close; $i++) {
+            if (-not [string]::Equals($chk[$i], $lines[$i], $ord)) { throw 'autocomprobacion: cambio una linea del frontmatter' }
+        }
+    }
+    # Recorrido en paralelo: fuera de las coincidencias, caracter a caracter iguales; en cada coincidencia, <carpeta>/.
+    $rx = New-Object System.Text.RegularExpressions.Regex('(?<![A-Za-z0-9_./-])docs/plans/', [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    $total = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $src = [string]$lines[$i]
+        $expect = New-Object System.Text.StringBuilder
+        $pos = 0
+        foreach ($hit in $rx.Matches($src)) {
+            [void]$expect.Append($src, $pos, $hit.Index - $pos)
+            [void]$expect.Append($PlansDir + '/')
+            $pos = $hit.Index + $hit.Length
+            $total++
+        }
+        [void]$expect.Append($src, $pos, $src.Length - $pos)
+        if (-not [string]::Equals($expect.ToString(), [string]$chk[$i], $ord)) { throw 'autocomprobacion: una linea difiere de lo esperado' }
+    }
+    if ($total -ne (Get-PlansMatchIndexes ([string]::Join($lf, $lines))).Count) {
+        throw 'autocomprobacion: el numero de reemplazos no es el de coincidencias'
+    }
+    return , $plansResult
+}
+
 try {
     $Source = $PSScriptRoot
     if ([string]::IsNullOrEmpty($Source)) {
@@ -1302,6 +1468,8 @@ try {
     $level = 5
     $levelFromFile = $false
     $script:ConfigAliasPairs = New-Object System.Collections.Generic.List[object]
+    $script:ConfigPlansPair = $null
+    $plansEffective = $null
     $badLink = Find-Reparse $TargetFull $ConfigName
     if ($null -ne $badLink) { Stop-Install 1 ((Get-ReparseMessage $badLink) + ' No se escribio nada.') }
     if ([System.IO.Directory]::Exists($configPath)) {
@@ -1322,6 +1490,18 @@ try {
         $aliasProblem = Get-AliasTableProblem $script:ConfigAliasPairs $manifest.Order
         if ($null -ne $aliasProblem) {
             Stop-Install 1 ('error: ' + $ConfigName + ' no es valido: ' + $aliasProblem + '. No se escribio nada.')
+        }
+        # La carpeta de planes (clave plans_dir, Fase 5) se valida despues de la tabla de alias y antes de leer el
+        # estado y de escribir: exit 1 tambien con -DryRun. El mensaje lleva un motivo fijo, nunca el valor. Carpeta
+        # efectiva = un valor valido distinto de docs/plans; es texto que se muestra, nunca una ruta.
+        if ($null -ne $script:ConfigPlansPair) {
+            $plansProblem = Get-PlansDirProblem $script:ConfigPlansPair.Value
+            if ($null -ne $plansProblem) {
+                Stop-Install 1 ('error: ' + $ConfigName + ' no es valido: ' + $plansProblem + '. No se escribio nada.')
+            }
+            if (-not (Test-OrdinalEqual $script:ConfigPlansPair.Value $PlansDirDefault)) {
+                $plansEffective = [string]$script:ConfigPlansPair.Value
+            }
         }
     }
     # Avisos de entorno (T6): con el nivel 1 a 4, dos variables anulan el model: y el effort: de los agentes
@@ -1363,7 +1543,7 @@ try {
     # y docs/agentes.md) pasan por ConvertTo-AliasBytes (3.5 del plan); los demas archivos, el hook incluido, quedan en
     # los bytes del origen. Sin alias no se llama a la transformacion. Un error de transformacion es un defecto del
     # origen que el manifiesto no detecta: exit 1 antes de escribir, tambien en -DryRun. Los bytes con alias no los cubre
-    # el hash del manifiesto: se verifican contra $outHash en los Pasos 7 y 8. El bloque Nivel parte de estos bytes.
+    # el hash del manifiesto: se verifican contra $outHash en los Pasos 7 y 8. El bloque Planes y despues el bloque Nivel parten de estos bytes.
     $aliasForms = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
     foreach ($aliasPick in $aliasEffective) {
         $aliasForms[$aliasPick.Role] = $aliasPick.Alias
@@ -1396,19 +1576,52 @@ try {
         $aliasBytes[$rel] = $bytesAlias
     }
 
+    # Planes: carpeta de planes (Fase 5, T3). Con carpeta efectiva (un plans_dir valido distinto de docs/plans), los nueve agentes
+    # y los dos textos (rules/agentes.md y docs/agentes.md) pasan por ConvertTo-PlansBytes, que cambia el literal docs/plans/ del
+    # cuerpo por <carpeta>/; el bloque reescribe en su sitio $aliasBytes[$rel]. Desde aqui $aliasBytes son los bytes con alias y con
+    # carpeta de planes (el nombre se conserva: el bloque Nivel parte de ellos y una prueba fija su texto). Orden: alias, planes,
+    # nivel. Sin carpeta efectiva no se llama a ninguna funcion de transformacion y los bytes no cambian. El hook y los demas
+    # archivos no se transforman. Un error de transformacion es un defecto del origen que el manifiesto no detecta: exit 1 antes de
+    # escribir, tambien en -DryRun, con un motivo fijo (nunca el valor de la carpeta). La carpeta es solo texto que se inserta.
+    if ($null -ne $plansEffective) {
+        foreach ($rel in $manifest.Order) {
+            $plansKind = $null
+            $plansMatch = [regex]::Match($rel, '^agents/([a-z0-9_-]+)\.md\z')
+            if ($plansMatch.Success -and (Test-OrdinalIn $AliasRoles $plansMatch.Groups[1].Value)) {
+                $plansKind = 'agent'
+            }
+            elseif ((Test-OrdinalEqual $rel 'rules/agentes.md') -or (Test-OrdinalEqual $rel 'docs/agentes.md')) {
+                $plansKind = 'text'
+            }
+            if ($null -ne $plansKind) {
+                try {
+                    $aliasBytes[$rel] = ConvertTo-PlansBytes $aliasBytes[$rel] $plansKind $plansEffective
+                }
+                catch {
+                    Stop-Install 1 ('error: no se puede aplicar la carpeta de planes a ' + $rel + ': ' + (Get-ErrorText $_) + '. No se escribio nada.')
+                }
+            }
+        }
+    }
+
     # Nivel: bytes a escribir por archivo. Con el nivel 5 (el repositorio) son los bytes de $aliasBytes (los canonicos
-    # del origen, con alias si hay tabla efectiva) y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
+    # del origen, con alias y carpeta de planes si hay tabla efectiva) y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
     # manifiesto pasan por ConvertTo-LevelBytes con su celda de $LevelRows; el resto (auditor, shield,
-    # debugger, el hook, las reglas, la guia) queda en los bytes de $aliasBytes (los del origen, o con alias si hay tabla efectiva). Un error de renderizado es un
+    # debugger, el hook, las reglas, la guia) queda en los bytes de $aliasBytes (los del origen, o con alias y carpeta de planes si los hay). Un error de renderizado es un
     # defecto del origen que el manifiesto no detecta: exit 1 antes de escribir, tambien en -DryRun.
     # $outHash (hash de $outBytes) es lo que clasifica, verifica y se guarda en el estado como written.
-    # Sin tabla efectiva de alias, con el nivel 5 los mensajes de verificacion dicen lo de siempre (el manifiesto):
-    # quien no configura nada ve la misma salida que antes, salvo la linea Nivel:. Con alias se anade "y los alias".
+    # Sin tabla efectiva de alias ni carpeta de planes efectiva, con el nivel 5 los mensajes de verificacion dicen lo de siempre (el manifiesto):
+    # quien no configura nada ve la misma salida que antes, salvo la linea Nivel:. Con alias se anade "y los alias"; con carpeta de planes efectiva, "y la carpeta de planes".
     # Con el nivel 1 a 4 el hash esperado ya no es el del manifiesto.
     $verifyWhat = 'el manifiesto'
     if ($level -ne 5) { $verifyWhat = 'lo esperado para el nivel ' + $level }
     # Con alias (tabla efectiva no vacia) el hash esperado tampoco es el del manifiesto: los bytes llevan los alias.
     if ($aliasForms.Count -gt 0) { $verifyWhat = 'lo esperado para el nivel ' + $level + ' y los alias' }
+    # Con carpeta de planes efectiva tampoco: los textos llevan la carpeta (y los alias, si los hay).
+    if ($null -ne $plansEffective) {
+        if ($aliasForms.Count -gt 0) { $verifyWhat = 'lo esperado para el nivel ' + $level + ', los alias y la carpeta de planes' }
+        else { $verifyWhat = 'lo esperado para el nivel ' + $level + ' y la carpeta de planes' }
+    }
     $outBytes = @{}
     $outHash = @{}
     $adjustLines = New-Object System.Collections.Generic.List[string]
@@ -1578,6 +1791,11 @@ try {
     }
     foreach ($aliasItem in $aliasEffective) {
         Write-Out ('Alias: ' + $aliasItem.Role + ' -> ' + $aliasItem.Alias + ' (agents/' + $aliasItem.Alias + '.md)')
+    }
+    # Carpeta de planes (Fase 5): el valor ya paso la validacion (alfabeto cerrado, 64 caracteres como mucho) y ya se aplico a los
+    # textos (bloque Planes); aqui solo se muestra, escapado como el resto de lo que sale por pantalla.
+    if ($null -ne $plansEffective) {
+        Write-Out ('Planes: ' + (Format-Safe $plansEffective))
     }
     if ($backupItems.Count -gt 0) { Write-Out ('Respaldo: ' + (Format-Safe $BackupFull)) }
     if ($DryRun) { Write-Out 'Modo: -DryRun (no se escribe nada)' }

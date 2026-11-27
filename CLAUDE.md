@@ -9,8 +9,9 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1579 pruebas, 323 saltadas (320 de `install.ps1` contra pwsh, que no está instalado, y 3 de
-la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), unos 4 minutos. No la
+`__pycache__`. La suite: 1810 pruebas, 367 saltadas (364 contra pwsh, que no está instalado, y 3 de
+la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), entre unos 43 y 70 minutos.
+Las pruebas de `install.ps1` corren en esta máquina contra Windows PowerShell 5.1. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
 
@@ -44,8 +45,8 @@ Reporte de uso de subagentes (se ejecuta desde el clon, no se instala). Pasa sie
 
 ```
 python -B tools/usage_report.py inspect [--claude-dir DIR] [--project-dir DIR] [--show-paths]
-python -B tools/usage_report.py project [--project-dir DIR] [--claude-dir DIR] [--transcripts-dir NOMBRE]... [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths]
-python -B tools/usage_report.py global  [--claude-dir DIR] [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths]
+python -B tools/usage_report.py project [--project-dir DIR] [--claude-dir DIR] [--transcripts-dir NOMBRE]... [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths] [--lang es|en]
+python -B tools/usage_report.py global  [--claude-dir DIR] [--since AAAA-MM-DD] [--until AAAA-MM-DD | --all] [--stdout] [--show-paths] [--lang es|en]
 ```
 
 Exit 0 correcto, 1 entorno o datos, 2 uso incorrecto, 3 esquema desconocido o demasiados
@@ -85,7 +86,7 @@ Cuatro piezas, de la más abstracta a la más concreta (la cuarta, el instalador
 
 4. El instalador: `install.ps1` (Windows PowerShell 5.1), `install-manifest.json` (los doce
    archivos gestionados con su hash canónico) y `tools/build_manifest.py` (lo genera y lo
-   comprueba). Lee además `<Target>/synclayer-config.json` (opcional, a mano, sólo `level` y `aliases`; ver «Niveles
+   comprueba). Lee además `<Target>/synclayer-config.json` (opcional, a mano, sólo `level`, `aliases` y `plans_dir`; ver «Niveles
    de esfuerzo» y «Alias de agentes» en «Comportamientos no obvios»). En el destino deja el estado `<Target>/synclayer-manifest.json`, con esquema 2 (por
    archivo: hash del origen `sha256`, hash de lo escrito `written` y `level`; con algún alias efectivo, esquema 3, que
    añade `dest`, la ruta real de destino; lee también el esquema 1 y lo migra). Con alias, el agente se escribe en
@@ -301,6 +302,89 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     línea. Al editarlos usa `<rol>` y `<alias>` como ejemplo, nunca un nombre de rol. El inventario de
     `tests/test_aliases.py` (`INVENTORY`) falla si aparece una forma nueva o cambia un conteo: actualízalo en el
     mismo cambio. `README.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` no se instalan ni se transforman.
+- Carpeta de planes (contrato con las pruebas): `# Planes:` (una sola línea) y `function ConvertTo-PlansBytes` son
+  anclas de `patch_script` en `tests/test_install.py`; no las renombres ni las muevas sin ajustar las pruebas.
+- Carpeta de planes (Fase 5, plan `docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md`; T1
+  a T4 hechas; documentada en `README.md`, sección «Carpeta de planes», y en «Límites del instalador»): `install.ps1` define `$PlansDirDefault`, `$PlansDirPattern` y `$PlansDirMaxLength` junto a
+  `$AliasRoles`. La referencia es `tests/plans_ref.py` (contrato: `script_constants` lee esas tres
+  constantes de `install.ps1`) y las pruebas `tests/test_plans.py` (casos 1 a 9 y 31, sin PowerShell). El
+  inventario falla si aparece una forma `<segmento>/plans/` distinta de `docs/plans/` (un alias válido podría
+  crear o destruir el literal; de eso depende el orden alias, planes, nivel).
+  - T2 (hecha): `install.ps1` lee `plans_dir` en la lectura única de la configuración
+    (`$script:ConfigPlansPair`, con `Get-PropRaw`: tipo estricto) y la valida con `Get-PlansDirProblem` (L1 a L5;
+    función pura, motivo fijo, nunca el valor) después de la tabla de alias y antes del Paso 3: exit 1 también con
+    `-DryRun`, antes de escribir. Carpeta efectiva = valor válido distinto de `docs/plans`; sólo entonces imprime
+    `Planes: <valor>` (tras `Nivel:` y `Alias:`; no casa con `LINE`). Sin la clave o con
+    `docs/plans`, la salida es idéntica a la base byte a byte. Medido en 5.1: con `plans_dir` repetido gana la
+    última, sin aviso; cualquier `__type`, también dentro de un valor, da `clave desconocida: __type` (por eso
+    `docs/a__type` se rechaza). Pruebas: 3 estáticas y 19 `test_f5t2_*` en `tests/test_install.py`. Abierto a
+    propósito (Low): la clave repetida no avisa.
+  - T3 (hecha): la carpeta se APLICA (la guarda temporal de T2 ya no existe). Funciones puras con autocomprobación
+    `Get-PlansMatchIndexes` (recorrido manual con `IndexOf` ordinal), `ConvertTo-PlansText` y `ConvertTo-PlansBytes`
+    (`$Bytes`, `$Kind` `agent` o `text`, `$PlansDir`): cambian el literal `docs/plans/` por `<carpeta>/` si no lo
+    precede un carácter de `[A-Za-z0-9_./-]`, en una sola pasada. En un agente, un literal dentro del frontmatter
+    lanza `referencia a la carpeta de planes en el frontmatter`; la función revalida la carpeta por su cuenta con el
+    motivo fijo `la carpeta de planes no es valida`. Un error sale como exit 1 antes de escribir (también en
+    `-DryRun`): `error: no se puede aplicar la carpeta de planes a <rol>: <motivo>. No se escribio nada.` El bloque
+    `# Planes:` va entre el bucle que calcula `$aliasBytes` y `# Nivel:` (el ancla es una sola línea; `# Nivel:` no
+    se edita), reescribe `$aliasBytes[$rel]` en su sitio y recorre los nueve agentes y `rules/agentes.md` y
+    `docs/agentes.md`. Orden: alias, planes, nivel. Sin carpeta efectiva (sin clave o `docs/plans`) no se llama a la
+    transformación y bytes y salida son idénticos a la base. El hook no se transforma; frontmatter y `hooks:`
+    quedan intactos. Hash, clasificación y `written` del estado van sobre el texto transformado; los bytes con
+    carpeta no los cubre el hash del manifiesto: se verifican contra `$outHash`. `$verifyWhat` con carpeta efectiva
+    dice `lo esperado para el nivel N y la carpeta de planes` (con alias, `... N, los alias y la carpeta de planes`).
+    El eco `Planes:` pasa por `Format-Safe`. El estado no guarda la carpeta: no hay «carpeta anterior» en la
+    salida. Con carpeta efectiva la copia inversa `~/.claude` -> repo no vale. Pruebas: 37 `test_f5t3_*`. El efecto
+    en Claude Code real (que `atlas` use la carpeta) NO está verificado (G1): no lo documentes como probado.
+  - T4 (hecha): SOLO pruebas; `install.ps1` no cambió. 10 `test_f5t4_*` en `tests/test_install.py` con los
+    helpers `f5t4_repo`, `f5t4_state_by_path` y `f5t4_split`. Cubren alias + nivel + carpeta con el repositorio
+    real (nueve alias, niveles 5 y 3, ningún nombre de rol residual, las 6 permutaciones del orden alias/planes/
+    nivel contra la salida instalada, con `segment_problems` vacío como condición previa), la celda del ROL en
+    `model:`/`effort:` y `Ajuste:` con la ruta de destino, `-DryRun` sobre una instalación existente, K1 a K3
+    (carpeta agregada, cambiada, quitada: `ACTUALIZAR`, nunca `MODIFICADO` sobre un destino intacto; con y sin
+    alias; repo real = 3 `ACTUALIZAR` y 9 `IGUAL`), K4 (edición a mano: exit 3 con sus frases en orden, y
+    `-Force`), K5 (estado ilegible, vacío, esquema 99 o ausente: nunca `ACTUALIZAR`), K6 (reinstalar lo mismo no
+    cambia nada, ni línea nueva salvo `Planes:`), alias quitados con carpeta (huérfanos intactos, el estado vuelve
+    al esquema 2) y la configuración nunca escrita ni respaldada. Abiertos a propósito (Minor, aserciones
+    opcionales): respaldo del estado y de los otros nueve archivos en K1 a K3 del repo real, aserto redundante
+    del esquema 2 y respaldo del estado ilegible con `-Force` final en K5.
+- Idioma del reporte de uso (Fase 5, mismo plan; T5 y T6 hechas, documentado en el README): `project` y `global` aceptan `--lang es|en`
+  (por defecto `es`; `inspect` no lo acepta) y `render_project_report` / `render_global_report` el parámetro
+  `lang` (por defecto `es`). Detalle en «Reporte de uso», bullets «Catálogo de textos» e «Idioma».
+  - `--lang` usa un `type=` propio (`_lang_arg`): lista cerrada `LANGS`, comparación exacta (`EN`, `en-US` y
+    vacío dan exit 2 con `idioma invalido: use es o en`, sin repetir el valor), validada antes de leer nada. No
+    uses `choices=`: `argparse` repetiría el valor. Repetido gana el último. Con `--stdout` imprime en el idioma
+    pedido. Un reporte `en` sustituye al `es` en el mismo destino (mismo marcador).
+  - Los generadores validan con `type(lang) is str and lang in LANGS`; si no, `ValueError` con mensaje fijo
+    (`MSG_REPORT_LANG`), sin eco del valor.
+  - No cambia con el idioma: cifras, fechas, orden, marcador, `REPORT_SCHEMA`, claves del pie (`report_schema`,
+    `herramienta`, `ultima_version_verificada`, `proyecto`), destinos, nombres de agente, modelo, skill y versión
+    del usuario, ni los mensajes de la CLI ni `inspect` (siguen en español). Lector y agregado sin tocar.
+  - `argparse` repite en stderr los argumentos desconocidos (también `inspect --lang X`); ya ocurría antes de T6
+    y no se corrigió.
+  - `lbl_other_version` no existe: `versions_seen` es numérico, no hay etiqueta de «otra versión».
+  - El efecto con un `~/.claude` real no se verificó (V2 del propietario: una corrida de `global --lang en
+    --stdout`). No lo documentes como probado.
+  `shield` interviene en T6 (agrega `--lang`, entrada de usuario).
+- Perfiles por proyecto (Fase 5, T7 hecha; solo documentación, sin código): `README.md`, sección «Perfiles por
+  proyecto» (tabla con la certeza de cada afirmación, «Desactivar un agente», «Lo que no se configura y por qué») y
+  `docs/agentes.md`, «Adaptar un agente a un proyecto». Documentado por Claude Code: un `.claude/agents/<nombre>.md`
+  con el mismo `name:` reemplaza al global solo en ese proyecto; prioridad gestionado, `--agents`, proyecto, usuario,
+  plugin; `permissions.deny` con `Agent(<nombre>)` (o `--disallowedTools`) impide usar un agente. NO verificado, no lo
+  escribas como hecho: qué pasa con la guarda si la copia de proyecto no trae `hooks:`; que con alias el nombre a
+  igualar sea el alias; el efecto real de `permissions.deny` (G1 del propietario). No hay fusión de campos documentada.
+  SyncLayer no escribe `settings.json` ni comprueba la regla. El texto nuevo de `docs/agentes.md` (archivo
+  gestionado y transformado al instalar) usa `<nombre>` y `<alias>`, sin nombres de rol ni el literal de la carpeta
+  de planes por defecto; `rules/agentes.md` no cambió. Las secciones nuevas del README no llevan porcentajes ni
+  promesas de ahorro (`promise_hits`). Candidatas descartadas con motivo: ver la tabla del README y `HISTORY.md`.
+- Fase 5, T8: añade a `docs/agentes.md` el apartado «Cambiar la carpeta de planes» y la viñeta de `--lang` (archivo
+  gestionado y transformado: usa `<nombre>` y `<alias>`, sin nombres de rol ni el literal de la carpeta por defecto),
+  regenera el manifiesto y agrega el caso 47 a `tests/test_phase5_docs.py` (20 pruebas en el archivo; 1810 pruebas,
+  367 saltadas; suite completa en la corrida de cierre de T8). El README ya documentaba `plans_dir` y `--lang` (T3,
+  T5, T6, T7); T8 añadió límites, estructura y pruebas. El valor de `plans_dir` nunca es una ruta para el instalador.
+  Desde `# Planes:`, `$aliasBytes` lleva alias y carpeta. Las etiquetas del lector en español son identificadores y se
+  traducen en la salida, no en origen. Con carpeta efectiva y con alias reales, el efecto en Claude Code real no está
+  verificado (G1).
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
   cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
@@ -351,7 +435,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (320 en la última corrida; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (364 en la última corrida de 1810 pruebas y 367 saltadas; las otras 3 saltadas son de la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los
@@ -394,6 +478,39 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   - Las pruebas «sin aviso de git» suben carpetas padre reales: fallarían en una máquina con `.git`
     en el home o en `%TEMP%`. Las pruebas pasan siempre `--claude-dir` a una carpeta temporal.
   - El instalador no instala la herramienta ni toca `synclayer-usage.md` ni `settings.json`.
+  - Catálogo de textos (Fase 5, T5 y T6): `LANGS = ("es", "en")`, `DEFAULT_LANG = "es"` y `CATALOG`, inmutable
+    (`MappingProxyType` en dos capas: idioma y claves). Un diccionario por idioma (`_ES`, `_EN`) con el mismo
+    juego de claves (136 por idioma); por clave, mismo tipo (tupla o cadena), misma longitud de tupla y mismos marcadores
+    `%d`/`%s`/`%%`. Los 28 generadores internos, de `_legend` a `render_global_report`, reciben el catálogo ya
+    resuelto `t` como primer argumento y leen `t["clave"]`. No hay estado global mutable que decida el texto. Las
+    firmas públicas no cambian. Las constantes de texto del módulo (`HOW_TO_READ`, `PRIVACY_NOTES`, `NOTE_*`,
+    `LEGEND_SMALL`, `UNKNOWN_WARNING`, `GLOBAL_*`) quedan como ALIAS de compatibilidad: los generadores ya no las
+    leen, así que editarlas no cambia el reporte; edita el catálogo. Las claves estables del pie (las que
+    consume quien lee el reporte) no se traducen.
+  - Todo texto nuevo del reporte va a `CATALOG`. La prueba `ReportTextsOutsideCatalog` (caso 33, con `ast`) falla
+    si un generador trae un texto fijo fuera del catálogo, salvo una lista cerrada de excepciones justificadas
+    (`ReportTextsOutsideCatalog.ALLOWED`: `plugin:`, `SyncLayer`, las 4 claves estables del pie y el error
+    interno de `_raw_table`; `integrado` y los marcadores de `_code` ya están en el catálogo). `ReportCatalogCoverage` exige paridad de claves, tipos y marcadores entre idiomas,
+    que toda clave se use y que cada texto cambie algún escenario del golden.
+  - Idioma (T6): `_code(text, t=None)` toma los marcadores de vacío y de no cadena del catálogo (`code_empty`,
+    `code_not_text`); sin `t`, los del idioma por defecto. `_labels(t, group=False)` y `_cell(t, value, group=False)`
+    traducen las etiquetas cerradas del lector con tablas cerradas por idioma (`lbl_*`): los nombres de conjunto
+    sin paréntesis (`integrado`, `otros`, `sin-meta`, `plugin:(no-valido)`) solo se traducen en columnas de
+    conjunto (`group=True`); en una columna de agente, skill o modelo pueden ser un dato del usuario y salen tal
+    cual. Un valor fuera de la tabla sale como estaba. El catálogo `en` es ASCII, traducción fiel, sin promesas
+    de ahorro, calidad ni costo (pruebas `ReportCatalogEn`, `ReportCatalogCoverageEn`, `ReportLang`).
+  - Golden del inglés: `tests/usage_golden_en.json`, mismos cinco escenarios y misma receta que el del español
+    (`golden_outputs("en")` en `tests/test_usage_report.py`, `VERIFIED_MAX` fijado en `2.1.326` con `mock.patch`);
+    regenéralo solo si el inglés cambia a propósito. Pruebas de CLI: `LangOption` (`tests/test_usage_report_cli.py`)
+    y `LangPrivacyEndToEnd` (`tests/test_usage_report_edges.py`).
+  - Golden del español (T5): `tests/usage_golden_es.json` (5 escenarios: wide, empty, singular, volumes, all_time;
+    proyecto y global). Se generó con la herramienta ANTERIOR al refactor; es ASCII, `indent=1`, `sort_keys` y LF
+    final. Se construye y renderiza con `VERIFIED_MAX` fijado en `2.1.326` mediante `mock.patch`
+    (`GOLDEN_ES_VERIFIED_MAX`): subir `VERIFIED_MAX` no lo rompe. Receta de regeneración: comentario de
+    `golden_es_outputs()` en `tests/test_usage_report.py`; regenéralo sólo si el español cambia a propósito.
+  - Pureza: la lista blanca `ReportPurity.REACHABLE` de `tests/test_usage_report.py` enumera los nombres del
+    módulo alcanzables desde los generadores; T5 quitó cinco ya no alcanzados y agregó `CATALOG`, `DEFAULT_LANG`,
+    `_ES` y `_ES_HOW_TO_READ_COMMON`. Un nombre nuevo alcanzado desde un generador se agrega ahí.
 
 ## Cierre de un cambio
 

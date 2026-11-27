@@ -1,8 +1,9 @@
 # Backlog: reportes de uso y configuración de SyncLayer
 
-> Estado: **backlog, sin desglosar**. Las cuatro fases de abajo son intención del propietario
-> (2026-11-19), no un diseño. Cada una empieza con una exploración cuyo resultado se le propone
-> al propietario antes de implementar nada. Las ideas marcadas «hipótesis» no están verificadas.
+> Estado (2026-11-24): **las fases 2 a 5 están desglosadas**; la Fase 5 está desglosada y aprobada, en curso
+> (ver su sección). Las fases de abajo nacieron como intención del propietario (2026-11-19), no como un
+> diseño; cada una empezó con una exploración cuyo resultado se le propuso al propietario antes de
+> implementar nada. Las ideas marcadas «hipótesis» no están verificadas.
 > Al desglosar una fase en tasks, se actualiza la sección «Línea de tiempo y avance» del README.
 
 Punto de partida: el instalador (`docs/plans/2026-11-19-instalador.md`) está en curso y es la
@@ -112,6 +113,13 @@ lista de un elemento deben rechazarse). Mientras tanto está documentado como l�
 
 ## Fase 5: otras configuraciones dinámicas
 
+**Estado (2026-11-24).** Desglosada y aprobada; en curso: plan
+[`2026-11-24-fase5-configuraciones-dinamicas.md`](2026-11-24-fase5-configuraciones-dinamicas.md) (9
+unidades), rama `feat/configuraciones-dinamicas`, aprobado por el propietario con los valores por
+defecto de P1 a P14. Entran carpeta de planes, idioma del reporte de uso y perfiles por proyecto (sólo
+documentación); el resto de las candidatas de abajo se descarta con motivo en el plan (sección 1.2). El
+texto que sigue es el pedido original.
+
 **Pedido.** Buscar qué más se puede configurar sin complicar el proyecto.
 
 **Etapa 1 (exploración y propuesta).** Candidatas a evaluar, cada una con su costo de
@@ -125,6 +133,18 @@ mantenimiento; se proponen sólo las que valgan la pena:
   documente como sandbox.
 - Perfiles por proyecto (`.claude/agents/` ya reemplaza al global; ver si basta con documentarlo).
 - Descartar explícitamente lo que añada complejidad sin valor, y decir por qué.
+
+## Candidata (2026-11-27): «Install as app» de Anthropic
+
+**Pedido.** Evaluar la función «Install as app» de Anthropic (nombre dado por el propietario; sin
+verificar qué es ni cómo funciona) para distribuir o instalar este módulo, como alternativa o
+complemento a `install.ps1`.
+
+**Etapa 1 (exploración, sin código).** `scout` confirma con documentación oficial qué es la función, en
+qué productos existe (Claude Code, escritorio, web), qué se puede empaquetar con ella (agentes, reglas,
+hooks, `docs/`) y si permite lo que hoy hace el instalador: hash canónico, respaldo, niveles, alias,
+carpeta de planes y `-DryRun`. Después se decide si encaja, se descarta con motivo o se desglosa en
+unidades. Hasta entonces no hay estimación ni fase asignada.
 
 ## Orden sugerido
 

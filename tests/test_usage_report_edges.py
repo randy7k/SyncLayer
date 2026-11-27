@@ -407,5 +407,101 @@ class InterruptEndToEnd(EdgeBase):
                 self.assertEqual(tur.snapshot(self.base), before, (phase, argv[0]))
 
 
+class LangPrivacyEndToEnd(tcli.CliBase):
+    """Caso 42: las pruebas de «sin fuga» y «sin rutas sin --show-paths», repetidas con `--lang en`; los mensajes de la
+    CLI siguen en espanol."""
+
+    _assert_clean = tcli.EndToEndNoLeak._assert_clean
+    _rich = tcli.EndToEndNoLeak._rich
+
+    def test_exit_0_reports_stdout_and_stderr_in_english(self):
+        tree, proj = self._rich()
+        for extra in ((), ("--stdout",), ("--stdout", "--show-paths")):
+            code, out, err = self.run_main("project", "--claude-dir", tree.claude_dir, "--project-dir", proj,
+                                           "--all", "--lang", "en", *extra)
+            self.assertEqual(code, 0, err)
+            if "--show-paths" not in extra:
+                self._assert_clean(out, err)
+                self.assertNotIn(proj, out + err)
+            else:
+                self._assert_clean(out.replace(proj, ""), err)
+        code, out, err = self.run_main("global", "--claude-dir", tree.claude_dir, "--all", "--lang", "en")
+        self.assertEqual(code, 0, err)
+        self._assert_clean(out, err)
+        self.assertNotIn(tree.claude_dir, out + err)
+        code, out_g, err = self.run_main("global", "--claude-dir", tree.claude_dir, "--all", "--stdout", "--lang", "en")
+        self._assert_clean(out_g, err)
+        project_text = self.read_bytes(self.report_path(proj)).decode("utf-8")
+        global_text = self.read_bytes(os.path.join(tree.claude_dir, "synclayer-usage.md")).decode("utf-8")
+        self._assert_clean(project_text, global_text, out_g)
+        self.assertEqual(out_g, global_text)
+        for text in (project_text, global_text):
+            self.assertIn("usage report", text)
+            self.assertNotIn("Reporte", text)
+            self.assertNotIn("c--Users", text)
+            self.assertNotIn(os.path.basename(self.base), text)
+            self.assertNotIn(self.folder_of(proj), text)
+            self.assertTrue(all(ch == "\n" or " " <= ch <= "~" or ch in ("█", "░") for ch in text))
+        self.assertNotIn(us.M_SESSION, project_text + global_text)
+        self.assertEqual(tcli.temps_under(self.base), [])
+
+    def test_exit_1_and_3_outputs_with_lang_en_are_spanish_and_clean(self):
+        tree, proj = self._rich()
+        other = self.make_project("sin transcripciones " + us.M_FOLDER)
+        before = tur.snapshot(self.base)
+        code, out, err = self.run_main("project", "--claude-dir", tree.claude_dir, "--project-dir", other,
+                                       "--all", "--lang", "en")
+        self.assertEqual(code, 1)
+        self._assert_clean(out, err)
+        self.assertTrue(err.startswith("error: el proyecto no tiene transcripciones"), err)
+        self.assertNotIn(other, err)
+        code, out, err = self.run_main("global", "--claude-dir", os.path.join(self.base, us.M_FOLDER), "--all",
+                                       "--lang", "en")
+        self.assertEqual(code, 1)
+        self.assertNotIn(self.base, err)
+        self.assertEqual(tur.snapshot(self.base), before)
+        bad_base = os.path.join(self.base, "malo")
+        os.makedirs(bad_base)
+        proj3 = self.make_project("tres " + us.M_FOLDER)
+        tree3 = us.Tree(bad_base)
+        for i in range(10):
+            tree3.subagent(self.folder_of(proj3), us.M_SESSION, "a%d" % i,
+                           [us.user("2026-03-01T10:00:00Z"), "basura " + us.M_CONTENT])
+        before = tur.snapshot(self.base)
+        for argv in (["project", "--claude-dir", tree3.claude_dir, "--project-dir", proj3, "--all", "--lang", "en"],
+                     ["global", "--claude-dir", tree3.claude_dir, "--all", "--lang", "en"]):
+            code, out, err = self.run_main(*argv)
+            self.assertEqual(code, 3)
+            self.assertTrue(err.startswith("error: esquema desconocido"), err)
+            self._assert_clean(out, err)
+        self.assertEqual(tur.snapshot(self.base), before)
+
+    def test_username_not_in_english_output(self):
+        tree, proj = self._rich()
+        user = os.path.basename(os.path.expanduser("~"))
+        outs = []
+        for argv in (["project", "--claude-dir", tree.claude_dir, "--project-dir", proj, "--all", "--lang", "en"],
+                     ["global", "--claude-dir", tree.claude_dir, "--all", "--lang", "en"]):
+            code, out, err = self.run_main(*argv)
+            outs += [out, err]
+        outs.append(self.read_bytes(self.report_path(proj)).decode("utf-8"))
+        outs.append(self.read_bytes(os.path.join(tree.claude_dir, "synclayer-usage.md")).decode("utf-8"))
+        if len(user) > 3:
+            for text in outs:
+                self.assertNotIn(user.lower(), text.lower())
+
+    def test_hostile_synthetic_names_never_break_the_english_tables_or_leak_markers(self):
+        tree = tur.rich_tree(self.base)
+        proj = self.make_project(us.M_FOLDER + " x")
+        os.rename(os.path.join(tree.projects, "c--Users-" + us.M_FOLDER + "-proj"),
+                  os.path.join(tree.projects, self.folder_of(proj)))
+        code, out, err = self.run_main("project", "--claude-dir", tree.claude_dir, "--project-dir", proj, "--all",
+                                       "--stdout", "--lang", "en")
+        self.assertEqual(code, 0, err)
+        for block in tur.md_tables(out):
+            self.assertEqual(len({tur.columns(line) for line in block}), 1, block[0])
+        self._assert_clean(out, err)
+
+
 if __name__ == "__main__":
     unittest.main()
