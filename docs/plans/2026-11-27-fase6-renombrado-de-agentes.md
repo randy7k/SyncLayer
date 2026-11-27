@@ -383,6 +383,8 @@ Reglas para todas:
   `test_levels` no usan `names` (vacuas): quitarlas o anotarlo; (4) `run_with_mutated_names` debe restaurar
   `sys.path`; (5) renombrar `test_case7_names_py_and_rename_ref_are_the_only_homes_of_the_names` y comparar el
   conjunto de modos de `hooks:` en vez de `found[0]`. T7 no cierra sin resolverlos.
+  Añadido en T4: (6) la entrada `ALLOWED_TOKENS["test_install.py"]` (`ar.<ROL>_WORDS`) y la prueba
+  `test_case7_the_full_scan_covers_test_install_and_is_not_empty` dependen de `nm.WRITER.upper()`: igual que (2).
 - Aviso para T10 (hallazgo C de `auditor`): `test_case6_assumption7...` de `tests/test_rename.py` falla si otra
   prueba de `tests/` menciona `.svg`; el caso 24 de T10 necesita leer los SVG, así que T10 ajusta o retira esa
   comprobación en el mismo cambio y lo anota en su cierre.

@@ -174,6 +174,12 @@ PLANS_SAMPLE["hooks/agent_guard.py"] = (b"# " + nm.DEVELOPER.encode() + b" " + n
 PLANS_DIR = "docs/planes"
 
 
+def alias_lines(table):
+    """Las lineas `Alias:` de la salida del instalador para `table` (rol -> alias): una por alias, en el orden de
+    $AliasRoles, que es el de names.ROLES."""
+    return [f"Alias: {role} -> {table[role]} (agents/{table[role]}.md)" for role in nm.ROLES if role in table]
+
+
 def alias_expected(files, table, level=5):
     """{ruta del rol: (ruta de destino, bytes esperados)} segun la referencia independiente (aliases_ref) y, con el
     nivel 1 a 4, la celda del ROL de la tabla de install.ps1."""
@@ -4301,8 +4307,8 @@ class InstallCases:
     # 19 del plan). T5 retiro la guarda temporal de T2: una tabla efectiva valida ya se aplica de punta a punta. ---
 
     CONFIG_ERR = "error: synclayer-config.json no es valido: "
-    ALIAS_NINE = {"atlas": "mapa", "auditor": "revisor", "debugger": "cazador", "forge": "dev", "oracle": "guia",
-                  "scout": "explorador", "scribe": "redactor", "sentinel": "amigo-qa", "shield": "guardia"}
+    ALIAS_NINE = {nm.PLANNER: "mapa", nm.REVIEWER: "revisor", nm.DEBUGGER: "cazador", nm.DEVELOPER: "dev", nm.ANALYST: "guia",
+                  nm.RESEARCHER: "explorador", nm.WRITER: "redactor", nm.QA: "amigo-qa", nm.SECURITY: "guardia"}
 
     def alias_config(self, aliases, level=None):
         obj = {}
@@ -4374,7 +4380,7 @@ class InstallCases:
         for mode in (["-DryRun"], []):
             results = {}
             for name, cfg in (("base", b'{"level": 5}'), ("vacio", b'{"level": 5, "aliases": {}}'),
-                              ("propio", b'{"level": 5, "aliases": {"forge": "forge"}}'), ("nueve propios", own)):
+                              ("propio", (b'{"level": 5, "aliases": {"' + nm.DEVELOPER.encode() + b'": "' + nm.DEVELOPER.encode() + b'"}}')), ("nueve propios", own)):
                 with self.subTest(case=name, mode=mode):
                     self.make_source()
                     self.write_config(cfg)
@@ -4401,7 +4407,7 @@ class InstallCases:
         self.assertNotIn("Alias:", out1)
 
     def test_t2_case10_aliases_of_an_invalid_type_exit1_in_both_modes(self):
-        variants = [("null", b"null"), ("lista vacia", b"[]"), ("lista de un objeto", b'[{"forge": "dev"}]'),
+        variants = [("null", b"null"), ("lista vacia", b"[]"), ("lista de un objeto", (b'[{"' + nm.DEVELOPER.encode() + b'": "dev"}]')),
                     ("cadena", b'"dev"'), ("numero", b"3"), ("true", b"true"), ("false", b"false"),
                     ("lista de listas", b"[[]]")]
         for name, value in variants:
@@ -4410,7 +4416,7 @@ class InstallCases:
                 shutil.rmtree(self.target)
 
     def test_t2_case11_unknown_alias_key_exit1_and_the_key_is_escaped(self):
-        for key in ("qa", "Forge", "FORGE", "forge ", "agents", "forg"):
+        for key in ("qa", nm.DEVELOPER.capitalize(), nm.DEVELOPER.upper(), f"{nm.DEVELOPER} ", "agents", nm.DEVELOPER[:-1]):
             with self.subTest(key=key):
                 self.assert_config_rejected(json.dumps({"aliases": {key: "dev"}}).encode("ascii"),
                                             "rol desconocido en aliases: " + key)
@@ -4429,15 +4435,15 @@ class InstallCases:
                "a" * 65, "dév", "dev\n", "dev\nhooks: x", "dev#x", "'dev'", "dev\u0000", "\u00ad", "dev ",
                "de\u0301v"]
         for value in bad:
-            self.assertIsNotNone(ar.validate_table({"forge": value}), repr(value))
-            self.assert_alias_verdict({"forge": value})
+            self.assertIsNotNone(ar.validate_table({nm.DEVELOPER: value}), repr(value))
+            self.assert_alias_verdict({nm.DEVELOPER: value})
         for value in (None, 3, 3.5, True, False, ["dev"], {"a": "b"}, [], {}):
-            self.assertIn("debe ser texto", ar.validate_table({"forge": value}))
-            self.assert_alias_verdict({"forge": value})
+            self.assertIn("debe ser texto", ar.validate_table({nm.DEVELOPER: value}))
+            self.assert_alias_verdict({nm.DEVELOPER: value})
 
     def test_t2_case12_both_modes_for_a_representative_set(self):
         for value in ("Dev", None, "a" * 65, ["dev"]):
-            self.assert_alias_verdict({"scribe": value}, modes=(["-DryRun"], []))
+            self.assert_alias_verdict({nm.WRITER: value}, modes=(["-DryRun"], []))
 
     def test_t2_case13_reserved_names_yaml_words_and_windows_names(self):
         words = (ar.reserved() + ["Explore", "PLAN", "General-Purpose"] + ar.yaml_words() +
@@ -4445,8 +4451,8 @@ class InstallCases:
         self.assertIn("fork", ar.reserved())
         self.assertIn("output-style-setup", ar.reserved())
         for value in words:
-            self.assertIsNotNone(ar.validate_table({"forge": value}), value)
-            self.assert_alias_verdict({"forge": value})
+            self.assertIsNotNone(ar.validate_table({nm.DEVELOPER: value}), value)
+            self.assert_alias_verdict({nm.DEVELOPER: value})
         # El motivo exacto de cada familia (V1, V2, V3, V4).
         for value, motivo in (("true", "es una palabra reservada de YAML"), ("null", "es una palabra reservada de YAML"),
                               ("con", "es un nombre reservado de Windows"), ("nul", "es un nombre reservado de Windows"),
@@ -4456,84 +4462,84 @@ class InstallCases:
                               ("explore", "es el nombre de un agente integrado de Claude Code"),
                               ("Explore", "solo admite a-z, 0-9, _ y -"), ("PLAN", "solo admite a-z, 0-9, _ y -")):
             with self.subTest(value=value):
-                self.assert_config_rejected(self.alias_config({"forge": value}),
-                                            "el alias de forge " + motivo, modes=(["-DryRun"],))
+                self.assert_config_rejected(self.alias_config({nm.DEVELOPER: value}),
+                                            f"el alias de {nm.DEVELOPER} " + motivo, modes=(["-DryRun"],))
                 shutil.rmtree(self.target)
 
     def test_t2_case14_table_rules_v5_v6_v7_v8_and_cycles(self):
-        two_cycle = {"forge": "scribe", "scribe": "forge"}
-        three_cycle = {"forge": "scribe", "scribe": "sentinel", "sentinel": "forge"}
+        two_cycle = {nm.DEVELOPER: nm.WRITER, nm.WRITER: nm.DEVELOPER}
+        three_cycle = {nm.DEVELOPER: nm.WRITER, nm.WRITER: nm.QA, nm.QA: nm.DEVELOPER}
         tables = [
-            {"forge": "scribe"}, two_cycle, three_cycle, {"atlas": "shield"},
-            {"forge": "dev", "scribe": "dev"}, {"forge": "dev", "oracle": "x", "scribe": "dev"},
-            {"oracle": "dev-sentinel"}, {"oracle": "forge-2"}, {"oracle": "sentinel-dev"}, {"oracle": "a-forge-b"},
-            {"forge": "forge-2"}, {"forge": "x-scribe"},
-            {"forge": "forge", "scribe": "forge"},
+            {nm.DEVELOPER: nm.WRITER}, two_cycle, three_cycle, {nm.PLANNER: nm.SECURITY},
+            {nm.DEVELOPER: "dev", nm.WRITER: "dev"}, {nm.DEVELOPER: "dev", nm.ANALYST: "x", nm.WRITER: "dev"},
+            {nm.ANALYST: f"dev-{nm.QA}"}, {nm.ANALYST: f"{nm.DEVELOPER}-2"}, {nm.ANALYST: f"{nm.QA}-dev"}, {nm.ANALYST: f"a-{nm.DEVELOPER}-b"},
+            {nm.DEVELOPER: f"{nm.DEVELOPER}-2"}, {nm.DEVELOPER: f"x-{nm.WRITER}"},
+            {nm.DEVELOPER: nm.DEVELOPER, nm.WRITER: nm.DEVELOPER},
         ]
         for table in tables:
             self.assertIsNotNone(ar.validate_table(table), table)
             self.assert_alias_verdict(table)
-        for table, motivo in ((two_cycle, "el alias de forge es el nombre de otro agente de SyncLayer"),
-                              (three_cycle, "el alias de forge es el nombre de otro agente de SyncLayer"),
-                              ({"forge": "dev", "scribe": "dev"}, "forge y scribe tienen el mismo alias"),
-                              ({"oracle": "forge-2"}, "el alias de oracle contiene el nombre de un agente de SyncLayer")):
+        for table, motivo in ((two_cycle, f"el alias de {nm.DEVELOPER} es el nombre de otro agente de SyncLayer"),
+                              (three_cycle, f"el alias de {nm.DEVELOPER} es el nombre de otro agente de SyncLayer"),
+                              ({nm.DEVELOPER: "dev", nm.WRITER: "dev"}, f"{nm.DEVELOPER} y {nm.WRITER} tienen el mismo alias"),
+                              ({nm.ANALYST: f"{nm.DEVELOPER}-2"}, f"el alias de {nm.ANALYST} contiene el nombre de un agente de SyncLayer")):
             with self.subTest(table=table):
                 self.assert_config_rejected(self.alias_config(table), motivo, modes=(["-DryRun"], []))
                 shutil.rmtree(self.target)
         # V8: un manifiesto con un agente que ya ocupa la ruta del alias.
         files = dict(SAMPLE)
-        files["agents/forge.md"] = b"agente forge\n"
+        files[f"agents/{nm.DEVELOPER}.md"] = (b"agente " + nm.DEVELOPER.encode() + b"\n")
         files["agents/dev.md"] = b"agente dev\n"
-        self.assertIn("coincide con otro archivo del manifiesto", ar.validate_table({"forge": "dev"}, sorted(files)))
-        self.assert_alias_verdict({"forge": "dev"}, files=files)
-        self.assert_alias_verdict({"forge": "dev2"}, files=files)
-        self.assert_alias_verdict({"forge": "forge"}, files=files)
+        self.assertIn("coincide con otro archivo del manifiesto", ar.validate_table({nm.DEVELOPER: "dev"}, sorted(files)))
+        self.assert_alias_verdict({nm.DEVELOPER: "dev"}, files=files)
+        self.assert_alias_verdict({nm.DEVELOPER: "dev2"}, files=files)
+        self.assert_alias_verdict({nm.DEVELOPER: nm.DEVELOPER}, files=files)
 
     def test_t2_v8_covers_roles_whose_file_is_not_in_the_manifest(self):
-        # E2: SAMPLE trae agents/alfa.md y no trae agents/forge.md: el alias alfa nombra el archivo de otro agente.
-        self.assertIn("coincide con otro archivo del manifiesto", ar.validate_table({"forge": "alfa"}, sorted(SAMPLE)))
-        self.assert_alias_verdict({"forge": "alfa"}, modes=(["-DryRun"], []))
-        self.assert_alias_verdict({"forge": "alfa", "scribe": "redactor"})
-        self.assert_alias_verdict({"forge": "gamma"})  # no coincide con ninguna ruta: pasa la validacion y se instala
+        # E2: SAMPLE trae agents/alfa.md y no trae el archivo del desarrollador: el alias alfa nombra el archivo de otro agente.
+        self.assertIn("coincide con otro archivo del manifiesto", ar.validate_table({nm.DEVELOPER: "alfa"}, sorted(SAMPLE)))
+        self.assert_alias_verdict({nm.DEVELOPER: "alfa"}, modes=(["-DryRun"], []))
+        self.assert_alias_verdict({nm.DEVELOPER: "alfa", nm.WRITER: "redactor"})
+        self.assert_alias_verdict({nm.DEVELOPER: "gamma"})  # no coincide con ninguna ruta: pasa la validacion y se instala
         files = dict(SAMPLE)
-        files["agents/forge.md"] = b"agente forge\n"
-        self.assert_alias_verdict({"forge": "alfa"}, files=files)
-        self.assert_alias_verdict({"forge": "gamma"}, files=files)
+        files[f"agents/{nm.DEVELOPER}.md"] = (b"agente " + nm.DEVELOPER.encode() + b"\n")
+        self.assert_alias_verdict({nm.DEVELOPER: "alfa"}, files=files)
+        self.assert_alias_verdict({nm.DEVELOPER: "gamma"}, files=files)
 
     def test_t2_reserved_output_style_setup_is_v4_in_both_modes(self):
-        self.assertIn("agente integrado", ar.validate_table({"forge": "output-style-setup"}))
-        self.assert_alias_verdict({"forge": "output-style-setup"}, modes=(["-DryRun"], []))
+        self.assertIn("agente integrado", ar.validate_table({nm.DEVELOPER: "output-style-setup"}))
+        self.assert_alias_verdict({nm.DEVELOPER: "output-style-setup"}, modes=(["-DryRun"], []))
 
     def test_t2_second_read_of_the_config_is_detected_by_behaviour(self):
         # Lectura unica: tras la lectura se reescribe la configuracion; el resultado (exit y lineas Alias:) debe
         # reflejar la PRIMERA lectura. Una segunda lectura en cualquier punto posterior lo cambiaria.
         self.make_source()
-        path = self.write_config(self.alias_config({"forge": "dev"}))
-        for later, why in (('{"aliases": {"forge": "Dev"}}', "tabla invalida"), ('{"aliases": {}}', "tabla vacia"),
-                           ('{"aliases": {"scribe": "redactor"}}', "otra tabla")):
+        path = self.write_config(self.alias_config({nm.DEVELOPER: "dev"}))
+        for later, why in ((f'{{"aliases": {{"{nm.DEVELOPER}": "Dev"}}}}', "tabla invalida"), ('{"aliases": {}}', "tabla vacia"),
+                           (f'{{"aliases": {{"{nm.WRITER}": "redactor"}}}}', "otra tabla")):
             with self.subTest(later=why):
                 self.make_source()
                 shutil.copyfile(SCRIPT, os.path.join(self.src, "install.ps1"))
                 self.patch_script("$level = [int](Read-LevelConfig $configPath)",
                                   "[System.IO.File]::WriteAllText('%s', '%s')" % (path.replace("'", "''"), later))
-                self.write_config(self.alias_config({"forge": "dev"}))
+                self.write_config(self.alias_config({nm.DEVELOPER: "dev"}))
                 code, out, err = self.run_install("-DryRun")
                 self.assertEqual(code, 0, out + err)
                 self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")],
-                                 ["Alias: forge -> dev (agents/dev.md)"])
+                                 [f"Alias: {nm.DEVELOPER} -> dev (agents/dev.md)"])
                 self.assertEqual(err.strip(), "")
 
     def test_t2_valid_tables_pass_v1_to_v8_and_install(self):
         # Pasan V1 a V8 (y de ahi se aplican): las dos mitades del veredicto de cada regla.
-        valid = [{"forge": "dev"}, {"sentinel": "amigo-qa", "forge": "dev"}, dict(self.ALIAS_NINE),
-                 {"forge": "a" * 64}, {"forge": "forge_2"}, {"forge": "forgery"}, {"forge": "sentinels"},
-                 {"forge": "com10"}, {"forge": "lpt10"}, {"forge": "yes-no"}, {"forge": "x1"}, {"forge": "y2"},
-                 {"forge": "explorer"}, {"forge": "forge", "scribe": "dev"}, {"forge": "conx"}, {"forge": "nulo"}]
+        valid = [{nm.DEVELOPER: "dev"}, {nm.QA: "amigo-qa", nm.DEVELOPER: "dev"}, dict(self.ALIAS_NINE),
+                 {nm.DEVELOPER: "a" * 64}, {nm.DEVELOPER: f"{nm.DEVELOPER}_2"}, {nm.DEVELOPER: f"{nm.DEVELOPER}ry"}, {nm.DEVELOPER: f"{nm.QA}s"},
+                 {nm.DEVELOPER: "com10"}, {nm.DEVELOPER: "lpt10"}, {nm.DEVELOPER: "yes-no"}, {nm.DEVELOPER: "x1"}, {nm.DEVELOPER: "y2"},
+                 {nm.DEVELOPER: "explorer"}, {nm.DEVELOPER: nm.DEVELOPER, nm.WRITER: "dev"}, {nm.DEVELOPER: "conx"}, {nm.DEVELOPER: "nulo"}]
         for table in valid:
             self.assertIsNone(ar.validate_table(table, manifest_paths=sorted(SAMPLE)), table)
             self.assert_alias_verdict(table)
         # Tabla efectiva vacia: exit 0.
-        for table in ({}, {"forge": "forge"}, {r: r for r in ar.roles()}):
+        for table in ({}, {nm.DEVELOPER: nm.DEVELOPER}, {r: r for r in ar.roles()}):
             self.assert_alias_verdict(table)
 
     def test_t2_case17_unknown_root_keys_still_exit1_with_aliases_present(self):
@@ -4554,47 +4560,46 @@ class InstallCases:
 
     def test_t2_case18_level_and_alias_lines_come_in_order_before_the_plan(self):
         files = dict(SAMPLE)
-        files["agents/sentinel.md"] = agent_md("sentinel", "sonnet")
+        files[f"agents/{nm.QA}.md"] = agent_md(nm.QA, "sonnet")
         self.make_source(files)
-        self.write_config(self.alias_config({"sentinel": "amigo-qa", "forge": "dev"}, level=3))
+        self.write_config(self.alias_config({nm.QA: "amigo-qa", nm.DEVELOPER: "dev"}, level=3))
         for mode in (["-DryRun"], []):
             with self.subTest(mode=mode):
                 code, out, err = self.run_install(*mode)
                 self.assertEqual(code, 0, out + err)
                 lines = out.splitlines()
                 self.assertTrue(lines[0].startswith("Destino: "), lines)
-                self.assertEqual(lines[1:4], ["Nivel: 3 (synclayer-config.json)",
-                                              "Alias: forge -> dev (agents/dev.md)",
-                                              "Alias: sentinel -> amigo-qa (agents/amigo-qa.md)"])
+                self.assertEqual(lines[1:4], ["Nivel: 3 (synclayer-config.json)"]
+                                 + alias_lines({nm.QA: "amigo-qa", nm.DEVELOPER: "dev"}))
                 self.assertTrue(lines[4].startswith(("Respaldo: ", "Modo: ")) or LINE.match(lines[4]), lines)
                 self.assertNotIn("error", err)
                 if "-DryRun" in mode:
                     self.assertEqual(os.listdir(self.target), [self.CONFIG])
         # `Alias:` no se confunde con una fila del plan (la expresion LINE de las pruebas)
-        self.assertIsNone(LINE.match("Alias: forge -> dev (agents/dev.md)"))
+        self.assertIsNone(LINE.match(f"Alias: {nm.DEVELOPER} -> dev (agents/dev.md)"))
 
     def test_t2_alias_lines_follow_the_previous_level_line(self):
         self.make_source()
         self.install_ok()
-        self.write_config(self.alias_config({"scribe": "redactor"}, level=2))
+        self.write_config(self.alias_config({nm.WRITER: "redactor"}, level=2))
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 0, out + err)
         lines = out.splitlines()
         self.assertEqual(lines[1:4], ["Nivel: 2 (synclayer-config.json)", "Nivel anterior: 5",
-                                      "Alias: scribe -> redactor (agents/redactor.md)"])
+                                      f"Alias: {nm.WRITER} -> redactor (agents/redactor.md)"])
 
     def test_t2_case19_invalid_table_writes_and_backs_up_nothing_with_a_valid_state(self):
         self.make_source()
         self.install_ok()
         self.update_source("agents/alfa.md", b"alfa nueva\n")
-        self.write_config(self.alias_config({"forge": "scribe"}))
+        self.write_config(self.alias_config({nm.DEVELOPER: nm.WRITER}))
         before = snapshot(self.target)
         listing = sorted(os.listdir(self.tmp))
         for mode in (["-DryRun"], []):
             with self.subTest(mode=mode):
                 code, out, err = self.run_install(*mode)
                 self.assert_quiet_failure(code, out, err, before, listing)
-                self.assertIn(self.CONFIG_ERR + "el alias de forge es el nombre de otro agente de SyncLayer", err)
+                self.assertIn(self.CONFIG_ERR + f"el alias de {nm.DEVELOPER} es el nombre de otro agente de SyncLayer", err)
                 self.assertNotIn("Respaldo", out)
                 self.assertFalse([n for n in os.listdir(self.tmp) if "backup" in n])
 
@@ -4605,11 +4610,11 @@ class InstallCases:
         for value in values:
             with self.subTest(value=value[:25]):
                 self.make_source()
-                self.write_config(self.alias_config({"sentinel": value}))
+                self.write_config(self.alias_config({nm.QA: value}))
                 for mode in (["-DryRun"], []) if value == secret else (["-DryRun"],):
                     code, out, err = self.run_install(*mode)
                     self.assertEqual(code, 1, out + err)
-                    self.assertIn(self.CONFIG_ERR + "el alias de sentinel ", err)
+                    self.assertIn(self.CONFIG_ERR + f"el alias de {nm.QA} ", err)
                     for needle in (secret, secret.lower(), "SECRETO", "secreto", "x" * 40):
                         self.assertNotIn(needle, out + err)
                     self.assertTrue(err.isascii(), repr(err))
@@ -4618,16 +4623,16 @@ class InstallCases:
                 shutil.rmtree(self.target)
         # un valor inocente tampoco aparece en la salida de error de una tabla invalida por otra causa
         self.make_source()
-        self.write_config(self.alias_config({"forge": "inocente", "scribe": "Mal"}))
+        self.write_config(self.alias_config({nm.DEVELOPER: "inocente", nm.WRITER: "Mal"}))
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 1, out + err)
         self.assertNotIn("inocente", out + err)
-        self.assertNotIn("Mal", err.replace("el alias de scribe", ""))
+        self.assertNotIn("Mal", err.replace(f"el alias de {nm.WRITER}", ""))
 
     def test_t2_case16_type_key_inside_aliases_is_rejected(self):
-        for data in (b'{"aliases": {"forge": "x__type"}}', b'{"aliases": {"__type": "x"}}',
-                     b'{"aliases": {"forge": "dev", "__type": "System.String"}}',
-                     b'{"aliases": {"forge": "x\\u005f\\u005ftype"}}', b'{"aliases": {"__t\\u0079pe": "x"}}'):
+        for data in ((b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "x__type"}}'), b'{"aliases": {"__type": "x"}}',
+                     (b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "dev", "__type": "System.String"}}'),
+                     (b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "x\\u005f\\u005ftype"}}'), b'{"aliases": {"__t\\u0079pe": "x"}}'):
             with self.subTest(data=data):
                 self.assert_config_rejected(data, "clave desconocida: __type")
                 shutil.rmtree(self.target)
@@ -4636,25 +4641,25 @@ class InstallCases:
         # Comportamiento medido de ConvertFrom-Json de 5.1 (como con level, caso 17 de la Fase 3): sin error;
         # la ultima aparicion gana, tambien dentro de aliases y para la propia clave aliases.
         self.make_source()
-        for data, expect in ((b'{"aliases": {"forge": "dev", "forge": "otro"}}', "Alias: forge -> otro (agents/otro.md)"),
-                             (b'{"aliases": {"forge": "otro", "forge": "dev"}}', "Alias: forge -> dev (agents/dev.md)"),
-                             (b'{"aliases": {"forge": "dev"}, "aliases": {"scribe": "redactor"}}',
-                              "Alias: scribe -> redactor (agents/redactor.md)")):
+        for data, expect in (((b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "dev", "' + nm.DEVELOPER.encode() + b'": "otro"}}'), f"Alias: {nm.DEVELOPER} -> otro (agents/otro.md)"),
+                             ((b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "otro", "' + nm.DEVELOPER.encode() + b'": "dev"}}'), f"Alias: {nm.DEVELOPER} -> dev (agents/dev.md)"),
+                             ((b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "dev"}, "aliases": {"' + nm.WRITER.encode() + b'": "redactor"}}'),
+                              f"Alias: {nm.WRITER} -> redactor (agents/redactor.md)")):
             with self.subTest(data=data):
                 self.write_config(data)
                 code, out, err = self.run_install("-DryRun")
                 self.assertEqual(code, 0, out + err)
                 self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")], [expect])
                 self.assertEqual(err.strip(), "")
-        self.write_config(b'{"aliases": {"forge": "dev"}, "aliases": {}}')
+        self.write_config((b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "dev"}, "aliases": {}}'))
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 0, out + err)
         self.assertNotIn("Alias:", out)
         # una clave repetida con el ultimo valor valido (y el primero invalido) gana el ultimo
-        self.write_config(b'{"aliases": {"forge": "Dev", "forge": "dev"}}')
+        self.write_config((b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "Dev", "' + nm.DEVELOPER.encode() + b'": "dev"}}'))
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 0, out + err)
-        self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")], ["Alias: forge -> dev (agents/dev.md)"])
+        self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")], [f"Alias: {nm.DEVELOPER} -> dev (agents/dev.md)"])
 
     def test_t2_config_size_limit_with_aliases(self):
         head = b'{"aliases": {}}'
@@ -4668,16 +4673,16 @@ class InstallCases:
         self.assert_config_rejected(head + b" " * (limit + 1 - len(head)), "supera 65536 bytes")
         shutil.rmtree(self.target)
         # una tabla valida de tope exacto se lee y se aplica, no choca con el limite de tamano
-        full = self.alias_config({"forge": "dev"})
+        full = self.alias_config({nm.DEVELOPER: "dev"})
         self.write_config(full + b" " * (limit - len(full)))
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 0, out + err)
-        self.assertIn("Alias: forge -> dev (agents/dev.md)", out.splitlines())
+        self.assertIn(f"Alias: {nm.DEVELOPER} -> dev (agents/dev.md)", out.splitlines())
 
     def test_t2_config_is_never_opened_for_writing_with_aliases(self):
         # La configuracion no se escribe, respalda ni lista ni con una tabla valida (se instala sin tocarla) ni invalida.
         self.make_source()
-        for table in ({"forge": "dev"}, {"forge": "Dev"}, {}):
+        for table in ({nm.DEVELOPER: "dev"}, {nm.DEVELOPER: "Dev"}, {}):
             with self.subTest(table=table):
                 path = self.write_config(self.alias_config(table))
                 old = os.stat(path).st_mtime_ns - 5_000_000_000
@@ -5223,7 +5228,7 @@ class InstallCases:
     @staticmethod
     def d5_reason(dest):
         short = dest[:40] + "..." if len(dest) > 40 else dest
-        return ("el destino " + short + " de agents/sentinel.md es ahora un archivo del manifiesto; si el "
+        return ("el destino " + short + f" de agents/{nm.QA}.md es ahora un archivo del manifiesto; si el "
                 "repositorio anadio un agente con el nombre de tu alias, elige otro alias y repite con -Force")
 
     def test_f4t3_case59_dest_equal_to_a_manifest_path_is_absent_with_the_d5_warning(self):
@@ -5233,18 +5238,18 @@ class InstallCases:
 
     def f4_case59(self, alias):
         dest = 'agents/' + alias + '.md'
-        # Caso 59 (E3, S14): el estado dice sentinel -> tester y el repositorio ahora trae agents/tester.md: el estado se
+        # Caso 59 (E3, S14): el estado dice que el agente de pruebas pasa a tester y el repositorio ahora trae agents/tester.md: el estado se
         # trata como ausente con el aviso de D5; lo que cambio sale MODIFICADO (exit 3, nada escrito); con -Force
         # respaldo (sin el estado invalido) y sobrescritura; ni ACTUALIZAR ni HUERFANO. Control: sin tester en el
         # manifiesto el mismo estado es valido y agents/tester.md sale HUERFANO, sin aviso.
-        old = dict(SAMPLE, **{"agents/sentinel.md": b"sentinel viejo\n"})
-        new_source = dict(old, **{"agents/sentinel.md": b"sentinel nuevo\n", dest: b"agente del repositorio\n"})
-        edited = b"sentinel editado a mano\n"
+        old = dict(SAMPLE, **{f"agents/{nm.QA}.md": (nm.QA.encode() + b" viejo\n")})
+        new_source = dict(old, **{f"agents/{nm.QA}.md": (nm.QA.encode() + b" nuevo\n"), dest: b"agente del repositorio\n"})
+        edited = (nm.QA.encode() + b" editado a mano\n")
 
         def prepare(source):
             self.make_source(source)
-            self.f4_target(dict(old, **{"agents/sentinel.md": edited}))
-            data = self.f4_state3(files=old, dests={"agents/sentinel.md": dest})
+            self.f4_target(dict(old, **{f"agents/{nm.QA}.md": edited}))
+            data = self.f4_state3(files=old, dests={f"agents/{nm.QA}.md": dest})
             self.dump_state(data)
             return data
 
@@ -5257,7 +5262,7 @@ class InstallCases:
                 code, out, err = self.run_install(*mode)
                 self.assertEqual(code, 3, out + err)
                 st = self.states(out)
-                self.assertEqual(st["agents/sentinel.md"], "MODIFICADO")
+                self.assertEqual(st[f"agents/{nm.QA}.md"], "MODIFICADO")
                 self.assertEqual(st[dest], "NUEVO")
                 self.assertNotIn("ACTUALIZAR", set(st.values()))
                 self.assertNotIn("HUERFANO", set(st.values()))
@@ -5270,8 +5275,8 @@ class InstallCases:
         code, out, err = self.run_install("-Force", "-BackupDir", backup)
         self.assertEqual(code, 0, out + err)
         self.assertIn(self.d5_reason(dest), err)
-        self.assertEqual(self.f4_tree(backup), {"agents/sentinel.md": edited})
-        self.assertEqual(read(self.target, "agents/sentinel.md"), b"sentinel nuevo\n")
+        self.assertEqual(self.f4_tree(backup), {f"agents/{nm.QA}.md": edited})
+        self.assertEqual(read(self.target, f"agents/{nm.QA}.md"), (nm.QA.encode() + b" nuevo\n"))
         self.assertEqual(read(self.target, dest), b"agente del repositorio\n")
         self.assert_state(5)
         # Control: el manifiesto no trae agents/tester.md.
@@ -5283,7 +5288,7 @@ class InstallCases:
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 3, out + err)
         st = self.states(out)
-        self.assertEqual(st["agents/sentinel.md"], "MODIFICADO")
+        self.assertEqual(st[f"agents/{nm.QA}.md"], "MODIFICADO")
         self.assertEqual(st[dest], "HUERFANO")
         self.assertNotIn("aviso", err)
 
@@ -5723,19 +5728,19 @@ class InstallCases:
     def test_f4t4_level_cell_is_looked_up_by_role_not_by_dest_path(self):
         # Con un destRel no identidad, la celda de la tabla de niveles sigue buscandose por ROL: el archivo trae el
         # model: y el effort: del rol y la linea Ajuste: lleva la ruta de destino.
-        mapping = {"agents/atlas.md": "agents/dev.md", "agents/scribe.md": "agents/qa.md"}
+        mapping = {f"agents/{nm.PLANNER}.md": "agents/dev.md", f"agents/{nm.WRITER}.md": "agents/qa.md"}
         self.f4t4_prepare(LEVEL_SAMPLE)
         self.f4t4_set(mapping)
         write(self.target, self.CONFIG, b'{"level": 3}')
         out, err = self.install_ok()
         expected = level_expected(LEVEL_SAMPLE, 3)
-        self.assertNotEqual(expected["agents/atlas.md"], LEVEL_SAMPLE["agents/atlas.md"])
-        self.assertEqual(read(self.target, "agents/dev.md"), expected["agents/atlas.md"])
-        self.assertEqual(read(self.target, "agents/qa.md"), expected["agents/scribe.md"])
-        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "atlas.md")))
-        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "scribe.md")))
+        self.assertNotEqual(expected[f"agents/{nm.PLANNER}.md"], LEVEL_SAMPLE[f"agents/{nm.PLANNER}.md"])
+        self.assertEqual(read(self.target, "agents/dev.md"), expected[f"agents/{nm.PLANNER}.md"])
+        self.assertEqual(read(self.target, "agents/qa.md"), expected[f"agents/{nm.WRITER}.md"])
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", f"{nm.PLANNER}.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", f"{nm.WRITER}.md")))
         table = lr.read_script_table()
-        for role, dest in (("atlas", "dev"), ("scribe", "qa")):
+        for role, dest in ((nm.PLANNER, "dev"), (nm.WRITER, "qa")):
             model, effort = table[(3, role)]
             self.assertIn("Ajuste: agents/%s.md  model: %s  effort: %s" % (dest, model, effort), out.splitlines())
             self.assertNotIn("Ajuste: agents/%s.md" % role, out)
@@ -5746,13 +5751,13 @@ class InstallCases:
         self.assertEqual(set(self.states(out).values()), {"IGUAL"})
 
     def test_f4t4_level_change_with_an_alias_updates_the_dest_file(self):
-        mapping = {"agents/atlas.md": "agents/dev.md"}
+        mapping = {f"agents/{nm.PLANNER}.md": "agents/dev.md"}
         self.f4t4_prepare(LEVEL_SAMPLE)
         self.f4t4_set(mapping)
         write(self.target, self.CONFIG, b'{"level": 3}')
         self.install_ok()
-        e3 = level_expected(LEVEL_SAMPLE, 3)["agents/atlas.md"]
-        e4 = level_expected(LEVEL_SAMPLE, 4)["agents/atlas.md"]
+        e3 = level_expected(LEVEL_SAMPLE, 3)[f"agents/{nm.PLANNER}.md"]
+        e4 = level_expected(LEVEL_SAMPLE, 4)[f"agents/{nm.PLANNER}.md"]
         self.assertNotEqual(e3, e4)
         write(self.target, self.CONFIG, b'{"level": 4}')
         backup = os.path.join(self.tmp, "respaldo")
@@ -5881,17 +5886,17 @@ class InstallCases:
         self.assertEqual(err.strip().count("aviso:"), 1, err)
         self.assertNotIn("error", err)
         self.assert_alias_installed(files, 5, ALIAS_ONE)
-        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "sentinel.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", f"{nm.QA}.md")))
         self.assertIn(b"\nname: amigo-qa\n", read(self.target, "agents/amigo-qa.md"))
         self.assertIn(b'"schema": 3', read(self.target, self.STATE))
         self.assertIn(b'"dest": "agents/amigo-qa.md"', read(self.target, self.STATE))
-        self.assertIn("Alias: sentinel -> amigo-qa (agents/amigo-qa.md)", out.splitlines())
+        self.assertIn(f"Alias: {nm.QA} -> amigo-qa (agents/amigo-qa.md)", out.splitlines())
         copied = self.f4t4_copied(out)
         self.assertEqual(copied[0], "hooks/agent_guard.py")
         self.assertIn("agents/amigo-qa.md", copied)
-        self.assertNotIn("agents/sentinel.md", copied)
+        self.assertNotIn(f"agents/{nm.QA}.md", copied)
         self.assertEqual(self.states(out)["agents/amigo-qa.md"], "NUEVO")
-        self.assertNotIn("agents/sentinel.md", self.states(out))
+        self.assertNotIn(f"agents/{nm.QA}.md", self.states(out))
         self.assertEqual(self.leftover_temps(), [])
 
     def test_f4t5_case32_four_aliases_dryrun_and_idempotence(self):
@@ -5900,13 +5905,11 @@ class InstallCases:
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 0, out + err)
         self.assertEqual([l for l in out.splitlines() if l.startswith("Alias:")],
-                         ["Alias: atlas -> mapa (agents/mapa.md)", "Alias: forge -> dev (agents/dev.md)",
-                          "Alias: scribe -> redactor (agents/redactor.md)",
-                          "Alias: sentinel -> amigo-qa (agents/amigo-qa.md)"])
+                         alias_lines(ALIAS_FOUR))
         st = self.states(out)
         for dest in ("agents/mapa.md", "agents/dev.md", "agents/redactor.md", "agents/amigo-qa.md"):
             self.assertEqual(st[dest], "NUEVO")
-        for role in ("atlas", "forge", "scribe", "sentinel"):
+        for role in (nm.PLANNER, nm.DEVELOPER, nm.WRITER, nm.QA):
             self.assertNotIn("agents/%s.md" % role, st)
         self.assertEqual(os.listdir(self.target), [self.CONFIG])
         self.install_ok()
@@ -5919,7 +5922,7 @@ class InstallCases:
 
     def test_f4t5_case32_an_alias_for_a_role_outside_the_manifest_only_changes_the_texts(self):
         # Alias para un rol sin archivo en el manifiesto: se aplica a los textos y no hay archivo que renombrar.
-        files = {k: v for k, v in ALIAS_SAMPLE.items() if k != "agents/sentinel.md"}
+        files = {k: v for k, v in ALIAS_SAMPLE.items() if k != f"agents/{nm.QA}.md"}
         self.f4t5_source(files)
         self.f4t5_config(ALIAS_ONE)
         self.install_ok()
@@ -5931,7 +5934,7 @@ class InstallCases:
         files = self.f4t5_source()
         self.f4t5_config(ALIAS_FOUR)
         self.install_ok()
-        for role in ("atlas", "forge", "scribe", "sentinel"):
+        for role in (nm.PLANNER, nm.DEVELOPER, nm.WRITER, nm.QA):
             src = files["agents/%s.md" % role].decode("utf-8").split("\n")
             dst = read(self.target, "agents/%s.md" % ALIAS_FOUR[role])
             self.assertNotIn(b"\r", dst)
@@ -5944,14 +5947,14 @@ class InstallCases:
                 if a != b:
                     self.assertTrue(i > close or a.startswith(("name:", "description:")), (role, i, a, b))
             self.assertEqual(out[1:close].count("name: " + ALIAS_FOUR[role]), 1)
-        # el bloque hooks: de sentinel, byte a byte (con el model: de dentro incluido)
-        src = files["agents/sentinel.md"]
+        # el bloque hooks: del agente de pruebas, byte a byte (con el model: de dentro incluido)
+        src = files[f"agents/{nm.QA}.md"]
         dst = read(self.target, "agents/amigo-qa.md")
         block = ("\n".join(QA_HOOKS) + "\n").encode("ascii")
         self.assertIn(block, src)
         self.assertIn(block, dst)
         # las lineas de tools:, model: y color: del frontmatter, intactas
-        for role in ("atlas", "forge", "scribe", "sentinel"):
+        for role in (nm.PLANNER, nm.DEVELOPER, nm.WRITER, nm.QA):
             dst = read(self.target, "agents/%s.md" % ALIAS_FOUR[role])
             for line in (b"tools: Read, Grep\n", b"model: sonnet\n", b"color: blue\n"):
                 self.assertIn(line, dst)
@@ -5959,7 +5962,7 @@ class InstallCases:
     def test_f4t5_case34_four_forms_and_word_boundary_in_literal_text(self):
         # Los bytes se comparan con la referencia y ademas con cadenas literales (no solo con la referencia).
         files = self.f4t5_source()
-        table = {"forge": "dev", "scribe": "redactor"}
+        table = {nm.DEVELOPER: "dev", nm.WRITER: "redactor"}
         self.f4t5_config(table)
         self.install_ok()
         self.assert_alias_installed(files, 5, table)
@@ -5967,68 +5970,68 @@ class InstallCases:
         for needle in ("`dev`", "Dev (Sonnet): corregir", "| DEV | implementar |", "@agent-dev", "@agent-redactor",
                        "agents/dev.md", "`redactor`", "| REDACTOR | docs |"):
             self.assertIn(needle, rules)
-        left = rules.replace("Sentinelé, ñforge, éSCRIBE y SCRIBEÁ", "")
-        for needle in ("forge", "Forge", "FORGE", "agents/forge.md", "`scribe`", "SCRIBE |", "@agent-scribe"):
+        left = rules.replace(f"{nm.QA.capitalize()}é, ñ{nm.DEVELOPER}, é{nm.WRITER.upper()} y {nm.WRITER.upper()}Á", "")
+        for needle in (nm.DEVELOPER, nm.DEVELOPER.capitalize(), nm.DEVELOPER.upper(), f"agents/{nm.DEVELOPER}.md", f"`{nm.WRITER}`", f"{nm.WRITER.upper()} |", f"@agent-{nm.WRITER}"):
             self.assertNotIn(needle, left)
-        # con scribe aliado, las palabras que lo contienen no se tocan
+        # con el escritor aliado, las palabras que lo contienen no se tocan
         redactor = read(self.target, "agents/redactor.md").decode("utf-8")
         self.assertIn("Quien escribe, describe, reescribe o sobrescribe; escriben. Describe. redactor.", redactor)
         self.assertIn("Sobrescribe y reescribe: igual.", rules)
         for broken in ("esredactor", "deredactor", "redactorn", "reredactor", "sobreredactor"):
             self.assertNotIn(broken, rules + redactor)
-        # el agente forge: ruta de destino, forma Capitalizada y MAYUSCULAS
+        # el agente desarrollador: ruta de destino, forma Capitalizada y MAYUSCULAS
         body = read(self.target, "agents/dev.md").decode("utf-8")
         self.assertIn("Usa `dev`, Dev (Sonnet): tarea, @agent-dev, agents/dev.md y ~/.claude/agents/dev.md.", body)
         self.assertIn("Eres DEV.", body)
 
     def test_f4t5_case35_cross_references_and_files_that_name_no_aliased_role(self):
         files = self.f4t5_source()
-        self.f4t5_config({"scribe": "redactor"})
+        self.f4t5_config({nm.WRITER: "redactor"})
         self.install_ok()
-        self.assert_alias_installed(files, 5, {"scribe": "redactor"})
-        # atlas, forge y sentinel no nombran a scribe: bytes del origen; name: intacto
-        for role in ("atlas", "forge", "sentinel"):
+        self.assert_alias_installed(files, 5, {nm.WRITER: "redactor"})
+        # el planificador, el desarrollador y el agente de pruebas no nombran al escritor: bytes del origen; name: intacto
+        for role in (nm.PLANNER, nm.DEVELOPER, nm.QA):
             self.assertEqual(read(self.target, "agents/%s.md" % role), files["agents/%s.md" % role], role)
         self.assertIn(b"\nname: redactor\n", read(self.target, "agents/redactor.md"))
-        # referencia cruzada: forge sin alias propio, atlas con alias
+        # referencia cruzada: el desarrollador sin alias propio, el planificador con alias
         shutil.rmtree(self.target)
-        self.f4t5_config({"atlas": "mapa"})
+        self.f4t5_config({nm.PLANNER: "mapa"})
         self.install_ok()
-        self.assert_alias_installed(files, 5, {"atlas": "mapa"})
-        forge = read(self.target, "agents/forge.md").decode("utf-8")
-        self.assertIn("\nname: forge\n", forge)
-        self.assertIn("description: Implements one unit of the MAPA plan.\n", forge)
-        self.assertIn("Eres FORGE.", forge)
-        self.assertEqual(read(self.target, "agents/scribe.md"), files["agents/scribe.md"])
+        self.assert_alias_installed(files, 5, {nm.PLANNER: "mapa"})
+        developer = read(self.target, f"agents/{nm.DEVELOPER}.md").decode("utf-8")
+        self.assertIn(f"\nname: {nm.DEVELOPER}\n", developer)
+        self.assertIn("description: Implements one unit of the MAPA plan.\n", developer)
+        self.assertIn(f"Eres {nm.DEVELOPER.upper()}.", developer)
+        self.assertEqual(read(self.target, f"agents/{nm.WRITER}.md"), files[f"agents/{nm.WRITER}.md"])
         # un archivo que no nombra ningun rol con alias sale IGUAL en la segunda corrida
         out, err = self.install_ok()
         self.assertEqual(set(self.states(out).values()), {"IGUAL"})
 
     def f4t5_defects(self):
-        """Variantes defectuosas de agents/forge.md (con alias en forge y sentinel)."""
-        text = ALIAS_SAMPLE["agents/forge.md"].decode("utf-8")
+        """Variantes defectuosas del agente desarrollador (con alias en el desarrollador y en el agente de pruebas)."""
+        text = ALIAS_SAMPLE[f"agents/{nm.DEVELOPER}.md"].decode("utf-8")
         return {
-            "sin name": text.replace("name: forge\n", ""),
-            "name duplicado": text.replace("name: forge\n", "name: forge\nname: forge\n"),
-            "name con otro valor": text.replace("name: forge\n", "name: otro\n"),
-            "description multilinea": text.replace("description: Implements one unit of the ATLAS plan.\n",
-                                                   "description: Implements one unit\n  of the ATLAS plan.\n"),
-            "sin description": text.replace("description: Implements one unit of the ATLAS plan.\n", ""),
+            "sin name": text.replace(f"name: {nm.DEVELOPER}\n", ""),
+            "name duplicado": text.replace(f"name: {nm.DEVELOPER}\n", f"name: {nm.DEVELOPER}\nname: {nm.DEVELOPER}\n"),
+            "name con otro valor": text.replace(f"name: {nm.DEVELOPER}\n", "name: otro\n"),
+            "description multilinea": text.replace(f"description: Implements one unit of the {nm.PLANNER.upper()} plan.\n",
+                                                   f"description: Implements one unit\n  of the {nm.PLANNER.upper()} plan.\n"),
+            "sin description": text.replace(f"description: Implements one unit of the {nm.PLANNER.upper()} plan.\n", ""),
             "description duplicada": text.replace("tools:", "description: otra\ntools:"),
-            "rol en tools": text.replace("tools: Read, Grep", "tools: Agent(sentinel), Read"),
-            "rol en hooks": text.replace("tools: Read, Grep", "tools: Read\nhooks:\n  x: sentinel"),
+            "rol en tools": text.replace("tools: Read, Grep", f"tools: Agent({nm.QA}), Read"),
+            "rol en hooks": text.replace("tools: Read, Grep", f"tools: Read\nhooks:\n  x: {nm.QA}"),
             "sin cierre": text.replace("color: blue\n---\n", "color: blue\n"),
-            "continuacion tras name": text.replace("name: forge\n", "name: forge\n  extra\n"),
+            "continuacion tras name": text.replace(f"name: {nm.DEVELOPER}\n", f"name: {nm.DEVELOPER}\n  extra\n"),
             "color con CR oculto": text.replace("color: blue\n", "color: orange\rhooks: x\n"),
             "tools fuera de ASCII": text.replace("tools: Read, Grep", "tools: Read, Grép"),
         }
 
     def test_f4t5_case36_defective_frontmatter_exit1_in_both_modes_and_nothing_is_written(self):
-        table = {"forge": "dev", "sentinel": "amigo-qa"}
+        table = {nm.DEVELOPER: "dev", nm.QA: "amigo-qa"}
         for label, text in self.f4t5_defects().items():
             with self.subTest(defect=label):
                 files = dict(ALIAS_SAMPLE)
-                files["agents/forge.md"] = text.encode("utf-8")
+                files[f"agents/{nm.DEVELOPER}.md"] = text.encode("utf-8")
                 self.assertIsNotNone(self.alias_transform_error(files, table), label)
                 self.f4t5_source(files)
                 self.f4t5_config(table)
@@ -6037,7 +6040,7 @@ class InstallCases:
                 for mode in (["-DryRun"], []):
                     code, out, err = self.run_install(*mode)
                     self.assert_quiet_failure(code, out, err, before, listing)
-                    self.assertTrue(err.startswith(self.F4T5_MSG + "agents/forge.md: "), err)
+                    self.assertTrue(err.startswith(self.F4T5_MSG + f"agents/{nm.DEVELOPER}.md: "), err)
                     self.assertTrue(err.strip().endswith(". No se escribio nada."), err)
                     self.assertNotIn("amigo-qa", err)
                     if label in ("rol en tools", "rol en hooks"):
@@ -6048,19 +6051,19 @@ class InstallCases:
         # Con tabla efectiva no vacia los nueve agentes pasan por la transformacion: un defecto en uno sin alias propio
         # tambien detiene la instalacion (el mensaje nombra su ruta).
         files = dict(ALIAS_SAMPLE)
-        files["agents/atlas.md"] = files["agents/atlas.md"].replace(b"name: atlas\n", b"")
+        files[f"agents/{nm.PLANNER}.md"] = files[f"agents/{nm.PLANNER}.md"].replace((b"name: " + nm.PLANNER.encode() + b"\n"), b"")
         self.f4t5_source(files)
         self.f4t5_config(ALIAS_ONE)
         for mode in (["-DryRun"], []):
             code, out, err = self.run_install(*mode)
             self.assertEqual(code, 1, out + err)
-            self.assertTrue(err.startswith(self.F4T5_MSG + "agents/atlas.md: "), err)
+            self.assertTrue(err.startswith(self.F4T5_MSG + f"agents/{nm.PLANNER}.md: "), err)
             self.assertEqual(os.listdir(self.target), [self.CONFIG])
 
     def test_f4t5_case36_agent_without_body_and_without_final_lf_installs_with_aliases(self):
         # Archivo que termina en el cierre --- sin LF final: no hay lineas tras el cierre, el cuerpo no se transforma.
         files = dict(ALIAS_SAMPLE)
-        files["agents/atlas.md"] = b"---\nname: atlas\ndescription: Plans.\nmodel: opus\n---"
+        files[f"agents/{nm.PLANNER}.md"] = (b"---\nname: " + nm.PLANNER.encode() + b"\ndescription: Plans.\nmodel: opus\n---")
         self.assertIsNone(self.alias_transform_error(files, ALIAS_ONE))
         self.f4t5_source(files)
         self.f4t5_config(ALIAS_ONE)
@@ -6068,12 +6071,12 @@ class InstallCases:
             code, out, err = self.run_install(*mode)
             self.assertEqual(code, 0, out + err)
         self.assert_alias_installed(files, 5, ALIAS_ONE)
-        self.assertEqual(read(self.target, "agents/atlas.md"), files["agents/atlas.md"])
+        self.assertEqual(read(self.target, f"agents/{nm.PLANNER}.md"), files[f"agents/{nm.PLANNER}.md"])
 
     def test_f4t5_case36_the_two_texts_have_no_frontmatter_rules(self):
         # rules/agentes.md y docs/agentes.md no tienen frontmatter: cualquier texto vale.
         files = dict(ALIAS_SAMPLE)
-        files["rules/agentes.md"] = b"sin encabezado, forge y SENTINEL\n"
+        files["rules/agentes.md"] = (b"sin encabezado, " + nm.DEVELOPER.encode() + b" y " + nm.QA.upper().encode() + b"\n")
         self.f4t5_source(files)
         self.f4t5_config(ALIAS_ONE)
         self.install_ok()
@@ -6083,8 +6086,8 @@ class InstallCases:
         for label, text in self.f4t5_defects().items():
             with self.subTest(defect=label):
                 files = dict(ALIAS_SAMPLE)
-                files["agents/forge.md"] = text.encode("utf-8")
-                for cfg in (None, b"{}", b'{"aliases": {}}', b'{"aliases": {"forge": "forge", "sentinel": "sentinel"}}'):
+                files[f"agents/{nm.DEVELOPER}.md"] = text.encode("utf-8")
+                for cfg in (None, b"{}", b'{"aliases": {}}', (b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "' + nm.DEVELOPER.encode() + b'", "' + nm.QA.encode() + b'": "' + nm.QA.encode() + b'"}}')):
                     self.f4t5_source(files)
                     if cfg is not None:
                         self.write_config(cfg)
@@ -6101,7 +6104,7 @@ class InstallCases:
         self.f4t5_source()
         self.patch_script("function ConvertTo-AliasBytes", marker)
         for config, calls in ((None, 0), (b'{"level": 5}', 0), (b"{}", 0), (b'{"aliases": {}}', 0),
-                              (b'{"aliases": {"forge": "forge"}}', 0), (b'{"level": 3, "aliases": {}}', 0),
+                              ((b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "' + nm.DEVELOPER.encode() + b'"}}'), 0), (b'{"level": 3, "aliases": {}}', 0),
                               (self.alias_config(ALIAS_ONE), 6), (self.alias_config(ALIAS_FOUR, level=3), 6)):
             with self.subTest(config=config):
                 shutil.rmtree(self.target, ignore_errors=True)
@@ -6123,7 +6126,7 @@ class InstallCases:
             "name": "$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('name: amigo-qa', 'name: amigo-qb'))",
             "hooks": "$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('hooks:', 'hookz:'))",
             "lineas": "$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('Eres', 'x' + [char]10 + 'Eres'))",
-            "residuo": "$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('AMIGO-QA', 'SENTINEL'))",
+            "residuo": f"$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('AMIGO-QA', '{nm.QA.upper()}'))",
             "description": "$aliasResult = $latin1.GetBytes($latin1.GetString($aliasResult).Replace('description: Runs', 'description:' + [char]10 + '  Runs'))",
         }
         for label, code_line in variants.items():
@@ -6181,23 +6184,23 @@ class InstallCases:
         for rel in ("rules/agentes.md", "docs/agentes.md", "agents/amigo-qa.md"):
             text = read(self.target, rel).decode("utf-8")
             self.assertIn("«AMIGO-QA sólo escribe tests»", text, rel)
-            self.assertNotIn("«SENTINEL", text, rel)
+            self.assertNotIn(f"«{nm.QA.upper()}", text, rel)
         for rel in ("rules/agentes.md", "agents/amigo-qa.md"):
             text = read(self.target, rel).decode("utf-8")
             # pegado a una letra acentuada no se reemplaza (antes y despues)
-            self.assertIn("Sentinelé", text, rel)
-            self.assertIn("ñforge", text, rel)
-        self.assertIn("éSCRIBE y SCRIBEÁ", read(self.target, "rules/agentes.md").decode("utf-8"))
+            self.assertIn(f"{nm.QA.capitalize()}é", text, rel)
+            self.assertIn(f"ñ{nm.DEVELOPER}", text, rel)
+        self.assertIn(f"é{nm.WRITER.upper()} y {nm.WRITER.upper()}Á", read(self.target, "rules/agentes.md").decode("utf-8"))
         # tras la apertura de interrogacion y entre raya y espacio, si se reemplaza
         shutil.rmtree(self.target)
-        self.f4t5_config({"scribe": "redactor", "forge": "dev"})
+        self.f4t5_config({nm.WRITER: "redactor", nm.DEVELOPER: "dev"})
         self.install_ok()
         rules = read(self.target, "rules/agentes.md").decode("utf-8")
         self.assertIn("¿redactor escribe o describe?", rules)
         docs = read(self.target, "docs/agentes.md").decode("utf-8")
-        self.assertIn("«DEV, REDACTOR y ATLAS… dev — sentinel.", docs)
-        # con forge y scribe aliados, pegados a una letra acentuada (antes y despues) siguen intactos
-        self.assertIn("Sentinelé, ñforge, éSCRIBE y SCRIBEÁ no cambian.", rules)
+        self.assertIn(f"«DEV, REDACTOR y {nm.PLANNER.upper()}… dev — {nm.QA}.", docs)
+        # con el desarrollador y el escritor aliados, pegados a una letra acentuada (antes y despues) siguen intactos
+        self.assertIn(f"{nm.QA.capitalize()}é, ñ{nm.DEVELOPER}, é{nm.WRITER.upper()} y {nm.WRITER.upper()}Á no cambian.", rules)
         for broken in ("ñdev", "éREDACTOR", "REDACTORÁ"):
             self.assertNotIn(broken, rules)
 
@@ -6220,7 +6223,7 @@ class InstallCases:
 
     def test_f4t5_alias_and_level_use_the_cell_of_the_role_not_the_destination(self):
         files = self.f4t5_source()
-        table = {"atlas": "mapa", "sentinel": "amigo-qa"}
+        table = {nm.PLANNER: "mapa", nm.QA: "amigo-qa"}
         self.f4t5_config(table, level=3)
         out, err = self.install_ok()
         self.assert_alias_installed(files, 3, table)
@@ -6232,28 +6235,29 @@ class InstallCases:
         self.assertIn("Ajuste: agents/mapa.md  model: opus  effort: medium", lines)
         self.assertIn("Ajuste: agents/amigo-qa.md  model: sonnet  effort: -", lines)
         self.assertEqual(len([l for l in lines if l.startswith("Ajuste:")]), 4)
-        # el hooks: de sentinel sigue intacto con nivel y alias
+        # el hooks: del agente de pruebas sigue intacto con nivel y alias
         self.assertIn(("\n".join(QA_HOOKS) + "\n").encode("ascii"), read(self.target, "agents/amigo-qa.md"))
 
     # --- Fase 4, T6: alias con niveles, repositorio real y -DryRun (casos 41 a 46 del plan) ---
 
-    F4T6_MODELS = {"atlas": "claude-fable-5-2", "forge": "sonnet", "sentinel": "sonnet", "scribe": "sonnet",
-                   "scout": "sonnet", "oracle": "haiku", "auditor": "opus", "shield": "opus", "debugger": "opus"}
-    F4T6_HOOKED = ("sentinel", "auditor", "shield", "debugger")
-    F4T6_SCRIBE_WORDS = re.compile("escribe|escriben|describe|reescribe|sobrescribe", re.I)
+    F4T6_MODELS = {nm.PLANNER: "claude-fable-5-2", nm.DEVELOPER: "sonnet", nm.QA: "sonnet", nm.WRITER: "sonnet",
+                   nm.RESEARCHER: "sonnet", nm.ANALYST: "haiku", nm.REVIEWER: "opus", nm.SECURITY: "opus", nm.DEBUGGER: "opus"}
+    F4T6_HOOKED = (nm.QA, nm.REVIEWER, nm.SECURITY, nm.DEBUGGER)
+    # Las palabras espanolas que llevan la subcadena del escritor, de la referencia (aliases_ref); la mas larga primero.
+    F4T6_WRITER_WORDS = re.compile("|".join(sorted(ar.SCRIBE_WORDS.get(nm.WRITER, ()), key=lambda w: (-len(w), w))), re.I)
 
     def f4t6_nine_sample(self):
         """Los nueve agentes (frontmatter de una linea por clave, los cuatro con guarda con su bloque hooks:, cuerpo con
         referencias cruzadas a otros roles), las reglas, la guia y el hook, como los de ALIAS_SAMPLE."""
         files = {}
         for role, model in self.F4T6_MODELS.items():
-            lines = ["---", "name: " + role, "description: Rol " + role.upper() + " que avisa a FORGE y a SHIELD.",
+            lines = ["---", "name: " + role, "description: Rol " + role.upper() + f" que avisa a {nm.DEVELOPER.upper()} y a {nm.SECURITY.upper()}.",
                      "tools: Read, Grep", "model: " + model]
             if role in self.F4T6_HOOKED:
                 lines += QA_HOOKS
             lines += ["color: blue", "---",
-                      "Eres " + role.upper() + ". Habla con `forge`, Sentinel y @agent-atlas; «" + role.upper() +
-                      " sólo escribe tests». scribe describe y escribe.\n"]
+                      "Eres " + role.upper() + f". Habla con `{nm.DEVELOPER}`, {nm.QA.capitalize()} y @agent-{nm.PLANNER}; «" + role.upper() +
+                      f" sólo escribe tests». {nm.WRITER} describe y escribe.\n"]
             files["agents/%s.md" % role] = "\n".join(lines).encode("utf-8")
         for rel in ("rules/agentes.md", "docs/agentes.md", "hooks/agent_guard.py"):
             files[rel] = ALIAS_SAMPLE[rel]
@@ -6294,7 +6298,7 @@ class InstallCases:
                             self.assertNotIn("\neffort:", front)
                         self.assertIn("Ajuste: %s  model: %s  effort: %s" % (dest, model, effort), lines)
                     else:
-                        # auditor, shield y debugger: modelo y hooks: del origen con cualquier alias
+                        # revisor, seguridad y depurador: modelo y hooks: del origen con cualquier alias
                         self.assertNotIn("Ajuste: " + dest, "\n".join(lines))
                         self.assertIn("\nmodel: %s\n" % self.F4T6_MODELS[role], text)
                         self.assertNotIn("\neffort:", front)
@@ -6332,7 +6336,7 @@ class InstallCases:
         out, err = self.install_ok()
         self.assertIn("Nivel anterior: 2", out.splitlines())
         self.assert_alias_installed(files, 4, table)
-        model, effort = self.f4t6_cell(4, "forge")
+        model, effort = self.f4t6_cell(4, nm.DEVELOPER)
         self.assertIn("\nmodel: %s\n" % model, read(self.target, "agents/dev.md").decode("utf-8"))
 
     def f4t6_repo_files(self):
@@ -6370,10 +6374,10 @@ class InstallCases:
                     text = tree[ar.dest_for(rel, table)].decode("utf-8")
                     for role in ar.roles():
                         # assertFalse y no assertNotIn: si falla, no imprime el texto entero dos veces
-                        self.assertFalse(role in self.F4T6_SCRIBE_WORDS.sub("", text).lower(), (rel, role))
+                        self.assertFalse(role in self.F4T6_WRITER_WORDS.sub("", text).lower(), (rel, role))
                     # los roles entre comillas angulares son subcadenas del texto completo: el bucle de arriba ya los cubre
-                # auditor, shield y debugger: frontmatter igual salvo name: y description:
-                for role in ("auditor", "shield", "debugger"):
+                # revisor, seguridad y depurador: frontmatter igual salvo name: y description:
+                for role in (nm.REVIEWER, nm.SECURITY, nm.DEBUGGER):
                     src = files["agents/%s.md" % role].decode("utf-8").replace("\r\n", "\n").split("\n")
                     dst = tree["agents/%s.md" % table[role]].decode("utf-8").split("\n")
                     close = src.index("---", 1)
@@ -6425,7 +6429,7 @@ class InstallCases:
                  (3, table, "lo esperado para el nivel 3 y los alias"),
                  (1, table, "lo esperado para el nivel 1 y los alias"),
                  # tabla efectiva vacia (alias igual al rol, o sin alias): los textos de hoy
-                 (5, {"forge": "forge"}, "el manifiesto"), (3, {"forge": "forge"}, "lo esperado para el nivel 3"),
+                 (5, {nm.DEVELOPER: nm.DEVELOPER}, "el manifiesto"), (3, {nm.DEVELOPER: nm.DEVELOPER}, "lo esperado para el nivel 3"),
                  (5, {}, "el manifiesto"))
         for level, aliases, what in cases:
             with self.subTest(level=level, aliases=len(aliases), what=what):
@@ -6455,24 +6459,25 @@ class InstallCases:
         self.assertIn("la verificacion posterior fallo", err)
         failed = [l.strip() for l in err.split("la verificacion posterior fallo:", 1)[1].splitlines() if l.strip()]
         self.assertEqual(failed[:1], ["agents/amigo-qa.md"])
-        self.assertNotIn("agents/sentinel.md", err)
+        self.assertNotIn(f"agents/{nm.QA}.md", err)
         self.assertFalse(os.path.exists(os.path.join(self.target, self.STATE)))
         self.assertNotIn("Verificado", out)
 
     def test_f4t6_ajuste_names_the_dest_path_and_never_the_role_path(self):
-        self.f4t6_prepare(self.f4t6_nine_sample(), {"forge": "dev", "scout": "explorador"}, 1)
+        self.f4t6_prepare(self.f4t6_nine_sample(), {nm.DEVELOPER: "dev", nm.RESEARCHER: "explorador"}, 1)
         out, err = self.install_ok()
         lines = out.splitlines()
-        model, effort = self.f4t6_cell(1, "forge")
+        model, effort = self.f4t6_cell(1, nm.DEVELOPER)
         self.assertIn("Ajuste: agents/dev.md  model: %s  effort: %s" % (model, effort), lines)
-        model, effort = self.f4t6_cell(1, "scout")
+        model, effort = self.f4t6_cell(1, nm.RESEARCHER)
         self.assertIn("Ajuste: agents/explorador.md  model: %s  effort: %s" % (model, effort), lines)
-        self.assertFalse([l for l in lines if l.startswith(("Ajuste: agents/forge.md", "Ajuste: agents/scout.md"))])
+        self.assertFalse([l for l in lines if l.startswith((f"Ajuste: agents/{nm.DEVELOPER}.md", f"Ajuste: agents/{nm.RESEARCHER}.md"))])
         self.assertEqual(len([l for l in lines if l.startswith("Ajuste:")]), 6)
 
     # Caso 46: salida sin alias, nivel 5, identica a la de antes de la fase. El golden se calculo con el install.ps1 de
     # antes de la Fase 4 (commit 9c33300) y estas mismas ayudas: por paso, codigo de salida, hash de stdout, hash de
     # stderr (con las rutas reemplazadas por <T>, <B>, <H> y <TMP>) y hash del arbol del destino y del respaldo.
+    # No es plantilla: el escenario (SAMPLE, nivel 5, sin alias) no contiene ningun rol; lo garantiza el caso 46.
     F4T6_GOLDEN = [
         ["simulacro", 0, "ce93ef3e3bb35424", "e3b0c44298fc1c14", "-", "-"],
         ["limpia", 0, "67a9f7511ccbfd75", "82b819d5c8b38503", "96eefc2b8f061bbe", "-"],
@@ -6537,6 +6542,10 @@ class InstallCases:
         steps, raw = self.f4t6_regression_steps()
         message = "\n".join("--- %s\n%s%s" % item for item in raw)
         self.assertEqual(steps, self.F4T6_GOLDEN, message)
+        # el golden no depende de los nombres porque la salida no trae ningun rol (salvo palabras espanolas)
+        for _label, out, err in raw:
+            text = self.F4T6_WRITER_WORDS.sub("", out + err).lower()
+            self.assertEqual([r for r in nm.ROLES if r in text], [], _label)
         # el golden no es trivial: cubre el simulacro, un exit 3, un respaldo, una actualizacion y un huerfano
         self.assertEqual([s[1] for s in steps], [0, 0, 0, 3, 0, 0, 0, 0, 0, 0])
         text = "\n".join(out for _label, out, _err in raw)
@@ -6617,12 +6626,12 @@ class InstallCases:
     def test_f4t7_case47_s1_new_alias_over_an_intact_install_without_aliases(self):
         files = self.f4t7_start()
         old_tree = self.f4_tree(self.target)
-        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        old_qa = self.f4t7_file(f"agents/{nm.QA}.md")
         prev_state = read(self.target, self.STATE)
         self.assertIn(b'"schema": 2', prev_state)
         self.f4t7_config(ALIAS_ONE)
         changed = self.f4t7_changed(files, {}, ALIAS_ONE)
-        self.assertTrue({"agents/atlas.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
+        self.assertTrue({f"agents/{nm.PLANNER}.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
         before = snapshot(self.target)
         backup = os.path.join(self.tmp, "respaldo")
         for dry in (True, False):
@@ -6636,13 +6645,13 @@ class InstallCases:
                     out, err = self.install_ok("-BackupDir", backup)
                 st = self.states(out)
                 self.assertEqual(st["agents/amigo-qa.md"], "NUEVO")
-                self.assertEqual(st["agents/sentinel.md"], "HUERFANO")
+                self.assertEqual(st[f"agents/{nm.QA}.md"], "HUERFANO")
                 self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
                 self.assertEqual(self.f4t7_by_state(out, "NUEVO"), ["agents/amigo-qa.md"])
                 self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
-                self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md")
+                self.f4t7_assert_one_rename_orphan(out, err, f"agents/{nm.QA}.md", "agents/amigo-qa.md")
         # corrida real: el archivo anterior intacto (bytes y mtime), estado a esquema 3, el anterior al respaldo
-        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+        self.assertEqual(self.f4t7_file(f"agents/{nm.QA}.md"), old_qa)
         self.f4t7_assert_installed(files, 5, ALIAS_ONE)
         self.assertIn(b'"schema": 3', read(self.target, self.STATE))
         tree = self.f4_tree(backup)
@@ -6655,7 +6664,7 @@ class InstallCases:
         files = self.f4t7_start()
         self.f4t7_config(ALIAS_ONE)
         write(self.target, "agents/amigo-qa.md", b"agente ajeno del usuario\n")
-        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        old_qa = self.f4t7_file(f"agents/{nm.QA}.md")
         before = snapshot(self.target)
         for flags in ([], ["-DryRun"]):
             with self.subTest(flags=flags):
@@ -6671,33 +6680,33 @@ class InstallCases:
         self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md"])
         self.assertEqual(read(backup, "agents/amigo-qa.md"), b"agente ajeno del usuario\n")
         self.f4t7_assert_installed(files, 5, ALIAS_ONE)
-        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
-        self.assertNotIn("agents/sentinel.md", self.f4_tree(backup))
+        self.assertEqual(self.f4t7_file(f"agents/{nm.QA}.md"), old_qa)
+        self.assertNotIn(f"agents/{nm.QA}.md", self.f4_tree(backup))
 
     def test_f4t7_case47_s3_changed_alias_orphans_the_previous_alias_file_only(self):
-        # Se parte de S1: instalacion sin alias y luego ALIAS_ONE; agents/sentinel.md queda en disco.
+        # Se parte de S1: instalacion sin alias y luego ALIAS_ONE; el archivo del agente de pruebas queda en disco.
         files = self.f4t7_start()
         self.f4t7_config(ALIAS_ONE)
         self.install_ok()
-        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        old_qa = self.f4t7_file(f"agents/{nm.QA}.md")
         old_amigo = self.f4t7_file("agents/amigo-qa.md")
         prev_state = read(self.target, self.STATE)
-        table = {"sentinel": "tester"}
+        table = {nm.QA: "tester"}
         self.f4t7_config(table)
         changed = self.f4t7_changed(files, ALIAS_ONE, table)
-        self.assertTrue({"agents/atlas.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
+        self.assertTrue({f"agents/{nm.PLANNER}.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
         backup = os.path.join(self.tmp, "respaldo")
         out, err = self.install_ok("-BackupDir", backup)
         st = self.states(out)
         self.assertEqual(st["agents/tester.md"], "NUEVO")
         self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
-        self.assertNotIn("agents/sentinel.md", st)
+        self.assertNotIn(f"agents/{nm.QA}.md", st)
         self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", "agents/tester.md")
         # el archivo del rol (de la instalacion sin alias) sigue en disco, no es destino ni destino previo: ni fila
         # HUERFANO ni aviso
-        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
-        self.assertNotIn("agents/sentinel.md", self.f4t7_by_state(out, "HUERFANO"))
-        self.assertFalse([l for l in err.splitlines() if "agents/sentinel.md" in l], err)
+        self.assertEqual(self.f4t7_file(f"agents/{nm.QA}.md"), old_qa)
+        self.assertNotIn(f"agents/{nm.QA}.md", self.f4t7_by_state(out, "HUERFANO"))
+        self.assertFalse([l for l in err.splitlines() if f"agents/{nm.QA}.md" in l], err)
         self.assertEqual(self.f4t7_file("agents/amigo-qa.md"), old_amigo)
         self.f4t7_assert_installed(files, 5, table)
         tree = self.f4_tree(backup)
@@ -6706,7 +6715,7 @@ class InstallCases:
 
     def test_f4t7_case47_s4_removed_alias_without_the_old_role_file_is_nuevo_and_state_goes_back_to_schema2(self):
         files = self.f4t7_start(ALIAS_ONE)
-        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "sentinel.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", f"{nm.QA}.md")))
         old_amigo = self.f4t7_file("agents/amigo-qa.md")
         prev_state = read(self.target, self.STATE)
         self.assertIn(b'"schema": 3', prev_state)
@@ -6714,8 +6723,8 @@ class InstallCases:
         backup = os.path.join(self.tmp, "respaldo")
         out, err = self.install_ok("-BackupDir", backup)
         st = self.states(out)
-        self.assertEqual(st["agents/sentinel.md"], "NUEVO")
-        self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", "agents/sentinel.md")
+        self.assertEqual(st[f"agents/{nm.QA}.md"], "NUEVO")
+        self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", f"agents/{nm.QA}.md")
         self.assertEqual(self.f4t7_file("agents/amigo-qa.md"), old_amigo)
         self.f4t7_assert_installed(files, 5, {})
         self.assertNotIn(b'"dest"', read(self.target, self.STATE))
@@ -6731,7 +6740,7 @@ class InstallCases:
                 self.f4t7_config(ALIAS_ONE)
                 self.install_ok()
                 if edited:
-                    with open(os.path.join(self.target, "agents", "sentinel.md"), "ab") as f:
+                    with open(os.path.join(self.target, "agents", f"{nm.QA}.md"), "ab") as f:
                         f.write(b"editado a mano\n")
                 self.f4t7_config(None)
                 old_amigo = self.f4t7_file("agents/amigo-qa.md")
@@ -6739,12 +6748,12 @@ class InstallCases:
                 code, out, err = self.run_install()
                 if not edited:
                     self.assertEqual(code, 0, out + err)
-                    self.assertEqual(self.states(out)["agents/sentinel.md"], "IGUAL")
-                    self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", "agents/sentinel.md")
+                    self.assertEqual(self.states(out)[f"agents/{nm.QA}.md"], "IGUAL")
+                    self.f4t7_assert_one_rename_orphan(out, err, "agents/amigo-qa.md", f"agents/{nm.QA}.md")
                     self.f4t7_assert_installed(files, 5, {})
                 else:
                     self.assertEqual(code, 3, out + err)
-                    self.assertEqual(self.states(out)["agents/sentinel.md"], "MODIFICADO")
+                    self.assertEqual(self.states(out)[f"agents/{nm.QA}.md"], "MODIFICADO")
                     self.assertEqual(snapshot(self.target), before)
                     self.assertNotIn(self.F4T7_ALIAS_HINT, err)
                     self.assertTrue(err.rstrip().endswith(self.F4T7_MODEL_HINT), err)
@@ -6752,8 +6761,8 @@ class InstallCases:
 
     def test_f4t7_case48_s6_level_change_with_the_alias_already_installed(self):
         files = self.f4t7_start(ALIAS_ONE)
-        e5 = alias_expected(files, ALIAS_ONE, 5)["agents/sentinel.md"][1]
-        e1 = alias_expected(files, ALIAS_ONE, 1)["agents/sentinel.md"][1]
+        e5 = alias_expected(files, ALIAS_ONE, 5)[f"agents/{nm.QA}.md"][1]
+        e1 = alias_expected(files, ALIAS_ONE, 1)[f"agents/{nm.QA}.md"][1]
         self.assertNotEqual(e5, e1)
         self.f4t7_config(ALIAS_ONE, level=1)
         backup = os.path.join(self.tmp, "respaldo")
@@ -6765,7 +6774,7 @@ class InstallCases:
         self.assertIn("HUERFANO=0", out)
         self.assertEqual(self.f4t7_avisos(err), [])
         self.assertIn("Nivel anterior: 5", out)
-        model, effort = lr.read_script_table()[(1, "sentinel")]
+        model, effort = lr.read_script_table()[(1, nm.QA)]
         self.assertIn("Ajuste: agents/amigo-qa.md  model: %s  effort: %s" % (model, effort), out.splitlines())
         self.assertEqual(read(self.target, "agents/amigo-qa.md"), e1)
         self.assertEqual(read(backup, "agents/amigo-qa.md"), e5)
@@ -6774,24 +6783,24 @@ class InstallCases:
     def test_f4t7_case48_s7_new_alias_and_level_change_at_once(self):
         files = self.f4t7_start()
         old_tree = self.f4_tree(self.target)
-        old_sentinel = self.f4t7_file("agents/sentinel.md")
+        old_qa = self.f4t7_file(f"agents/{nm.QA}.md")
         prev_state = read(self.target, self.STATE)
         self.assertIn(b'"schema": 2', prev_state)
         self.f4t7_config(ALIAS_ONE, level=1)
         changed = self.f4t7_changed(files, {}, ALIAS_ONE, level=1, old_level=5)
-        self.assertTrue({"agents/atlas.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
+        self.assertTrue({f"agents/{nm.PLANNER}.md", "rules/agentes.md", "docs/agentes.md"} <= changed, changed)
         backup = os.path.join(self.tmp, "respaldo")
         out, err = self.install_ok("-BackupDir", backup)
         st = self.states(out)
         self.assertEqual(st["agents/amigo-qa.md"], "NUEVO")
         self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
         self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
-        self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md")
+        self.f4t7_assert_one_rename_orphan(out, err, f"agents/{nm.QA}.md", "agents/amigo-qa.md")
         self.assertIn("Nivel anterior: 5", out)
-        model, effort = lr.read_script_table()[(1, "sentinel")]
+        model, effort = lr.read_script_table()[(1, nm.QA)]
         self.assertIn("Ajuste: agents/amigo-qa.md  model: %s  effort: %s" % (model, effort), out.splitlines())
-        self.assertEqual(read(self.target, "agents/amigo-qa.md"), alias_expected(files, ALIAS_ONE, 1)["agents/sentinel.md"][1])
-        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+        self.assertEqual(read(self.target, "agents/amigo-qa.md"), alias_expected(files, ALIAS_ONE, 1)[f"agents/{nm.QA}.md"][1])
+        self.assertEqual(self.f4t7_file(f"agents/{nm.QA}.md"), old_qa)
         self.f4t7_assert_installed(files, 1, ALIAS_ONE)
         self.assertIn(b'"schema": 3', read(self.target, self.STATE))
         tree = self.f4_tree(backup)
@@ -6823,8 +6832,8 @@ class InstallCases:
     def test_f4t7_case49_s9_reassignment_between_two_roles(self):
         files = self.f4t7_start(ALIAS_ONE)
         old_amigo = self.f4t7_file("agents/amigo-qa.md")
-        old_forge = self.f4t7_file("agents/forge.md")
-        table = {"sentinel": "tester", "forge": "amigo-qa"}
+        old_developer = self.f4t7_file(f"agents/{nm.DEVELOPER}.md")
+        table = {nm.QA: "tester", nm.DEVELOPER: "amigo-qa"}
         self.f4t7_config(table)
         backup = os.path.join(self.tmp, "respaldo")
         out, err = self.install_ok("-BackupDir", backup)
@@ -6832,10 +6841,10 @@ class InstallCases:
         self.assertEqual(st["agents/amigo-qa.md"], "ACTUALIZAR")
         self.assertEqual(st["agents/tester.md"], "NUEVO")
         self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
-        self.f4t7_assert_one_rename_orphan(out, err, "agents/forge.md", "agents/amigo-qa.md")
-        self.assertEqual(self.f4t7_file("agents/forge.md"), old_forge)
+        self.f4t7_assert_one_rename_orphan(out, err, f"agents/{nm.DEVELOPER}.md", "agents/amigo-qa.md")
+        self.assertEqual(self.f4t7_file(f"agents/{nm.DEVELOPER}.md"), old_developer)
         self.assertEqual(read(backup, "agents/amigo-qa.md"), old_amigo[0])
-        self.assertNotIn("agents/forge.md", self.f4_tree(backup))
+        self.assertNotIn(f"agents/{nm.DEVELOPER}.md", self.f4_tree(backup))
         self.f4t7_assert_installed(files, 5, table)
 
     def test_f4t7_case49_s10_missing_or_unreadable_state_with_aliases_already_installed(self):
@@ -6855,7 +6864,7 @@ class InstallCases:
                     else:
                         with open(state, "wb") as f:
                             f.write(b"{no es json")
-                    old_sentinel = self.f4t7_file("agents/sentinel.md")
+                    old_qa = self.f4t7_file(f"agents/{nm.QA}.md")
                     code, out, err = self.run_install()
                     if edited:
                         self.assertEqual(code, 3, out + err)
@@ -6866,7 +6875,7 @@ class InstallCases:
                     self.assertFalse(self.f4t7_by_state(out, "HUERFANO"))
                     self.assertNotIn(self.F4T7_NOTE, out)
                     self.assertEqual(self.f4t7_avisos(err), [])
-                    self.assertEqual(self.f4t7_file("agents/sentinel.md"), old_sentinel)
+                    self.assertEqual(self.f4t7_file(f"agents/{nm.QA}.md"), old_qa)
 
     def test_f4t7_case49_s11_state_of_schema_1_or_2_and_a_new_alias_behaves_like_s1(self):
         for schema in (1, 2):
@@ -6883,9 +6892,9 @@ class InstallCases:
                 self.assertEqual(st["agents/amigo-qa.md"], "NUEVO")
                 self.assertEqual(self.f4t7_by_state(out, "ACTUALIZAR"), sorted(changed))
                 self.assertFalse(self.f4t7_by_state(out, "MODIFICADO"))
-                self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md")
+                self.f4t7_assert_one_rename_orphan(out, err, f"agents/{nm.QA}.md", "agents/amigo-qa.md")
                 self.f4t7_assert_installed(files, 5, ALIAS_ONE)
-                self.assertEqual(read(self.target, "agents/sentinel.md"), files["agents/sentinel.md"])
+                self.assertEqual(read(self.target, f"agents/{nm.QA}.md"), files[f"agents/{nm.QA}.md"])
 
     def test_f4t7_case49_s12_reinstalling_the_same_aliases_changes_nothing(self):
         files = self.f4t7_start()
@@ -6915,32 +6924,32 @@ class InstallCases:
                     shutil.rmtree(os.path.join(self.tmp, "respaldo"), ignore_errors=True)
                     self.f4t7_start()
                     if not exists:
-                        os.remove(os.path.join(self.target, "agents", "sentinel.md"))
-                    old = self.f4t7_file("agents/sentinel.md") if exists else None
+                        os.remove(os.path.join(self.target, "agents", f"{nm.QA}.md"))
+                    old = self.f4t7_file(f"agents/{nm.QA}.md") if exists else None
                     self.f4t7_config(ALIAS_ONE)
                     backup = os.path.join(self.tmp, "respaldo")
                     flags = ["-DryRun"] if dry else []
                     code, out, err = self.run_install(*flags, "-BackupDir", backup)
                     self.assertEqual(code, 0, out + err)
-                    self.f4t7_assert_one_rename_orphan(out, err, "agents/sentinel.md", "agents/amigo-qa.md", exists=exists)
+                    self.f4t7_assert_one_rename_orphan(out, err, f"agents/{nm.QA}.md", "agents/amigo-qa.md", exists=exists)
                     if exists:
-                        self.assertEqual(self.f4t7_file("agents/sentinel.md"), old)
+                        self.assertEqual(self.f4t7_file(f"agents/{nm.QA}.md"), old)
                     else:
-                        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "sentinel.md")))
+                        self.assertFalse(os.path.exists(os.path.join(self.target, "agents", f"{nm.QA}.md")))
                     if not dry:
-                        self.assertNotIn("agents/sentinel.md", self.f4_tree(backup))
+                        self.assertNotIn(f"agents/{nm.QA}.md", self.f4_tree(backup))
                     else:
                         self.assertFalse(os.path.exists(backup))
 
     def test_f4t7_case50_one_warning_per_file(self):
-        # Dos huerfanos por cambio de nombre a la vez (sentinel y forge pasan a alias): un aviso por archivo.
+        # Dos huerfanos por cambio de nombre a la vez (el agente de pruebas y el desarrollador pasan a alias): un aviso por archivo.
         self.f4t7_start()
-        self.f4t7_config({"sentinel": "amigo-qa", "forge": "dev"})
+        self.f4t7_config({nm.QA: "amigo-qa", nm.DEVELOPER: "dev"})
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(sorted(self.f4t7_avisos(err)),
-                         sorted([self.f4t7_aviso("agents/sentinel.md", "agents/amigo-qa.md"),
-                                 self.f4t7_aviso("agents/forge.md", "agents/dev.md")]))
+                         sorted([self.f4t7_aviso(f"agents/{nm.QA}.md", "agents/amigo-qa.md"),
+                                 self.f4t7_aviso(f"agents/{nm.DEVELOPER}.md", "agents/dev.md")]))
         self.assertIn("HUERFANO=2", out)
         self.assertNotIn(self.F4T7_NOTE, out)
 
@@ -6968,10 +6977,10 @@ class InstallCases:
             with self.subTest(flags=flags):
                 code, out, err = self.run_install(*flags)
                 self.assertEqual(code, 0, out + err)
-                self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), ["agents/sentinel.md", "agents/viejo.md"])
+                self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), sorted([f"agents/{nm.QA}.md", "agents/viejo.md"]))
                 self.assertIn("HUERFANO=2", out)
                 self.assertEqual(out.count("nota: los HUERFANO los instalo una version anterior"), 1)
-                self.assertEqual(self.f4t7_avisos(err), [self.f4t7_aviso("agents/sentinel.md", "agents/amigo-qa.md")])
+                self.assertEqual(self.f4t7_avisos(err), [self.f4t7_aviso(f"agents/{nm.QA}.md", "agents/amigo-qa.md")])
                 self.assertEqual(read(self.target, "agents/viejo.md"), b"de una version anterior\n")
                 if not flags:
                     # el huerfano clasico tampoco se toco; el estado ya no los lista
@@ -6983,7 +6992,7 @@ class InstallCases:
         extra = dict(files)
         extra["agents/viejo.md"] = b"de una version anterior\n"
         write(self.target, "agents/viejo.md", b"de una version anterior\n")
-        self.write_state(extra, schema=3, dests={"agents/sentinel.md": "agents/amigo-qa.md"})
+        self.write_state(extra, schema=3, dests={f"agents/{nm.QA}.md": "agents/amigo-qa.md"})
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.f4t7_by_state(out, "HUERFANO"), ["agents/viejo.md"])
@@ -7002,14 +7011,14 @@ class InstallCases:
         self.assertEqual(err.count(end), 1, err)
         self.assertTrue(err.rstrip().endswith(end), err)
         self.assertLess(err.index(self.F4T7_ALIAS_HINT), err.index(end))
-        # (b) MODIFICADO solo en un archivo sin alias (forge no tiene alias), con alias configurados: sin la frase
+        # (b) MODIFICADO solo en un archivo sin alias (el desarrollador no tiene alias), con alias configurados: sin la frase
         shutil.rmtree(self.target, ignore_errors=True)
         self.f4t7_start(ALIAS_ONE)
-        with open(os.path.join(self.target, "agents", "forge.md"), "ab") as f:
+        with open(os.path.join(self.target, "agents", f"{nm.DEVELOPER}.md"), "ab") as f:
             f.write(b"editado a mano\n")
         code, out, err = self.run_install()
         self.assertEqual(code, 3, out + err)
-        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/forge.md"])
+        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), [f"agents/{nm.DEVELOPER}.md"])
         self.assertNotIn(self.F4T7_ALIAS_HINT, err)
         self.assertTrue(err.rstrip().endswith(end), err)
         # (c) los dos a la vez: una sola vez cada frase
@@ -7017,13 +7026,13 @@ class InstallCases:
             f.write(b"editado a mano\n")
         code, out, err = self.run_install()
         self.assertEqual(code, 3, out + err)
-        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), ["agents/amigo-qa.md", "agents/forge.md"])
+        self.assertEqual(self.f4t7_by_state(out, "MODIFICADO"), sorted(["agents/amigo-qa.md", f"agents/{nm.DEVELOPER}.md"]))
         self.assertEqual(err.count(self.F4T7_ALIAS_HINT), 1, err)
         self.assertTrue(err.rstrip().endswith(end), err)
         # (d) sin alias: el mensaje es el de hoy
         shutil.rmtree(self.target, ignore_errors=True)
         self.f4t7_start()
-        with open(os.path.join(self.target, "agents", "forge.md"), "ab") as f:
+        with open(os.path.join(self.target, "agents", f"{nm.DEVELOPER}.md"), "ab") as f:
             f.write(b"editado a mano\n")
         code, out, err = self.run_install()
         self.assertEqual(code, 3, out + err)
@@ -7047,7 +7056,7 @@ class InstallCases:
         self.assertTrue(os.path.isdir(backup))
         self.assertNotIn(self.CONFIG, self.f4_tree(backup))
         # con un cambio de alias y -Force, otro respaldo: la configuracion tampoco entra
-        self.f4t7_config({"sentinel": "tester"})
+        self.f4t7_config({nm.QA: "tester"})
         raw = read(self.target, self.CONFIG)
         mtime = os.stat(config).st_mtime_ns
         backup2 = os.path.join(self.tmp, "respaldo2")
@@ -7071,7 +7080,7 @@ class InstallCases:
         path = os.path.join(self.target, "agents", "amigo-qa.md")
         with open(path, "ab") as f:
             f.write(b"editado a mano\n")
-        self.f4t7_config({"sentinel": "Mal"}, level=2)
+        self.f4t7_config({nm.QA: "Mal"}, level=2)
         before = snapshot(self.target)
         listing = sorted(os.listdir(self.tmp))
         backup = os.path.join(self.tmp, "respaldo")
@@ -7079,7 +7088,7 @@ class InstallCases:
             with self.subTest(flags=flags):
                 code, out, err = self.run_install(*flags)
                 self.assert_quiet_failure(code, out, err, before, listing)
-                self.assertIn(self.CONFIG_ERR + "el alias de sentinel ", err)
+                self.assertIn(self.CONFIG_ERR + f"el alias de {nm.QA} ", err)
                 self.assertNotIn("Alias:", out)
                 self.assertFalse(os.path.exists(backup))
 
@@ -7109,7 +7118,7 @@ class InstallCases:
         files = self.f4t7_start(ALIAS_ONE)
         state_path = os.path.join(self.target, self.STATE)
         data = json.loads(read(self.target, self.STATE))
-        moved = [e for e in data["files"] if e["path"] == "agents/sentinel.md"]
+        moved = [e for e in data["files"] if e["path"] == f"agents/{nm.QA}.md"]
         self.assertEqual(len(moved), 1)
         self.assertEqual(moved[0]["dest"], "agents/amigo-qa.md")
         moved[0]["dest"] = "agents/otro.md"
@@ -7130,11 +7139,11 @@ class InstallCases:
     # abajo). El valor de plans_dir es entrada no confiable: nunca sale en un mensaje. ---
 
     F5_BAD_SET = ["a/b/c/d/e", "..", ".", "docs/../x", "/docs", "docs/", "docs//x", "Docs", "docs/Plans", "docs/plans.v2",
-                  "docs plans", "a" * 32 + "/" + "b" * 32, "a" * 33, "nul", "docs/com1", "docs/lpt0", "docs/forge",
-                  "atlas-planes", "docs/x-shield-y", "", "a\nb", "docs/`x`", "d\u00f3cs", "docs\\x", "docs:x",
+                  "docs plans", "a" * 32 + "/" + "b" * 32, "a" * 33, "nul", "docs/com1", "docs/lpt0", f"docs/{nm.DEVELOPER}",
+                  f"{nm.PLANNER}-planes", f"docs/x-{nm.SECURITY}-y", "", "a\nb", "docs/`x`", "d\u00f3cs", "docs\\x", "docs:x",
                   "docs/plans\n", "docs/'x'", "-docs", "_docs", "docs/-x", "docs/a b", "docs/<x>", "docs/a|b", "docs/#x",
                   "\u202edocs", "x" * 65, "docs/plans/../..", "~/docs", "c:/docs"]
-    F5_GOOD_SET = ["planes", "docs/planes", "a/b/c/d", "forge_x", "forges", "docs/plans-v2", "x" * 32, "a1/b2_c/d-e",
+    F5_GOOD_SET = ["planes", "docs/planes", "a/b/c/d", f"{nm.DEVELOPER}_x", f"{nm.DEVELOPER}s", "docs/plans-v2", "x" * 32, "a1/b2_c/d-e",
                    "docs/x/y", "com10", "docs/lpt10", "nulo", "docs/plans2"]
 
     def f5_config(self, plans_dir, level=None, aliases=None):
@@ -7200,8 +7209,8 @@ class InstallCases:
         # con alias y nivel a la vez
         for mode in (["-DryRun"], []):
             results = []
-            for cfg in (b'{"level": 2, "aliases": {"forge": "dev"}}',
-                        b'{"level": 2, "aliases": {"forge": "dev"}, "plans_dir": "docs/plans"}'):
+            for cfg in ((b'{"level": 2, "aliases": {"' + nm.DEVELOPER.encode() + b'": "dev"}}'),
+                        (b'{"level": 2, "aliases": {"' + nm.DEVELOPER.encode() + b'": "dev"}, "plans_dir": "docs/plans"}')):
                 self.make_source()
                 self.write_config(cfg)
                 code, out, err = self.run_install(*mode)
@@ -7233,14 +7242,14 @@ class InstallCases:
             shutil.rmtree(self.target)
 
     def test_f5t2_case12_invalid_values_exit1_in_the_real_mode_too(self):
-        for value in ("Docs", "docs/forge", "nul", "", "a\nb", "docs/`x`", "d\u00f3cs", "a/b/c/d/e"):
+        for value in ("Docs", f"docs/{nm.DEVELOPER}", "nul", "", "a\nb", "docs/`x`", "d\u00f3cs", "a/b/c/d/e"):
             self.f5_expect_invalid(value, modes=([],))
             shutil.rmtree(self.target)
 
     def test_f5t2_case12_each_reason_is_reported_with_its_fixed_text(self):
         for value, motivo in (("Docs", pr.MSG_SHAPE), ("a/b/c/d/e", pr.MSG_SHAPE), ("x" * 65, pr.MSG_SHAPE),
                               ("a" * 32 + "/" + "b" * 32, pr.MSG_SHAPE), ("nul", pr.MSG_DEVICE),
-                              ("docs/com1", pr.MSG_DEVICE), ("docs/forge", pr.MSG_ROLE), ("atlas-planes", pr.MSG_ROLE)):
+                              ("docs/com1", pr.MSG_DEVICE), (f"docs/{nm.DEVELOPER}", pr.MSG_ROLE), (f"{nm.PLANNER}-planes", pr.MSG_ROLE)):
             with self.subTest(value=value[:20]):
                 self.assert_config_rejected(self.f5_config(value), motivo, modes=(["-DryRun"],))
                 shutil.rmtree(self.target)
@@ -7253,7 +7262,7 @@ class InstallCases:
             shutil.rmtree(self.target)
 
     def test_f5t2_case12_a_hostile_value_never_reaches_stdout_or_stderr(self):
-        values = ["SECRETO-PLANES-123", "secreto-planes!", "secreto/forge", "secreto/nul", "secreto/a/b/c/d",
+        values = ["SECRETO-PLANES-123", "secreto-planes!", f"secreto/{nm.DEVELOPER}", "secreto/nul", "secreto/a/b/c/d",
                   "secreto\nsecreto", "secreto`x`", "SECRETO" + "x" * 60000, "secreto\u001b[31m", "\u202esecreto",
                   "secreto/" + "y" * 40, "secreto:x", "secreto\\x"]
         for value in values:
@@ -7278,9 +7287,9 @@ class InstallCases:
 
     def test_f5t2_case14_plans_dir_level_and_aliases_lines_come_in_order(self):
         files = dict(SAMPLE)
-        files["agents/sentinel.md"] = agent_md("sentinel", "sonnet")
+        files[f"agents/{nm.QA}.md"] = agent_md(nm.QA, "sonnet")
         self.make_source(files)
-        self.write_config(self.f5_config("docs/planes", level=3, aliases={"sentinel": "amigo-qa", "forge": "dev"}))
+        self.write_config(self.f5_config("docs/planes", level=3, aliases={nm.QA: "amigo-qa", nm.DEVELOPER: "dev"}))
         for mode in (["-DryRun"], []):
             with self.subTest(mode=mode):
                 code, out, err = self.run_install(*mode)
@@ -7288,10 +7297,8 @@ class InstallCases:
                 self.assertNotIn("error", err)
                 lines = out.splitlines()
                 self.assertTrue(lines[0].startswith("Destino: "), lines)
-                self.assertEqual(lines[1:5], ["Nivel: 3 (synclayer-config.json)",
-                                              "Alias: forge -> dev (agents/dev.md)",
-                                              "Alias: sentinel -> amigo-qa (agents/amigo-qa.md)",
-                                              "Planes: docs/planes"])
+                self.assertEqual(lines[1:5], ["Nivel: 3 (synclayer-config.json)"]
+                                 + alias_lines({nm.QA: "amigo-qa", nm.DEVELOPER: "dev"}) + ["Planes: docs/planes"])
                 self.assertEqual(len([l for l in lines if l.startswith("Planes:")]), 1)
         # `Planes:` no se confunde con una fila del plan (la expresion LINE de las pruebas)
         self.assertIsNone(LINE.match("Planes: docs/planes"))
@@ -7311,7 +7318,7 @@ class InstallCases:
         self.install_ok()
         self.update_source("agents/alfa.md", b"alfa nueva\n")
         write(self.target, "agents/beta.md", b"editado a mano\n")
-        self.write_config(self.f5_config("Docs/Forge"))
+        self.write_config(self.f5_config(f"Docs/{nm.DEVELOPER.capitalize()}"))
         before = snapshot(self.target)
         listing = sorted(os.listdir(self.tmp))
         for mode in (["-DryRun"], [], ["-Force"]):
@@ -7323,17 +7330,17 @@ class InstallCases:
                 self.assertFalse([n for n in os.listdir(self.tmp) if "backup" in n or "respaldo" in n])
 
     def test_f5t2_case15_alias_and_plans_errors_at_once_give_a_single_error_the_alias_one(self):
-        cfg = json.dumps({"aliases": {"forge": "Dev"}, "plans_dir": "Docs/Forge"}).encode("ascii")
+        cfg = json.dumps({"aliases": {nm.DEVELOPER: "Dev"}, "plans_dir": f"Docs/{nm.DEVELOPER.capitalize()}"}).encode("ascii")
         before, listing = self.f5_prepare(cfg)
         for mode in (["-DryRun"], []):
             code, out, err = self.run_install(*mode)
             self.assert_quiet_failure(code, out, err, before, listing)
-            self.assertEqual(err.strip(), self.CONFIG_ERR + "el alias de forge solo admite a-z, 0-9, _ y -, empieza por "
+            self.assertEqual(err.strip(), self.CONFIG_ERR + f"el alias de {nm.DEVELOPER} solo admite a-z, 0-9, _ y -, empieza por "
                                           "letra y tiene hasta 64 caracteres. No se escribio nada.")
             self.assertEqual(len([l for l in err.splitlines() if l.strip()]), 1, err)
             self.assertNotIn("plans_dir", err)
         # alias valido y carpeta invalida: el error es el de la carpeta y no sale ninguna linea Alias:
-        cfg = json.dumps({"aliases": {"forge": "dev"}, "plans_dir": "Docs"}).encode("ascii")
+        cfg = json.dumps({"aliases": {nm.DEVELOPER: "dev"}, "plans_dir": "Docs"}).encode("ascii")
         self.write_config(cfg)
         before = snapshot(self.target)
         code, out, err = self.run_install("-DryRun")
@@ -7341,12 +7348,12 @@ class InstallCases:
         self.assertEqual(err.strip(), self.CONFIG_ERR + pr.MSG_SHAPE + ". No se escribio nada.")
         self.assertNotIn("Alias:", out)
         # alias invalido y carpeta valida y efectiva: el error es el del alias, no la guarda
-        cfg = json.dumps({"aliases": {"forge": "Dev"}, "plans_dir": "docs/planes"}).encode("ascii")
+        cfg = json.dumps({"aliases": {nm.DEVELOPER: "Dev"}, "plans_dir": "docs/planes"}).encode("ascii")
         self.write_config(cfg)
         before = snapshot(self.target)
         code, out, err = self.run_install("-DryRun")
         self.assert_quiet_failure(code, out, err, before, listing)
-        self.assertIn("el alias de forge", err)
+        self.assertIn(f"el alias de {nm.DEVELOPER}", err)
         self.assertNotIn("carpeta de planes", err)
 
     def test_f5t2_case16_a_repeated_plans_dir_key_in_windows_powershell_5_1_last_one_wins(self):
@@ -7441,9 +7448,9 @@ class InstallCases:
     # --- Fase 5, T3: transformacion de textos y activacion de la carpeta de planes (casos 18 a 24 del plan) ---
 
     F5T3_MSG = "error: no se puede aplicar la carpeta de planes a "
-    F5T3_THREE = ("agents/atlas.md", "rules/agentes.md", "docs/agentes.md")
-    # los tres textos del repositorio real mas forge, que PLANS_SAMPLE tambien hace nombrar la carpeta
-    F5T3_FOUR = F5T3_THREE + ("agents/forge.md",)
+    F5T3_THREE = (f"agents/{nm.PLANNER}.md", "rules/agentes.md", "docs/agentes.md")
+    # los tres textos del repositorio real mas el desarrollador, que PLANS_SAMPLE tambien hace nombrar la carpeta
+    F5T3_FOUR = F5T3_THREE + (f"agents/{nm.DEVELOPER}.md",)
     F5T3_RX = re.compile(rb"(?<![A-Za-z0-9_./-])docs/plans/")
 
     def f5t3_source(self, files=None, crlf=False):
@@ -7497,11 +7504,11 @@ class InstallCases:
                     data = read(self.target, rel)
                     self.assertIsNone(self.F5T3_RX.search(data), rel)
                     self.assertIn(value.encode("ascii") + b"/", data, rel)
-                atlas = read(self.target, "agents/atlas.md")
+                planner = read(self.target, f"agents/{nm.PLANNER}.md")
                 for kept in (b"mydocs/plans/x.md", b"x/docs/plans/y.md", b".docs/plans/z.md", b"docs/plans sin barra"):
-                    self.assertIn(kept, atlas)
-                self.assertIn(("`%s/AAAA-MM-DD-<tema>.md`" % value).encode("ascii"), atlas)
-                self.assertIn(("(%s/z.md)" % value).encode("ascii"), atlas)
+                    self.assertIn(kept, planner)
+                self.assertIn(("`%s/AAAA-MM-DD-<tema>.md`" % value).encode("ascii"), planner)
+                self.assertIn(("(%s/z.md)" % value).encode("ascii"), planner)
                 self.assertIn(("«%s/x.md»" % value).encode("utf-8"), read(self.target, "rules/agentes.md"))
                 self.assertEqual(self.leftover_temps(), [])
 
@@ -7521,19 +7528,19 @@ class InstallCases:
                     self.assertIsNotNone(self.F5T3_RX.search(a), (rel, a))
                     self.assertEqual(b, self.F5T3_RX.sub(PLANS_DIR.encode("ascii") + b"/", a), rel)
             if rel.startswith("agents/") and rel != "agents/alfa.md":
-                # frontmatter (hasta el cierre, incluido) byte a byte, con el bloque hooks: de sentinel
+                # frontmatter (hasta el cierre, incluido) byte a byte, con el bloque hooks: del agente de pruebas
                 close = src.index(b"---", 1)
                 self.assertEqual(got[:close + 1], src[:close + 1], rel)
         self.assertEqual({k: v for k, v in changed.items() if v},
-                         {"agents/atlas.md": 4, "agents/forge.md": 1, "rules/agentes.md": 1, "docs/agentes.md": 1})
+                         {f"agents/{nm.PLANNER}.md": 4, f"agents/{nm.DEVELOPER}.md": 1, "rules/agentes.md": 1, "docs/agentes.md": 1})
         self.assertEqual(read(self.target, "agents/alfa.md"), files["agents/alfa.md"])
         self.assertEqual(read(self.target, "hooks/agent_guard.py"), files["hooks/agent_guard.py"])
         state = json.loads(read(self.target, self.STATE))
         by_path = {f["path"]: f for f in state["files"]}
         self.assertEqual(by_path["hooks/agent_guard.py"]["written"], by_path["hooks/agent_guard.py"]["sha256"])
         self.assertEqual(by_path["agents/alfa.md"]["written"], by_path["agents/alfa.md"]["sha256"])
-        self.assertEqual(by_path["agents/sentinel.md"]["written"], by_path["agents/sentinel.md"]["sha256"])
-        for rel in self.F5T3_THREE + ("agents/forge.md",):
+        self.assertEqual(by_path[f"agents/{nm.QA}.md"]["written"], by_path[f"agents/{nm.QA}.md"]["sha256"])
+        for rel in self.F5T3_THREE + (f"agents/{nm.DEVELOPER}.md",):
             self.assertNotEqual(by_path[rel]["written"], by_path[rel]["sha256"], rel)
             self.assertEqual(by_path[rel]["written"], bm.canonical_sha256(read(self.target, rel)), rel)
 
@@ -7543,10 +7550,10 @@ class InstallCases:
         self.patch_script("function ConvertTo-PlansBytes", marker)
         configs = ((None, 0), (b"{}", 0), (b'{"level": 3}', 0), (b'{"plans_dir": "docs/plans"}', 0),
                    (b'{"level": 3, "plans_dir": "docs/plans"}', 0), (self.alias_config(ALIAS_FOUR), 0),
-                   (b'{"aliases": {"forge": "forge"}, "plans_dir": "docs/plans"}', 0),
+                   ((b'{"aliases": {"' + nm.DEVELOPER.encode() + b'": "' + nm.DEVELOPER.encode() + b'"}, "plans_dir": "docs/plans"}'), 0),
                    (self.f5_config(PLANS_DIR), 6), (self.f5_config("planes", level=3), 6),
                    (self.f5_config(PLANS_DIR, aliases=ALIAS_FOUR), 6),
-                   (self.f5_config(PLANS_DIR, level=2, aliases={"forge": "forge"}), 6))
+                   (self.f5_config(PLANS_DIR, level=2, aliases={nm.DEVELOPER: nm.DEVELOPER}), 6))
         for config, calls in configs:
             with self.subTest(config=config):
                 shutil.rmtree(self.target, ignore_errors=True)
@@ -7561,17 +7568,17 @@ class InstallCases:
                         self.assertEqual(sorted(l.split()[1] for l in called), ["agent"] * 4 + ["text"] * 2)
 
     def f5t3_defects(self):
-        """Variantes defectuosas de agents/atlas.md y de agents/sentinel.md: ruta del archivo y texto."""
-        atlas = PLANS_SAMPLE["agents/atlas.md"].decode("utf-8")
-        sentinel = PLANS_SAMPLE["agents/sentinel.md"].decode("utf-8")
+        """Variantes defectuosas del agente planificador y del de pruebas: ruta del archivo y texto."""
+        planner = PLANS_SAMPLE[f"agents/{nm.PLANNER}.md"].decode("utf-8")
+        qa = PLANS_SAMPLE[f"agents/{nm.QA}.md"].decode("utf-8")
         return {
-            "literal en description": ("agents/atlas.md", atlas.replace(
-                "description: Plans the work and hands it to FORGE.", "description: Guarda en docs/plans/ y entrega")),
-            "literal en tools": ("agents/atlas.md", atlas.replace("tools: Read, Grep", "tools: Read, docs/plans/x")),
-            "literal en hooks": ("agents/sentinel.md", sentinel.replace('"python guard.py"', '"python docs/plans/g.py"')),
-            "sin cierre": ("agents/atlas.md", atlas.replace("color: blue\n---\n", "color: blue\n")),
-            "primera linea no es ---": ("agents/atlas.md", atlas[4:]),
-            "sin frontmatter": ("agents/atlas.md", "Eres atlas y usas docs/plans/\n"),
+            "literal en description": (f"agents/{nm.PLANNER}.md", planner.replace(
+                f"description: Plans the work and hands it to {nm.DEVELOPER.upper()}.", "description: Guarda en docs/plans/ y entrega")),
+            "literal en tools": (f"agents/{nm.PLANNER}.md", planner.replace("tools: Read, Grep", "tools: Read, docs/plans/x")),
+            "literal en hooks": (f"agents/{nm.QA}.md", qa.replace('"python guard.py"', '"python docs/plans/g.py"')),
+            "sin cierre": (f"agents/{nm.PLANNER}.md", planner.replace("color: blue\n---\n", "color: blue\n")),
+            "primera linea no es ---": (f"agents/{nm.PLANNER}.md", planner[4:]),
+            "sin frontmatter": (f"agents/{nm.PLANNER}.md", f"Eres {nm.PLANNER} y usas docs/plans/\n"),
         }
 
     def test_f5t3_case21_defective_origin_with_an_effective_folder_exit1_in_both_modes(self):
@@ -7610,13 +7617,13 @@ class InstallCases:
         # Con carpeta efectiva los nueve agentes pasan por la transformacion: un agente sin cierre aunque no nombre la
         # carpeta detiene la instalacion y el mensaje nombra su ruta.
         files = dict(PLANS_SAMPLE)
-        files["agents/scribe.md"] = files["agents/scribe.md"].replace(b"color: blue\n---\n", b"color: blue\n")
+        files[f"agents/{nm.WRITER}.md"] = files[f"agents/{nm.WRITER}.md"].replace(b"color: blue\n---\n", b"color: blue\n")
         self.f5t3_source(files)
         self.f5t3_config(PLANS_DIR)
         for mode in (["-DryRun"], []):
             code, out, err = self.run_install(*mode)
             self.assertEqual(code, 1, out + err)
-            self.assertTrue(err.startswith(self.F5T3_MSG + "agents/scribe.md: "), err)
+            self.assertTrue(err.startswith(self.F5T3_MSG + f"agents/{nm.WRITER}.md: "), err)
             self.assertEqual(os.listdir(self.target), [self.CONFIG])
 
     def test_f5t3_case22_self_check_catches_a_corrupted_result_in_both_modes(self):
@@ -7625,10 +7632,10 @@ class InstallCases:
             "carpeta": "$plansResult = $latin1.GetBytes($latin1.GetString($plansResult).Replace('docs/planes/', 'docs/planex/'))",
             "hooks": "$plansResult = $latin1.GetBytes($latin1.GetString($plansResult).Replace('hooks:', 'hookz:'))",
             "lineas": "$plansResult = $latin1.GetBytes($latin1.GetString($plansResult).Replace('Guarda', 'x' + [char]10 + 'Guarda'))",
-            "frontmatter": "$plansResult = $latin1.GetBytes($latin1.GetString($plansResult).Replace('name: forge', 'name: forgx'))",
+            "frontmatter": f"$plansResult = $latin1.GetBytes($latin1.GetString($plansResult).Replace('name: {nm.DEVELOPER}', 'name: {nm.DEVELOPER[:-1]}x'))",
             "description": "$plansResult = $latin1.GetBytes($latin1.GetString($plansResult).Replace('description: Runs', 'description: Rans'))",
-            "texto extra": "$plansResult = $latin1.GetBytes($latin1.GetString($plansResult).Replace('Eres ATLAS', 'Eres ATLAS!'))",
-            "carpeta de mas": "$plansResult = $latin1.GetBytes($latin1.GetString($plansResult).Replace('Eres ATLAS', 'Eres docs/planes/ ATLAS'))",
+            "texto extra": f"$plansResult = $latin1.GetBytes($latin1.GetString($plansResult).Replace('Eres {nm.PLANNER.upper()}', 'Eres {nm.PLANNER.upper()}!'))",
+            "carpeta de mas": f"$plansResult = $latin1.GetBytes($latin1.GetString($plansResult).Replace('Eres {nm.PLANNER.upper()}', 'Eres docs/planes/ {nm.PLANNER.upper()}'))",
         }
         for label, code_line in variants.items():
             with self.subTest(variant=label):
@@ -7661,7 +7668,7 @@ class InstallCases:
     def test_f5t3_function_rejects_an_invalid_folder_by_itself_without_echoing_it(self):
         # Defensa en profundidad: aunque la validacion de la configuracion fallara, la funcion pura vuelve a validar. Se
         # simula inyectando un valor invalido tras la lectura de la configuracion.
-        for bad in ("Docs/Forge", "docs/../x", "a/b/c/d/e", "docs plans"):
+        for bad in (f"Docs/{nm.DEVELOPER.capitalize()}", "docs/../x", "a/b/c/d/e", "docs plans"):
             with self.subTest(bad=bad):
                 self.f5t3_source()
                 self.patch_script("$aliasEffective = Get-AliasEffective $script:ConfigAliasPairs",
@@ -7704,7 +7711,7 @@ class InstallCases:
                 (5, table, PLANS_DIR, "lo esperado para el nivel 5, los alias y la carpeta de planes"),
                 (5, table, None, "lo esperado para el nivel 5 y los alias"),
                 # sin carpeta efectiva (ausente o la de por defecto): los textos de hoy
-                (5, {}, "docs/plans", "el manifiesto"), (3, {"forge": "forge"}, "docs/plans", "lo esperado para el nivel 3"),
+                (5, {}, "docs/plans", "el manifiesto"), (3, {nm.DEVELOPER: nm.DEVELOPER}, "docs/plans", "lo esperado para el nivel 3"),
                 (5, {}, None, "el manifiesto"))
         for level, aliases, plans, what in rows:
             with self.subTest(level=level, aliases=len(aliases), plans=plans, what=what):
@@ -7728,14 +7735,14 @@ class InstallCases:
 
     def test_f5t3_case24_post_verification_with_a_folder_exit4(self):
         self.f5t3_source()
-        victim = os.path.join(self.target, "agents", "atlas.md").replace("'", "''")
+        victim = os.path.join(self.target, "agents", f"{nm.PLANNER}.md").replace("'", "''")
         self.patch_script("# Paso 8:", "[System.IO.File]::AppendAllText('%s', 'x')" % victim)
         self.f5t3_config(PLANS_DIR)
         code, out, err = self.run_install()
         self.assertEqual(code, 4, out + err)
         self.assertIn("la verificacion posterior fallo", err)
         failed = [l.strip() for l in err.split("la verificacion posterior fallo:", 1)[1].splitlines() if l.strip()]
-        self.assertEqual(failed[:1], ["agents/atlas.md"])
+        self.assertEqual(failed[:1], [f"agents/{nm.PLANNER}.md"])
         self.assertFalse(os.path.exists(os.path.join(self.target, self.STATE)))
         self.assertNotIn("Verificado", out)
 
@@ -7747,14 +7754,12 @@ class InstallCases:
                 self.f5t3_config(PLANS_DIR, level=level, aliases=ALIAS_FOUR)
                 out, err = self.install_ok()
                 self.assert_plans_installed(files, PLANS_DIR, level=level, aliases=ALIAS_FOUR)
-                atlas = read(self.target, "agents/mapa.md").decode("utf-8")
-                self.assertIn("\nname: mapa\n", atlas)
-                self.assertIn("`%s/AAAA-MM-DD-<tema>.md`" % PLANS_DIR, atlas)
-                self.assertFalse(os.path.exists(os.path.join(self.target, "agents", "atlas.md")))
+                planner = read(self.target, "agents/mapa.md").decode("utf-8")
+                self.assertIn("\nname: mapa\n", planner)
+                self.assertIn("`%s/AAAA-MM-DD-<tema>.md`" % PLANS_DIR, planner)
+                self.assertFalse(os.path.exists(os.path.join(self.target, "agents", f"{nm.PLANNER}.md")))
                 lines = out.splitlines()
-                self.assertEqual(lines[2:7], ["Alias: atlas -> mapa (agents/mapa.md)", "Alias: forge -> dev (agents/dev.md)",
-                                              "Alias: scribe -> redactor (agents/redactor.md)",
-                                              "Alias: sentinel -> amigo-qa (agents/amigo-qa.md)", "Planes: " + PLANS_DIR])
+                self.assertEqual(lines[2:7], alias_lines(ALIAS_FOUR) + ["Planes: " + PLANS_DIR])
                 self.assertIn("Verificado: 8 archivo(s) escritos coinciden con lo esperado para el nivel %d, los alias y la "
                               "carpeta de planes." % level, lines)
 
@@ -7889,16 +7894,16 @@ class InstallCases:
         files = self.f5t3_source()
         self.f5t3_config(PLANS_DIR, aliases=ALIAS_ONE)
         self.install_ok()
-        self.f5t3_config(PLANS_DIR, aliases={"scribe": "redactor"})
+        self.f5t3_config(PLANS_DIR, aliases={nm.WRITER: "redactor"})
         code, out, err = self.run_install("-DryRun")
         self.assertEqual(code, 0, out + err)
         rows = self.states(out)
         self.assertEqual(rows["agents/amigo-qa.md"], "HUERFANO")
-        self.assertEqual(rows["agents/sentinel.md"], "NUEVO")
+        self.assertEqual(rows[f"agents/{nm.QA}.md"], "NUEVO")
         self.assertEqual(rows["agents/redactor.md"], "NUEVO")
         self.assertNotIn("MODIFICADO", rows.values())
         out, err = self.install_ok()
-        self.assert_plans_installed(files, PLANS_DIR, aliases={"scribe": "redactor"})
+        self.assert_plans_installed(files, PLANS_DIR, aliases={nm.WRITER: "redactor"})
         self.assertTrue(os.path.exists(os.path.join(self.target, "agents", "amigo-qa.md")))
 
     # --- Fase 5, T4: carpeta con alias y niveles, repositorio real y cambios (casos 17 y 25 a 29 del plan) ---
@@ -7961,7 +7966,7 @@ class InstallCases:
                         self.assertNotIn("\neffort:", front)
                     self.assertIn("Ajuste: agents/%s.md  model: %s  effort: %s" % (alias, model, effort), ajustes)
                 self.assertEqual(len(ajustes), 0 if level == 5 else len(table))
-                # el hook y el agente fuera de los nueve no se tocan; el hooks: de sentinel (alias amigo-qa) queda intacto
+                # el hook y el agente fuera de los nueve no se tocan; el hooks: del agente de pruebas (alias amigo-qa) queda intacto
                 self.assertEqual(read(self.target, "agents/alfa.md"), files["agents/alfa.md"])
                 self.assertIn(("\n".join(QA_HOOKS) + "\n").encode("ascii"), read(self.target, "agents/amigo-qa.md"))
 
@@ -7998,8 +8003,8 @@ class InstallCases:
                 for rel in texts:
                     text = tree[ar.dest_for(rel, table)].decode("utf-8")
                     for role in ar.roles():
-                        self.assertFalse(role in self.F4T6_SCRIBE_WORDS.sub("", text).lower(), (rel, role))
-                # los cuatro agentes con guarda: bloque hooks: intacto; auditor, shield y debugger: frontmatter igual salvo
+                        self.assertFalse(role in self.F4T6_WRITER_WORDS.sub("", text).lower(), (rel, role))
+                # los cuatro agentes con guarda: bloque hooks: intacto; revisor, seguridad y depurador: frontmatter igual salvo
                 # name: y description:
                 for role in self.F4T6_HOOKED:
                     src = files["agents/%s.md" % role].decode("utf-8").replace("\r\n", "\n").split("\n")
@@ -8009,7 +8014,7 @@ class InstallCases:
                     hooks = [i for i in range(1, close) if src[i].startswith("hooks:")]
                     self.assertTrue(hooks, role)
                     self.assertEqual(dst[hooks[0]:close], src[hooks[0]:close], role)
-                    if role != "sentinel":
+                    if role != nm.QA:
                         for i in range(1, close):
                             if not src[i].startswith(("name:", "description:")):
                                 self.assertEqual(dst[i], src[i], (role, i))
@@ -8108,7 +8113,7 @@ class InstallCases:
                 self.assert_plans_installed(files, folder, level=3, aliases=table)
 
     def test_f5t4_case29_k4_hand_edit_exit3_phrases_and_force(self):
-        for aliased, rel in ((False, "docs/agentes.md"), (False, "agents/atlas.md"), (True, "agents/atlas.md"),
+        for aliased, rel in ((False, "docs/agentes.md"), (False, f"agents/{nm.PLANNER}.md"), (True, f"agents/{nm.PLANNER}.md"),
                              (True, "rules/agentes.md")):
             with self.subTest(aliased=aliased, rel=rel):
                 shutil.rmtree(self.target, ignore_errors=True)
