@@ -16,10 +16,13 @@ sys.path.insert(0, HERE)
 import aliases_ref as ar  # noqa: E402
 import levels_ref as lr  # noqa: E402
 import plans_ref as pr  # noqa: E402
+from names import (ANALYST, DEBUGGER, DEVELOPER, PLANNER, QA, RESEARCHER, REVIEWER, SECURITY,  # noqa: E402
+                   WRITER)
 
-NINE = {"atlas": "mapa", "auditor": "revisor", "debugger": "cazador", "forge": "dev", "oracle": "guia",
-        "scout": "explorador", "scribe": "redactor", "sentinel": "amigo-qa", "shield": "guardia"}
-THREE_FILES = ["agents/atlas.md", "docs/agentes.md", "rules/agentes.md"]
+NINE = {PLANNER: "mapa", REVIEWER: "revisor", DEBUGGER: "cazador", DEVELOPER: "dev", ANALYST: "guia",
+        RESEARCHER: "explorador", WRITER: "redactor", QA: "amigo-qa", SECURITY: "guardia"}
+PLANNER_PATH = "agents/%s.md" % PLANNER
+THREE_FILES = sorted([PLANNER_PATH, "docs/agentes.md", "rules/agentes.md"])
 
 
 def repo_files():
@@ -98,7 +101,8 @@ class Inventory(unittest.TestCase):
 
     def test_case2_an_occurrence_in_the_frontmatter_or_the_hook_fails(self):
         files = repo_files()
-        files["agents/forge.md"] = files["agents/forge.md"].replace(b"description: ", b"description: `docs/plans/` ", 1)
+        dev_path = "agents/%s.md" % DEVELOPER
+        files[dev_path] = files[dev_path].replace(b"description: ", b"description: `docs/plans/` ", 1)
         problems = pr.inventory_problems(files)
         self.assertTrue(any("frontmatter" in p for p in problems), problems)
         files = repo_files()
@@ -107,7 +111,7 @@ class Inventory(unittest.TestCase):
 
     def test_case2_an_agent_without_a_closing_fence_is_reported_not_raised(self):
         files = repo_files()
-        files["agents/forge.md"] = b"---\nname: forge\ndescription: x\nUsa `docs/plans/`\n"
+        files["agents/%s.md" % DEVELOPER] = ("---\nname: %s\ndescription: x\nUsa `docs/plans/`\n" % DEVELOPER).encode()
         problems = pr.inventory_problems(files)
         self.assertTrue(any("sin cierre" in p for p in problems), problems)
 
@@ -121,8 +125,8 @@ class Inventory(unittest.TestCase):
         self.assertEqual(len(files), 11)
         self.assertEqual(pr.segment_problems(files), [])
 
-    def test_case2_a_forge_plans_form_fails_the_segment_check(self):
-        for extra in (b"\nVer forge/plans/x.md\n", b"\nmydocs/plans/x\n", b"\n`x-y_1/plans/`\n"):
+    def test_case2_a_role_plans_form_fails_the_segment_check(self):
+        for extra in (("\nVer %s/plans/x.md\n" % DEVELOPER).encode(), b"\nmydocs/plans/x\n", b"\n`x-y_1/plans/`\n"):
             with self.subTest(extra=extra):
                 files = {rel: pr.repo_bytes(rel) for rel in text_paths()}
                 files["rules/agentes.md"] += extra
@@ -147,10 +151,12 @@ class Inventory(unittest.TestCase):
 class Validation(unittest.TestCase):
     """Caso 4: cada regla L1 a L5 con un caso que pasa y uno que falla."""
 
-    VALID = ["planes", "docs/planes", "a/b/c/d", "forge_x", "forges", "a" * 32, "/".join(["a" * 15] * 4),
-             "docs/plans", "0", "a-b_c", "x" + "/y" * 3, "con1x", "xlpt1", "comm", "scouts"]
+    VALID = ["planes", "docs/planes", "a/b/c/d", DEVELOPER + "_x", DEVELOPER + "s", "a" * 32,
+             "/".join(["a" * 15] * 4), "docs/plans", "0", "a-b_c", "x" + "/y" * 3, "con1x", "xlpt1", "comm",
+             RESEARCHER + "s"]
     INVALID = ["a/b/c/d/e", "..", "docs/../x", "/docs", "docs/", "docs//x", "Docs", "docs/plans.v2", "docs plans",
-               "a" * 65, "/".join(["a" * 32, "b" * 32]), "a" * 33, "nul", "docs/com1", "docs/forge", "atlas-planes",
+               "a" * 65, "/".join(["a" * 32, "b" * 32]), "a" * 33, "nul", "docs/com1", "docs/" + DEVELOPER,
+               PLANNER + "-planes",
                "", ".", "-a", "_a", "docs\\planes", "c:", "docs/pl`ans", "docs/pl'ans", "docs\nx", "docs\n",
                "doc\u00f1s", "docs/planes ", " docs", "docs/", "a/b/c/d/", "docs/Planes", "DOCS"]
 
@@ -176,8 +182,8 @@ class Validation(unittest.TestCase):
         self.assertEqual(pr.validate_plans_dir("/".join(["a" * 20] * 4)), pr.MSG_SHAPE)  # L3: 83 caracteres
         self.assertEqual(pr.validate_plans_dir("docs/com1"), pr.MSG_DEVICE)  # L4
         self.assertEqual(pr.validate_plans_dir("nul"), pr.MSG_DEVICE)
-        self.assertEqual(pr.validate_plans_dir("docs/forge"), pr.MSG_ROLE)   # L5
-        self.assertEqual(pr.validate_plans_dir("atlas-planes"), pr.MSG_ROLE)
+        self.assertEqual(pr.validate_plans_dir("docs/" + DEVELOPER), pr.MSG_ROLE)   # L5
+        self.assertEqual(pr.validate_plans_dir(PLANNER + "-planes"), pr.MSG_ROLE)
 
     def test_case4_length_limit_is_64_in_total(self):
         ok = "/".join(["a" * 15] * 4)  # 63
@@ -310,20 +316,20 @@ class RealRepository(unittest.TestCase):
             self.assertNotIn(b"docs/plans/", out, rel)
         self.assertEqual(sorted(changed), THREE_FILES)
 
-    def test_case7_the_other_nine_files_are_identical_and_atlas_front_is_intact(self):
+    def test_case7_the_other_nine_files_are_identical_and_planner_front_is_intact(self):
         files = repo_files()
         for rel in pr.managed_paths():
             if rel in THREE_FILES:
                 continue
             with self.subTest(file=rel):
                 self.assertEqual(pr.expected_bytes(rel, files[rel], plans_dir="docs/planes"), files[rel])
-        atlas = files["agents/atlas.md"]
-        out = pr.expected_bytes("agents/atlas.md", atlas, plans_dir="docs/planes")
+        planner = files[PLANNER_PATH]
+        out = pr.expected_bytes(PLANNER_PATH, planner, plans_dir="docs/planes")
         def front(b):
             lines = b.decode("iso-8859-1").split("\n")
             return lines[:lines.index("---", 1) + 1]
 
-        self.assertEqual(front(out), front(atlas))
+        self.assertEqual(front(out), front(planner))
 
     def test_case7_without_a_folder_the_bytes_are_the_canonical_ones(self):
         files = repo_files()
@@ -358,13 +364,13 @@ class Commutation(unittest.TestCase):
 
     def test_case8_the_composition_does_what_it_says(self):
         files = repo_files()
-        out = pr.expected_bytes("agents/atlas.md", files["agents/atlas.md"], 3, NINE, "docs/planes").decode()
+        out = pr.expected_bytes(PLANNER_PATH, files[PLANNER_PATH], 3, NINE, "docs/planes").decode()
         self.assertIn("name: mapa\n", out)
         self.assertIn("`docs/planes/YYYY-MM-DD-<topic>.md`", out)
         self.assertNotIn("docs/plans/", out)
-        model, effort = lr.read_script_table()[(3, "atlas")]
+        model, effort = lr.read_script_table()[(3, PLANNER)]
         self.assertIn("model: " + model + "\n", out)
-        self.assertNotIn("atlas", out)
+        self.assertNotIn(PLANNER, out)
 
     def test_case8_the_hook_is_never_transformed(self):
         files = repo_files()

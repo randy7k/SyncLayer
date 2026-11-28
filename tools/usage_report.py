@@ -760,7 +760,12 @@ VERIFIED_MAX = "2.1.326"
 # cualquier otro nombre (usuario, plugin) se muestra como "(otro agente)". No se muestra
 # ningun texto libre del meta.
 SYNCLAYER_AGENTS = frozenset((
-    "oracle", "scout", "atlas", "forge", "sentinel", "auditor", "shield", "debugger", "scribe",
+    "heimdall", "hermes", "atlas", "sindri", "anubis", "salomon", "hector", "sherlock", "shakespeare",
+))
+# Lista cerrada de nombres ANTERIORES de los agentes de SyncLayer (las transcripciones ya escritas traen el
+# agentType viejo): se clasifican como SyncLayer junto con los actuales. Son los ocho del renombrado de la Fase 6.
+SYNCLAYER_LEGACY_AGENTS = frozenset((
+    "oracle", "scout", "forge", "sentinel", "auditor", "shield", "debugger", "scribe",
 ))
 BUILTIN_AGENTS = frozenset((
     "general-purpose", "Explore", "Plan", "statusline-setup", "output-style-setup",
@@ -887,7 +892,7 @@ def classify_agent(raw):
     if isinstance(raw, str):
         if raw == "":
             return DEFAULT_AGENT, "integrado"
-        if raw in SYNCLAYER_AGENTS:
+        if raw in SYNCLAYER_AGENTS or raw in SYNCLAYER_LEGACY_AGENTS:
             return raw, "SyncLayer"
         if raw in BUILTIN_AGENTS:
             return raw, "integrado"
@@ -4110,7 +4115,7 @@ def _cmd_inspect(args) -> int:
 # fijos de 3.7 del plan: <project-dir>/.synclayer/usage-report.md (con .synclayer/.gitignore) y
 # <claude-dir>/synclayer-usage.md. No existe `--out`: no hay forma de escribir en otra ruta.
 #
-# Escritura (cada punto cubre un riesgo de la revision de `shield`):
+# Escritura (cada punto cubre un riesgo de la revision de `hector`):
 #   - Nunca se abre el destino para escribir: temporal de nombre aleatorio en la MISMA carpeta, creado con
 #     O_CREAT|O_EXCL (y O_NOFOLLOW donde exista), modo 0600 (y fchmod en POSIX), escritura binaria UTF-8 sin BOM
 #     con LF, y os.replace. Si algo falla (o hay Ctrl+C) se borra el temporal.

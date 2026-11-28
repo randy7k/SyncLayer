@@ -102,7 +102,7 @@ Stop here and wait for direction.
 
 - **README header banner**, dark and light, to be used with an HTML `<picture>` element.
 - **Social preview**, 1280 × 640 px, with a 40 px safe zone: background, symbol, name, tagline.
-- **Agent catalog card:** name in Plex Mono, role, model and tools, for the nine agents `oracle`, `scout`, `atlas`, `forge`, `sentinel`, `auditor`, `shield`, `debugger`, `scribe`.
+- **Agent catalog card:** name in Plex Mono, role, model and tools, for the nine agents `heimdall`, `hermes`, `atlas`, `sindri`, `anubis`, `salomon`, `hector`, `sherlock`, `shakespeare`.
 - **Architecture diagram:** the orchestration star. Main session at the center; the nine agents around it; no arrows between agents, since they never delegate to each other. One status color per role, not one per agent.
 - **Slide template** for a short presentation: one message per slide, dark background, one accent.
 

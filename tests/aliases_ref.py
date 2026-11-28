@@ -19,11 +19,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "tools"))
 
 import build_manifest as bm  # noqa: E402
 import levels_ref as lr  # noqa: E402
+import names  # noqa: E402
 
 ROOT = lr.ROOT
 
-# Nombres con «scribe» dentro que no son el agente: no se tocan (limite de palabra).
-SCRIBE_WORDS = {"escribe", "escriben", "describe", "reescribe", "sobrescribe"}
+# Desde el renombrado de la Fase 6 ningun nombre vigente es subcadena de una palabra de los once textos: el
+# diccionario de palabras con un rol dentro (antes, las espanolas con el nombre del escritor) se retiro en T8.
 
 # Limite de palabra (3.5, enmienda E1), sobre el texto decodificado en ISO-8859-1 (un byte, un caracter):
 # letra = [A-Za-z0-9_] o la pareja \xC3 + [\x80-\xBF] (U+00C0 a U+00FF en UTF-8); todo lo demas es limite.
@@ -46,6 +47,11 @@ def reserved():
 
 def yaml_words():
     return lr.read_ps_list("YamlWords")
+
+
+def legacy():
+    """Nombres anteriores (Fase 6): {viejo: nuevo}, de $LegacyRoles ('viejo|nuevo', una definicion por linea)."""
+    return dict(item.split("|") for item in lr.read_ps_list("LegacyRoles"))
 
 
 # --- formas y transformacion de texto ---
@@ -93,14 +99,18 @@ def role_hits(text, table):
 
 # --- validacion de la tabla (3.2) ---
 
-def validate_table(aliases, manifest_paths=None):
+def validate_table(aliases, manifest_paths=None, legacy_table=None):
     """Primer problema de la tabla rol -> alias (texto) o None. Reglas V1 a V7 (V8 solo si se pasa la
-    lista de rutas del manifiesto). Nunca nombra el valor del alias."""
+    lista de rutas del manifiesto). Nunca nombra el valor del alias. Una clave que es un nombre anterior
+    ($LegacyRoles; `legacy_table` {viejo: nuevo} lo sustituye en las pruebas) da un motivo fijo con los dos nombres."""
     known = roles()
+    old_names = legacy() if legacy_table is None else legacy_table
     if not isinstance(aliases, dict):
         return "aliases debe ser un objeto"
     for key in aliases:
         if key not in known:
+            if key in old_names:
+                return "el rol %s ahora se llama %s: cambia la clave en aliases" % (key, old_names[key])
             return "rol desconocido en aliases: " + key
     for role in known:
         if role not in aliases:
@@ -377,8 +387,8 @@ def inventory(text):
     """Clasifica cada palabra (con la definicion de letra de E1) que contiene un rol, sin distinguir mayusculas.
 
     Devuelve (counts, other): counts {rol: [minuscula, Capitalizada, MAYUSCULAS]} de formas que casan
-    (reemplazables); other: palabras que no son ninguna forma ni una de SCRIBE_WORDS (sin clasificar, por
-    ejemplo `Sentinel` + e acentuada o `forge2`). Una forma pegada a puntuacion, comillas angulares, rayas o espacio duro
+    (reemplazables); other: palabras que no son ninguna de las tres formas (sin clasificar, por
+    ejemplo el nombre de un rol capitalizado + e acentuada o el nombre + `2`). Una forma pegada a puntuacion, comillas angulares, rayas o espacio duro
     es una palabra por si sola: cuenta como reemplazable."""
     counts = {r: [0, 0, 0] for r in roles()}
     other = []
@@ -389,8 +399,6 @@ def inventory(text):
             variants = form_variants(role)
             if word in variants:
                 counts[role][variants.index(word)] += 1
-            elif role == "scribe" and low in SCRIBE_WORDS:
-                continue
             else:
                 other.append((role, word))
     return counts, other

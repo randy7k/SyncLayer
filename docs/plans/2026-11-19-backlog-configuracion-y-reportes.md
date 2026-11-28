@@ -4,7 +4,9 @@
 > (ver su sección). Las fases de abajo nacieron como intención del propietario (2026-11-19), no como un
 > diseño; cada una empezó con una exploración cuyo resultado se le propuso al propietario antes de
 > implementar nada. Las ideas marcadas «hipótesis» no están verificadas.
-> Al desglosar una fase en tasks, se actualiza la sección «Línea de tiempo y avance» del README.
+> Al desglosar una fase en tasks, se actualizan `PLAN.md` (detalle) y el resumen de la sección «Línea de tiempo y avance» del README.
+> Los agentes se nombran aquí con los nombres vigentes (Fase 6); los anteriores y su equivalencia están en la
+> sección «Nombres anteriores» del README.
 
 Punto de partida: el instalador (`docs/plans/2026-11-19-instalador.md`) está en curso y es la
 base de las fases 3 a 5, porque la configuración se aplica al instalar (ver «Restricción de
@@ -31,14 +33,14 @@ que sigue es el pedido original de la etapa 1.
 **Pedido.** Ver cuánto se usa cada agente. Un `.md` por proyecto, dentro de cada uno, y un `.md`
 global para comparar eficiencia contra otros conjuntos de subagentes o skills.
 
-**Etapa 1 (exploración, `scout` y `oracle`).** Responder y proponer al propietario:
+**Etapa 1 (exploración, `hermes` y `heimdall`).** Responder y proponer al propietario:
 
 - Qué datos existen hoy y dónde (hipótesis: las transcripciones de sesión en
   `~/.claude/projects/` registran las llamadas a subagentes; los hooks `SubagentStop` o
   `PostToolUse` podrían registrar eventos). Verificar con la documentación oficial qué trae cada
   uno: modelo, tokens, duración, resultado.
 - Qué es «eficiencia» medible sin inventar: llamadas por agente, tokens por llamada, hallazgos
-  Critical/Important encontrados por llamada del `auditor`, rondas de corrección por task,
+  Critical/Important encontrados por llamada del `salomon`, rondas de corrección por task,
   tiempo. Cuáles se pueden obtener y cuáles no.
 - Forma de presentarlo, con opciones y una recomendación: Markdown con tablas y barras de texto
   (sin dependencias) frente a un SVG generado (como los de `assets/brand/`). Dónde vive cada
@@ -73,8 +75,8 @@ pase de `claude-fable-5-2` a `opus` al bajar el esfuerzo.
 - Mecanismo: el instalador escribe el `model:` según el nivel elegido (cambiar de nivel =
   reinstalar) frente a depender de variables de entorno (cambio inmediato, pero global y menos
   explícito). Proponer una recomendación.
-- Qué cambia además del modelo y qué no se debe tocar: el esfuerzo no puede quitar `auditor` ni
-  `shield` de los cambios sensibles sin que el propietario lo decida expresamente.
+- Qué cambia además del modelo y qué no se debe tocar: el esfuerzo no puede quitar `salomon` ni
+  `hector` de los cambios sensibles sin que el propietario lo decida expresamente.
 - Aviso honesto en el README: bajar el nivel cambia la calidad esperada de las revisiones.
 
 ## Fase 4: nombres de agentes configurables
@@ -85,7 +87,7 @@ pase de `claude-fable-5-2` a `opus` al bajar el esfuerzo.
 
 - Inventariar dónde aparece cada nombre: `name:` del frontmatter, el archivo, las reglas de
   orquestación (`rules/agentes.md`), la guía (`docs/agentes.md`), las descripciones de las
-  delegaciones («Forge (Sonnet): …»), el hook (`$HOME/.claude/hooks/agent_guard.py` y su
+  delegaciones («Sindri (Sonnet): …»), el hook (`$HOME/.claude/hooks/agent_guard.py` y su
   modo, que se enlaza desde el frontmatter, no por nombre: verificar), las pruebas y el manifiesto.
 - Mecanismo propuesto (hipótesis): tabla de alias en el archivo de configuración; el instalador
   renombra el archivo y reemplaza el nombre en las reglas y descripciones. El rol sigue siendo
@@ -97,8 +99,8 @@ pase de `claude-fable-5-2` a `opus` al bajar el esfuerzo.
 
 **Estado (2026-11-24).** Desglosada y en curso: plan
 `docs/plans/2026-11-22-fase4-nombres-configurables.md` (9 unidades). T1 a T8 hechas (la T8 es la
-documentación: README, `CLAUDE.md`, `HISTORY.md` y `docs/agentes.md`); falta el cierre (`sentinel`,
-`shield` y `auditor` sobre el cambio completo). Los alias se aplican, pero su efecto en un Claude Code
+documentación: README, `CLAUDE.md`, `HISTORY.md` y `docs/agentes.md`); falta el cierre (`anubis`,
+`hector` y `salomon` sobre el cambio completo). Los alias se aplican, pero su efecto en un Claude Code
 real no está verificado: es la compuerta G1 del propietario (incluido el caso P10, dos archivos del mismo
 ámbito con el mismo `name:`).
 
@@ -125,7 +127,7 @@ texto que sigue es el pedido original.
 **Etapa 1 (exploración y propuesta).** Candidatas a evaluar, cada una con su costo de
 mantenimiento; se proponen sólo las que valgan la pena:
 
-- Activar o desactivar agentes por usuario (por ejemplo, sin `shield`).
+- Activar o desactivar agentes por usuario (por ejemplo, sin `hector`).
 - Herramientas (`tools:`) por agente, dentro de un mínimo seguro.
 - Idioma de los reportes (hoy en español; los prompts son en inglés).
 - Carpeta de planes (`docs/plans/` por defecto) y convención de commits.
@@ -140,7 +142,7 @@ mantenimiento; se proponen sólo las que valgan la pena:
 verificar qué es ni cómo funciona) para distribuir o instalar este módulo, como alternativa o
 complemento a `install.ps1`.
 
-**Etapa 1 (exploración, sin código).** `scout` confirma con documentación oficial qué es la función, en
+**Etapa 1 (exploración, sin código).** `hermes` confirma con documentación oficial qué es la función, en
 qué productos existe (Claude Code, escritorio, web), qué se puede empaquetar con ella (agentes, reglas,
 hooks, `docs/`) y si permite lo que hoy hace el instalador: hash canónico, respaldo, niveles, alias,
 carpeta de planes y `-DryRun`. Después se decide si encaja, se descarta con motivo o se desglosa en
@@ -156,7 +158,7 @@ unidades. Hasta entonces no hay estimación ni fase asignada.
 
 ## Cómo se ejecuta cada fase
 
-Según `rules/agentes.md`: `oracle` y `scout` exploran → `atlas` desglosa en tasks (aquí es
-cuando la fase deja de estar «sin desglosar») → aprobación del propietario → `forge` por task
-con `auditor` → `sentinel`, `shield` si toca rutas, entradas o escritura en `~/.claude` →
-`scribe` → `auditor` sobre el cambio completo.
+Según `rules/agentes.md`: `heimdall` y `hermes` exploran → `atlas` desglosa en tasks (aquí es
+cuando la fase deja de estar «sin desglosar») → aprobación del propietario → `sindri` por task
+con `salomon` → `anubis`, `hector` si toca rutas, entradas o escritura en `~/.claude` →
+`shakespeare` → `salomon` sobre el cambio completo.

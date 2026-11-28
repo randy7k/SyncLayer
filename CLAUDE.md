@@ -9,8 +9,8 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: 1810 pruebas, 367 saltadas (364 contra pwsh, que no está instalado, y 3 de
-la rama POSIX del reporte de uso: permisos 0600, `fchmod`, FIFO; no corren en Windows), entre unos 43 y 70 minutos.
+`__pycache__`. La suite: 1939 pruebas, 386 saltadas (HEAD 4eded32, corrida del cierre de la Fase 6). pwsh no está instalado, así que sus pruebas se saltan, y la
+rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO) no corre en Windows. Tarda entre unos 43 y 70 minutos.
 Las pruebas de `install.ps1` corren en esta máquina contra Windows PowerShell 5.1. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -81,7 +81,7 @@ Cuatro piezas, de la más abstracta a la más concreta (la cuarta, el instalador
 2. `rules/agentes.md`: reglas de orquestación. Forma de estrella: sólo la sesión
    principal delega y pregunta al usuario; los agentes no se delegan entre sí.
 3. `hooks/agent_guard.py`: guarda `PreToolUse`, enlazada desde el frontmatter
-   (`hooks:`) de `sentinel` (modo `tests-only`) y de `auditor`, `shield` y `debugger`
+   (`hooks:`) de `anubis` (modo `tests-only`) y de `salomon`, `hector` y `sherlock`
    (modo `readonly --allow-temp`).
 
 4. El instalador: `install.ps1` (Windows PowerShell 5.1), `install-manifest.json` (los doce
@@ -120,8 +120,15 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 
 - Los prompts de los agentes van en inglés; los reportes que producen, en español.
 - Campos de frontmatter usados: `name`, `description`, `tools`, `model`, `color`,
-  `hooks` (sólo los cuatro agentes con guarda) y `omitClaudeMd` (en `oracle` y `scout`).
+  `hooks` (sólo los cuatro agentes con guarda) y `omitClaudeMd` (en `heimdall` y `hermes`).
 - Un agente por archivo.
+- Nombres de los agentes (Fase 6): `heimdall`, `hermes`, `atlas`, `sindri`, `anubis`, `salomon`, `hector`,
+  `sherlock` y `shakespeare`, siempre sin tilde (también en prosa: son identificadores de archivo y de
+  alias). La documentación vigente usa sólo estos nombres; los anteriores sólo aparecen en el bloque marcado de
+  «Nombres anteriores (hecho histórico)» de este archivo, en la sección «Nombres anteriores» del `README.md`,
+  en el historial, en los planes de fases cerradas y en el plan de la Fase 6, y como datos de código: `$LegacyRoles`
+  de `install.ps1`, `SYNCLAYER_LEGACY_AGENTS` de `tools/usage_report.py`, `tests/names.py` (`LEGACY`),
+  `tests/rename_ref.py` y los goldens del reporte de uso.
 - Todo cambio en `hooks/agent_guard.py` empieza con una prueba que falla en
   `tests/test_agent_guard.py`.
 - Todo cambio en `install.ps1` empieza con una prueba que falla en `tests/test_install.py`.
@@ -179,7 +186,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Si `python` no está en el PATH del shell que lanza el hook, el shell sale con 127 y
   la llamada pasa (falla abierto); igual si resuelve al alias de la Microsoft Store.
   No se puede arreglar desde el script.
-- `sentinel` tiene guarda en `Write|Edit|NotebookEdit|Bash`. En `tests-only` el Bash es
+- `anubis` tiene guarda en `Write|Edit|NotebookEdit|Bash`. En `tests-only` el Bash es
   estricto (sólo comandos simples; rechaza `$`, backtick, `\`, subshells, `[[`, heredocs y
   multilínea) porque 4 rondas de parches a un parser que imita a bash dejaron huecos
   nuevos cada vez. Sigue siendo una lista negra: no documentes «sólo escribe tests» como
@@ -204,6 +211,43 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - `AllowedPattern` de `install.ps1` y `ALLOWED` de `tools/build_manifest.py` son la misma regex,
   pero el script usa `\z` (en .NET `\Z` y `$` aceptan un salto de línea final). Una prueba las
   compara. Acepta cualquier `agents/<nombre>.md`, no una lista cerrada de nombres.
+- Nombres de los agentes y su contrato con las pruebas (Fase 6, plan
+  `docs/plans/2026-11-27-fase6-renombrado-de-agentes.md`; T1 a T9 hechas, T10 y el cierre pendientes; el efecto con
+  los nombres nuevos en un Claude Code real NO está verificado: G1, no lo documentes como probado):
+  - `tests/names.py` es la ÚNICA fuente de los nombres para las pruebas (`PLANNER`, `ANALYST`, `RESEARCHER`,
+    `DEVELOPER`, `QA`, `REVIEWER`, `SECURITY`, la constante del noveno rol, `WRITER`, `ROLES`, `LEVEL_ROLES`, `FIXED`, `GUARDED` y
+    `LEGACY`, que guarda los anteriores como `viejo: nuevo`). Una prueba no lleva un nombre de agente como literal:
+    la prueba `Parametrization` de `tests/test_rename.py` escanea SOLO la lista cerrada `PARAMETRIZED` (11
+    archivos: `test_install.py`, `test_aliases.py`, `aliases_ref.py`, `test_levels.py`, `levels_ref.py`,
+    `test_plans.py`, `plans_ref.py`, `test_manifest.py`, `test_phase5_docs.py`, `test_brand_agents.py` y el propio
+    `test_rename.py`) y falla si aparece un nombre (con control de mutación). `test_rename.py` se escanea por los
+    anteriores y sólo queda exento de los vigentes. NO se escanean y usan nombres a propósito:
+    `test_usage_report.py` (unos 160 literales, goldens sin regenerar), `usage_synth.py`, `test_agent_guard.py`,
+    `test_usage_report_cli.py`, `test_usage_report_perf.py` (usa un nombre anterior a propósito) y `test_phase6_docs.py`. Un archivo de pruebas nuevo que deba ir sin nombres literales
+    se suma a `PARAMETRIZED`; importa `names as nm`.
+  - `$LegacyRoles` de `install.ps1`: ocho pares `viejo|nuevo`, una definición por línea, y esa línea es el ancla
+    de `patch_script` de los casos 9 a 14 (detalle más abajo, «Nombres anteriores (Fase 6, T5)»). `$AliasRoles` (nueve roles) y
+    `$LevelAgents` (sólo seis roles) ya usan los nombres nuevos; la tabla de niveles del README también.
+  - Reporte de uso: `SYNCLAYER_LEGACY_AGENTS` lleva los ocho anteriores y `SYNCLAYER_AGENTS` los nueve vigentes
+    (detalle en «Reporte de uso», «Nombres anteriores (Fase 6, T6)»). Con los goldens sin regenerar.
+  - Sin tilde (P12): `salomon` y `hector` nunca con acento en la vocal, en archivos, identificadores ni
+    prosa. Con tilde no serían ninguna de las tres formas del reemplazo de alias (quedarían sin reemplazar y el
+    inventario las daría como «sin clasificar»). `tests/test_phase6_docs.py` (caso 22) lo vigila en los cinco
+    documentos vigentes (`README.md`, `CLAUDE.md`, `docs/agentes.md` y `docs/brand/voice-and-tone.md` y
+    `docs/brand/claude-design-handoff.md`; también recorre los otros dos de `docs/brand/`).
+  - Nombres propios: `hermes`, `hector`, `sherlock` y `shakespeare` también son nombres de personas. En
+    `rules/agentes.md` y `docs/agentes.md` (gestionados y transformados al instalar) esos nombres sólo designan
+    al agente y los ejemplos usan `<rol>`, `<nombre>` y `<alias>`: un alias reemplazaría cualquier otro uso.
+    `INVENTORY` de `tests/test_aliases.py` falla ante una mención nueva.
+  - Caso 22 (`tests/test_phase6_docs.py`): ningún nombre anterior como palabra (sin distinguir mayúsculas) fuera de
+    las zonas marcadas por los comentarios HTML `nombres-anteriores:inicio` y `nombres-anteriores:fin` (una sola
+    pareja por documento, en orden: en `README.md` y en este archivo; no escribas el comentario completo fuera de la zona), ni en la sección «Línea de tiempo y avance» del
+    README. `docs/agentes.md` y `docs/brand/` no tienen zona. Una frase sobre G1 o Claude Code real no puede decir
+    «probado» sin la marca de no verificado. Promesas (`promise_hits`): también en este archivo (fuera de la zona) y
+    en `docs/brand/`, con excepciones cerradas: en este archivo las frases «más del 5 % de archivos» y «un cuadro =
+    10 %» (`MEASURED_PHRASES`); en `docs/brand/` no se miran porcentajes ni uno de los patrones de verbo (`NON_PROMISE_IN_BRAND`; medidas de diseño y un límite de la guarda), sólo los patrones de ahorro, calidad y costo. El historial `HISTORY.md` y los planes de fases cerradas no se
+    reescriben (hecho histórico); el backlog vigente sí usa los nombres nuevos. Retirados en T8: la prueba puente,
+    `tests/rename_expected.json` y `SCRIBE_WORDS`; no los busques.
 - Alias de agentes (Fase 4, plan `docs/plans/2026-11-22-fase4-nombres-configurables.md`; Fase 4 cerrada
   en la rama, T1 a T8 y cierre; G1/V1 y V2 del propietario pendientes): `install.ps1` lee y valida la clave `aliases` de `synclayer-config.json` (lectura única;
   `Get-AliasTableProblem`, V1 a V8, tabla entera antes de escribir; líneas `Alias:`) y, desde T5, la APLICA de
@@ -214,8 +258,9 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   integrados nuevos. La referencia independiente es `tests/aliases_ref.py` y la prueba `tests/test_aliases.py`. Límite de palabra
   del reemplazo (enmienda E1): letra = `[A-Za-z0-9_]` o la pareja UTF-8 `C3 80` a `C3 BF` sobre texto
   decodificado ISO-8859-1; el resto es límite (comillas angulares, `¿¡`, rayas, espacio duro, marcas
-  combinantes). `scribe` es subcadena de `escribe`, `describe`, `reescribe`, `sobrescribe`: sin límite de
-  palabra se rompen. Cuidado al editar con la herramienta Bash: colapsa `\\` a `\` y los escapes `\u00xx`
+  combinantes). Ningún nombre vigente es subcadena de una palabra de los once textos, pero el límite de palabra se
+  mantiene (un alias o un nombre propio futuro podría serlo; el caso que lo motivó está en «Nombres anteriores
+  (hecho histórico)», más abajo). Cuidado al editar con la herramienta Bash: colapsa `\\` a `\` y los escapes `\u00xx`
   pasan a ser el carácter; construye la barra con `chr(92)` y verifica que el archivo no gane bytes no ASCII.
   - Rol y ruta (T4): en los Pasos 4 a 9 el rol (`$rel`: clave de manifiesto, niveles, `$outBytes`/`$outHash`,
     mensajes de nivel) va separado de la ruta de destino (`$destRel[$rel]`: leer, escribir, respaldar, verificar
@@ -252,9 +297,9 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     la de antes de la fase (golden embebido `F4T6_GOLDEN`, calculado con el instalador anterior a la fase;
     normaliza las rutas temporales también en su forma escapada no ASCII). Casos 41 a 45: repositorio real con
     nueve alias en los niveles 5 y 3 (13 archivos: 12 gestionados + estado; ningún nombre de rol en los once
-    textos salvo `escribe`, `escriben`, `describe`, `reescribe` y `sobrescribe`), `-DryRun` con alias sin
-    escribir nada, el hook con el hash del manifiesto, `hooks:` de `sentinel`, `auditor`, `shield` y
-    `debugger` intactos y verificación posterior alterada con exit 4 (`test_f4t6_*` en `tests/test_install.py`).
+    textos; la aserción es estricta), `-DryRun` con alias sin
+    escribir nada, el hook con el hash del manifiesto, `hooks:` de `anubis`, `salomon`, `hector` y
+    `sherlock` intactos y verificación posterior alterada con exit 4 (`test_f4t6_*` en `tests/test_install.py`).
   - Huérfanos y exit 3 con alias (T7): cada fila `HUERFANO` lleva `RenamedTo`: el destino actual del rol si el
     rol de la entrada previa sigue en el manifiesto; si no, es un huérfano clásico. Un huérfano por cambio de
     nombre da un aviso por stderr, uno por archivo, sólo si el archivo existe (`File.Exists`; nunca se abre,
@@ -279,6 +324,15 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
       comentario `# Alias:` (la línea «# Alias: fin del bloque...», que no tiene la forma `# Paso N:`) y
       `function ConvertTo-AliasBytes`. No renombres ni muevas nada de esto sin ajustar `tests/test_install.py` y
       `tests/test_aliases.py`.
+    - Nombres anteriores (Fase 6, T5): `$LegacyRoles` (lista de pares `viejo|nuevo`, una definición por línea;
+      desde T7 con los ocho pares reales) se lee con `read_ps_list` y su línea es el ancla de `patch_script` de los casos 9 a 14:
+      ningún comentario puede empezar por `$LegacyRoles`, y no la renombres ni la muevas sin ajustar
+      `tests/test_install.py`. `Get-LegacyTableProblem` (al arrancar, exit 1 también con `-DryRun`) y
+      `Get-LegacyNewName` (ordinal, sólo lectura). Un huérfano `agents/<viejo>.md` lleva `RenamedTo` y sale el
+      aviso de la Fase 4; el archivo viejo nunca se abre, respalda ni borra. Una clave vieja en `aliases` da un
+      motivo fijo (los dos nombres, sin el valor); un nombre viejo como valor de alias es válido. Con estado
+      ausente o ilegible los archivos viejos quedan sin aviso. `nm.LEGACY` (`tests/names.py`) tiene los mismos ocho
+      pares que `$LegacyRoles` (caso 20: una prueba los compara); los casos 11 a 14 inyectan sus propios pares de fantasía.
     - Diccionarios y conjuntos ordinales (`Dictionary[string,string]` y `HashSet[string]` con
       `StringComparer.Ordinal`) para formas, `$destRel`, `$dests`, `$prevByDest` y la validación de `dest`; un
       `@{}` de PowerShell compara sin distinguir mayúsculas. Las expresiones regulares van sin `IgnoreCase`.
@@ -365,7 +419,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   - `lbl_other_version` no existe: `versions_seen` es numérico, no hay etiqueta de «otra versión».
   - El efecto con un `~/.claude` real no se verificó (V2 del propietario: una corrida de `global --lang en
     --stdout`). No lo documentes como probado.
-  `shield` interviene en T6 (agrega `--lang`, entrada de usuario).
+  `hector` interviene en T6 (agrega `--lang`, entrada de usuario).
 - Perfiles por proyecto (Fase 5, T7 hecha; solo documentación, sin código): `README.md`, sección «Perfiles por
   proyecto» (tabla con la certeza de cada afirmación, «Desactivar un agente», «Lo que no se configura y por qué») y
   `docs/agentes.md`, «Adaptar un agente a un proyecto». Documentado por Claude Code: un `.claude/agents/<nombre>.md`
@@ -379,8 +433,8 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   promesas de ahorro (`promise_hits`). Candidatas descartadas con motivo: ver la tabla del README y `HISTORY.md`.
 - Fase 5, T8: añade a `docs/agentes.md` el apartado «Cambiar la carpeta de planes» y la viñeta de `--lang` (archivo
   gestionado y transformado: usa `<nombre>` y `<alias>`, sin nombres de rol ni el literal de la carpeta por defecto),
-  regenera el manifiesto y agrega el caso 47 a `tests/test_phase5_docs.py` (20 pruebas en el archivo; 1810 pruebas,
-  367 saltadas; suite completa en la corrida de cierre de T8). El README ya documentaba `plans_dir` y `--lang` (T3,
+  regenera el manifiesto y agrega el caso 47 a `tests/test_phase5_docs.py` (20 pruebas en el archivo; recuento de la
+  suite: 1939 pruebas, 386 saltadas en la corrida del cierre de la Fase 6). El README ya documentaba `plans_dir` y `--lang` (T3,
   T5, T6, T7); T8 añadió límites, estructura y pruebas. El valor de `plans_dir` nunca es una ruta para el instalador.
   Desde `# Planes:`, `$aliasBytes` lleva alias y carpeta. Las etiquetas del lector en español son identificadores y se
   traducen en la salida, no en origen. Con carpeta efectiva y con alias reales, el efecto en Claude Code real no está
@@ -388,12 +442,12 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Niveles de esfuerzo (Fase 3, plan `docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`). Estado: fase
   cerrada (T1 a T7 y cierre); G1 pendiente. Los niveles 1 a 4 se aplican (el instalador
   escribe `model:` y `effort:`), pero la compuerta G1 no se corrió: el efecto real de `effort:` en
-  Claude Code sólo está verificado por documentación. No lo documentes como probado en una máquina real.
+  Claude Code no está verificado en una máquina real: sólo por documentación. No lo documentes como probado.
   - Contrato con las pruebas: la tabla nivel por agente vive en `install.ps1` (`$LevelRows`, niveles 1 a 4;
     el 5 es el repositorio, sin filas) y debe ser igual a la del README entre `<!-- niveles:inicio -->` y
     `<!-- niveles:fin -->` (`tests/levels_ref.py` los lee, `tests/test_levels.py` lo comprueba junto con
-    las reglas R1 a R5). Cambiar una celda exige cambiarla en los dos sitios. `auditor`, `shield` y
-    `debugger` no entran en la tabla. No muevas ni renombres los marcadores.
+    las reglas R1 a R5). Cambiar una celda exige cambiarla en los dos sitios. `salomon`, `hector` y
+    `sherlock` no entran en la tabla. No muevas ni renombres los marcadores.
   - Los textos de niveles no pueden prometer ahorro: `promise_hits` de `tests/test_levels.py` revisa la
     sección «Niveles» del README (la lista completa de patrones está en `PROMISE_PATTERNS`). Haz lo mismo en el resto de la documentación.
   - Nivel 5 = repositorio tal cual: la instalación escribe los bytes canónicos del origen.
@@ -435,7 +489,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (364 en la última corrida de 1810 pruebas y 367 saltadas; las otras 3 saltadas son de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (1939 pruebas, 386 saltadas en la corrida del cierre de la Fase 6; además no corre la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los
@@ -478,6 +532,10 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   - Las pruebas «sin aviso de git» suben carpetas padre reales: fallarían en una máquina con `.git`
     en el home o en `%TEMP%`. Las pruebas pasan siempre `--claude-dir` a una carpeta temporal.
   - El instalador no instala la herramienta ni toca `synclayer-usage.md` ni `settings.json`.
+  - Nombres anteriores (Fase 6, T6): `SYNCLAYER_LEGACY_AGENTS` (`frozenset` cerrado, con los ocho nombres anteriores) se suma a
+    `SYNCLAYER_AGENTS` (los nueve vigentes) en `classify_agent`; sin solape entre ellos ni con `BUILTIN_AGENTS`, sin `:`. Una
+    prueba lo ata a `names.LEGACY`. Quien conserve un nombre anterior como alias lo ve en el conjunto SyncLayer con
+    ese nombre. El nombre inyectado de las pruebas es de fantasía. Goldens del reporte sin regenerar.
   - Catálogo de textos (Fase 5, T5 y T6): `LANGS = ("es", "en")`, `DEFAULT_LANG = "es"` y `CATALOG`, inmutable
     (`MappingProxyType` en dos capas: idioma y claves). Un diccionario por idioma (`_ES`, `_EN`) con el mismo
     juego de claves (136 por idioma); por clave, mismo tipo (tupla o cadena), misma longitud de tupla y mismos marcadores
@@ -511,16 +569,46 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
   - Pureza: la lista blanca `ReportPurity.REACHABLE` de `tests/test_usage_report.py` enumera los nombres del
     módulo alcanzables desde los generadores; T5 quitó cinco ya no alcanzados y agregó `CATALOG`, `DEFAULT_LANG`,
     `_ES` y `_ES_HOW_TO_READ_COMMON`. Un nombre nuevo alcanzado desde un generador se agrega ahí.
+- Nombres anteriores (hecho histórico; el bloque entre marcadores es la única zona de este archivo donde se
+  escriben los nombres anteriores, para la prueba del caso 22):
+
+<!-- nombres-anteriores:inicio -->
+
+| Anterior | Actual |
+|---|---|
+| `oracle` | `heimdall` |
+| `scout` | `hermes` |
+| `forge` | `sindri` |
+| `sentinel` | `anubis` |
+| `auditor` | `salomon` |
+| `shield` | `hector` |
+| `debugger` | `sherlock` |
+| `scribe` | `shakespeare` |
+
+`atlas` no cambió. El renombrado es de la Fase 6 (T7, cambio atómico). Las notas de fases pasadas que nombraban
+agentes decían, por ejemplo, que `sentinel` (hoy `anubis`) tenía la guarda `tests-only` y que `auditor`, `shield` y
+`debugger` (hoy `salomon`, `hector` y `sherlock`) tenían `readonly --allow-temp`; la guarda no cambió. El límite de
+palabra del reemplazo de alias nació de `scribe`, que es subcadena de `escribe`, `describe`, `reescribe` y
+`sobrescribe`: sin límite de palabra se rompían (el nombre nuevo, `shakespeare`, ya no lo es). Hallazgo Low de
+`shield` en T7: un alias puede ser el nombre anterior de otro rol (por ejemplo `anubis` -> `auditor`); se documentó
+como límite en el README. Con estado ausente o ilegible, los ocho archivos `agents/<anterior>.md` de una instalación
+vieja quedan sin aviso. El efecto de los nombres nuevos y de conservar los anteriores como alias en un Claude Code
+real no está verificado (G1).
+
+<!-- nombres-anteriores:fin -->
 
 ## Cierre de un cambio
 
 En el mismo cambio se actualizan `README.md`, `CLAUDE.md` y `HISTORY.md`. Si cambia un archivo
 gestionado, se regenera el manifiesto (`python -B tools/build_manifest.py`). Si cambia el
-catálogo, la guía `docs/agentes.md` y el catálogo de `rules/agentes.md` también.
+catálogo, la guía `docs/agentes.md` y el catálogo de `rules/agentes.md` también. Si el cambio nombra
+agentes, usa los nombres vigentes (sin tilde) en `README.md`, `CLAUDE.md`, `docs/agentes.md` y `docs/brand/`; un
+nombre anterior sólo va dentro de los bloques marcados (caso 22 de `tests/test_phase6_docs.py`).
 
 Al cerrar una sub-fase del plan en curso (instalador y backlog), actualiza en el mismo
-commit la sección «Línea de tiempo y avance» al final de `README.md`: suma la unidad a
-«Hecho», recalcula frente, fase y global (un cuadro = 10 %, redondeando al más cercano),
-mueve el 🔄 y cambia la fecha. Muestra la aritmética en el resumen del cierre. «Cerrada»
-aquí = commiteada en la rama de la fase con la suite verde y `auditor` sin Critical ni
+commit el avance en dos sitios: `PLAN.md` (detalle: «Hecho» por frente, línea de tiempo,
+«Avance global») y el resumen de la sección «Línea de tiempo y avance» al final de `README.md`
+(fecha, frase del global, tabla por fase y «Ahora»). Suma la unidad a «Hecho», recalcula frente,
+fase y global (un cuadro = 10 %, redondeando al más cercano), mueve el 🔄 y cambia la fecha. Muestra la aritmética en el resumen del cierre. «Cerrada»
+aquí = commiteada en la rama de la fase con la suite verde y `salomon` sin Critical ni
 Important. Al desglosar una fase del backlog, «sin desglosar» pasa a sus unidades.

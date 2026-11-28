@@ -16,6 +16,7 @@ sys.path.insert(0, HERE)
 
 import aliases_ref as ar  # noqa: E402
 import levels_ref as lr  # noqa: E402
+import names  # noqa: E402
 
 ROOT = lr.ROOT
 
@@ -235,9 +236,9 @@ def repo_bytes(rel):
 
 def inventory_problems(files):
     """Problemas del inventario de `docs/plans` (caso 2) sobre {ruta: bytes}: debe aparecer exactamente 3 veces,
-    una en cada uno de agents/atlas.md, rules/agentes.md y docs/agentes.md, las tres reemplazables (limite
+    una en cada uno de agents/<planificador>.md, rules/agentes.md y docs/agentes.md, las tres reemplazables (limite
     izquierdo), ninguna en el hook ni en un frontmatter."""
-    expected = {"agents/atlas.md": 1, "rules/agentes.md": 1, "docs/agentes.md": 1}
+    expected = {"agents/%s.md" % names.PLANNER: 1, "rules/agentes.md": 1, "docs/agentes.md": 1}
     problems = []
     total = 0
     for rel, data in sorted(files.items()):
@@ -266,7 +267,7 @@ _SEGMENT_PLANS = re.compile(r"[A-Za-z0-9_-]+/plans/")
 
 
 def segment_problems(files):
-    """Un alias podria crear o destruir el literal (p. ej. `docs` sobre `forge/plans/` da `docs/plans/`): en los
+    """Un alias podria crear o destruir el literal (p. ej. `docs` sobre `<rol>/plans/` da `docs/plans/`): en los
     textos de {ruta: bytes} no debe haber `<segmento>/plans/` salvo `docs/plans/` (regex independiente)."""
     out = []
     for rel, data in sorted(files.items()):

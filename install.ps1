@@ -16,8 +16,8 @@ cambia nada) y plans_dir (Fase 5: carpeta de planes, de 1 a 4 carpetas en minusc
 se muestra con una linea Planes: y se aplica: el literal docs/plans/ del cuerpo de atlas, de rules/agentes.md y de docs/agentes.md
 se cambia por <carpeta>/; sin la clave, o igual a docs/plans, no cambia nada). Un archivo invalido, o una carpeta o un enlace con ese
 nombre, detiene la instalacion con exit 1 antes de escribir nada (tambien con -DryRun). Con el nivel 1 a 4, el
-instalador reescribe model: y effort: del frontmatter de los seis agentes modificables (atlas, forge, sentinel,
-scribe, scout, oracle) con los valores de la tabla de niveles; auditor, shield, debugger y el resto quedan como
+instalador reescribe model: y effort: del frontmatter de los seis agentes modificables (atlas, sindri, anubis,
+shakespeare, hermes, heimdall) con los valores de la tabla de niveles; salomon, hector, sherlock y el resto quedan como
 el origen, o con alias si hay tabla efectiva; solo el hook queda siempre como el origen. El nivel 5 es el repositorio tal cual. El instalador nunca escribe, respalda ni borra
 el archivo de configuracion.
 
@@ -85,9 +85,16 @@ $ConfigMaxBytes = 65536
 # (validacion de la clave aliases). Contrato con tests/test_aliases.py y tests/test_install.py: $AliasRoles son los nombres de
 # los archivos de la carpeta agents; $ReservedAliases, los agentes integrados de Claude Code (en minuscula: la sensibilidad a
 # mayusculas no esta documentada); $YamlWords, los escalares que YAML no lee como cadena en name:.
-$AliasRoles = @('atlas', 'auditor', 'debugger', 'forge', 'oracle', 'scout', 'scribe', 'sentinel', 'shield')
+$AliasRoles = @('anubis', 'atlas', 'hector', 'heimdall', 'hermes', 'salomon', 'shakespeare', 'sherlock', 'sindri')
 $ReservedAliases = @('explore', 'plan', 'general-purpose', 'claude', 'statusline-setup', 'claude-code-guide', 'web-fetch', 'fork', 'output-style-setup')
 $YamlWords = @('true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n')
+
+# Nombres anteriores de los agentes (Fase 6): pares 'viejo|nuevo', una definicion por linea (contrato con las pruebas, que
+# inyectan pares con patch_script tras la linea que empieza por la variable). Dato del script, no entrada. Los usan
+# Get-LegacyNewName (el huerfano de un nombre anterior sale como cambio de nombre, con su aviso) y Get-AliasTableProblem (una
+# clave de aliases con un nombre anterior da un motivo fijo). Get-LegacyTableProblem la valida al arrancar. Lleva los ocho
+# pares del renombrado (T7 de la Fase 6); con la lista vacia el mecanismo no hace nada.
+$LegacyRoles = @('oracle|heimdall', 'scout|hermes', 'forge|sindri', 'sentinel|anubis', 'auditor|salomon', 'shield|hector', 'debugger|sherlock', 'scribe|shakespeare')
 
 # Datos de la carpeta de planes (Fase 5, clave plans_dir). Los usa Get-PlansDirProblem (validacion) y ConvertTo-PlansBytes
 # (T3, aplicacion a los textos; $PlansDirDefault es el literal que se reemplaza): una definicion por linea. Contrato con
@@ -101,37 +108,37 @@ $PlansDirMaxLength = 64
 
 # Tabla de niveles (Fase 3). La usa el renderizado de los niveles 1 a 4 (ConvertTo-LevelBytes). Una fila
 # por linea, nivel|agente|modelo|esfuerzo, con - para "sin effort:". El nivel 5 es el repositorio y
-# no tiene filas. auditor, shield y debugger no estan: quedan fijos en todos los niveles. Contrato
+# no tiene filas. salomon, hector y sherlock no estan: quedan fijos en todos los niveles. Contrato
 # con tests/test_levels.py: la tabla documentada en el README (entre los marcadores de niveles) debe
 # tener las mismas celdas. Es un orden razonado, no una medicion.
-$LevelAgents = @('atlas', 'forge', 'sentinel', 'scribe', 'scout', 'oracle')
+$LevelAgents = @('atlas', 'sindri', 'anubis', 'shakespeare', 'hermes', 'heimdall')
 $AllowedModels = @('opus', 'sonnet', 'haiku')
 $AllowedEfforts = @('-', 'low', 'medium', 'high', 'xhigh', 'max')
 $LevelRows = @(
     '4|atlas|opus|-',
-    '4|forge|sonnet|-',
-    '4|sentinel|sonnet|-',
-    '4|scribe|sonnet|-',
-    '4|scout|sonnet|-',
-    '4|oracle|haiku|-',
+    '4|sindri|sonnet|-',
+    '4|anubis|sonnet|-',
+    '4|shakespeare|sonnet|-',
+    '4|hermes|sonnet|-',
+    '4|heimdall|haiku|-',
     '3|atlas|opus|medium',
-    '3|forge|sonnet|-',
-    '3|sentinel|sonnet|-',
-    '3|scribe|sonnet|medium',
-    '3|scout|sonnet|-',
-    '3|oracle|haiku|-',
+    '3|sindri|sonnet|-',
+    '3|anubis|sonnet|-',
+    '3|shakespeare|sonnet|medium',
+    '3|hermes|sonnet|-',
+    '3|heimdall|haiku|-',
     '2|atlas|sonnet|medium',
-    '2|forge|sonnet|medium',
-    '2|sentinel|sonnet|-',
-    '2|scribe|sonnet|low',
-    '2|scout|sonnet|medium',
-    '2|oracle|haiku|-',
+    '2|sindri|sonnet|medium',
+    '2|anubis|sonnet|-',
+    '2|shakespeare|sonnet|low',
+    '2|hermes|sonnet|medium',
+    '2|heimdall|haiku|-',
     '1|atlas|sonnet|medium',
-    '1|forge|sonnet|low',
-    '1|sentinel|sonnet|medium',
-    '1|scribe|haiku|medium',
-    '1|scout|sonnet|low',
-    '1|oracle|haiku|-'
+    '1|sindri|sonnet|low',
+    '1|anubis|sonnet|medium',
+    '1|shakespeare|haiku|medium',
+    '1|hermes|sonnet|low',
+    '1|heimdall|haiku|-'
 )
 
 # Devuelve el primer problema de la tabla de niveles (texto) o $null si es coherente: 24 filas
@@ -164,6 +171,35 @@ function Get-LevelTableProblem {
             return ('fila repetida: nivel ' + $parts[0] + ' agente ' + $parts[1])
         }
         $seen[$key] = $true
+    }
+    return $null
+}
+
+# Devuelve el primer problema de la tabla de nombres anteriores (motivo fijo) o $null si es coherente: cada fila
+# 'viejo|nuevo' con dos partes que casan [a-z][a-z0-9_-]{0,63}, viejos unicos, ningun viejo en $AliasRoles y todo nuevo
+# en $AliasRoles. Comparaciones ordinales y expresiones sin IgnoreCase. Vacia es valida.
+function Get-LegacyTableProblem {
+    $opts = [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($row in $LegacyRoles) {
+        $parts = ([string]$row).Split('|')
+        if ($parts.Count -ne 2) { return 'fila mal formada' }
+        foreach ($part in $parts) {
+            if (-not [regex]::IsMatch($part, '^[a-z][a-z0-9_-]{0,63}\z', $opts)) { return 'nombre con formato invalido' }
+        }
+        if (-not $seen.Add($parts[0])) { return 'nombre anterior repetido' }
+        if (Test-OrdinalIn $AliasRoles $parts[0]) { return 'un nombre anterior es un agente vigente' }
+        if (-not (Test-OrdinalIn $AliasRoles $parts[1])) { return 'un nombre nuevo no es un agente vigente' }
+    }
+    return $null
+}
+
+# Nombre nuevo (sin ruta) de un nombre anterior de $LegacyRoles, o $null si no esta. Comparacion ordinal; solo lee la lista.
+function Get-LegacyNewName($Old) {
+    if (-not ($Old -is [string])) { return $null }
+    foreach ($row in $LegacyRoles) {
+        $parts = ([string]$row).Split('|')
+        if ($parts.Count -eq 2 -and (Test-OrdinalEqual $parts[0] $Old)) { return $parts[1] }
     }
     return $null
 }
@@ -740,12 +776,18 @@ function Get-AliasEffective($Pairs) {
 }
 
 # Devuelve el motivo del primer problema de la tabla (texto fijo: nombra el rol, que es una clave de la lista
-# cerrada, y nunca el valor del alias; una clave desconocida va por Format-SafeShort) o $null si es valida.
+# cerrada, y nunca el valor del alias; una clave desconocida va por Format-SafeShort; un nombre anterior de
+# $LegacyRoles da un motivo con los dos nombres por Format-Safe) o $null si es valida.
 # Orden: claves; por cada rol, tipo y V1 a V4; sobre la tabla efectiva V5 y V7; V6; V8 (si se pasan las rutas del
 # manifiesto). Comparaciones ordinales y expresiones sin IgnoreCase.
 function Get-AliasTableProblem($Pairs, $ManifestPaths) {
     foreach ($pair in $Pairs) {
         if (-not (Test-OrdinalIn $AliasRoles $pair.Key)) {
+            # Un nombre anterior (Fase 6): motivo fijo con los dos nombres de la lista cerrada, nunca el valor.
+            $legacyNew = Get-LegacyNewName $pair.Key
+            if ($null -ne $legacyNew) {
+                return ('el rol ' + (Format-Safe ([string]$pair.Key)) + ' ahora se llama ' + (Format-Safe $legacyNew) + ': cambia la clave en aliases')
+            }
             return ('rol desconocido en aliases: ' + (Format-SafeShort ([string]$pair.Key)))
         }
     }
@@ -1423,6 +1465,12 @@ try {
         Stop-Install 1 ('error: la tabla de niveles de install.ps1 no es valida: ' + $levelProblem + '. No se escribio nada.')
     }
 
+    # Validacion de la tabla de nombres anteriores (Fase 6): dato del script, antes de leer el origen y sin escribir nada.
+    $legacyProblem = Get-LegacyTableProblem
+    if ($null -ne $legacyProblem) {
+        Stop-Install 1 ('error: la tabla de nombres anteriores de install.ps1 no es valida: ' + $legacyProblem + '. No se escribio nada.')
+    }
+
     # Paso 1: cargar y validar el manifiesto.
     $manifestPath = Join-Path $Source $ManifestName
     if (-not [System.IO.File]::Exists($manifestPath)) {
@@ -1606,8 +1654,8 @@ try {
 
     # Nivel: bytes a escribir por archivo. Con el nivel 5 (el repositorio) son los bytes de $aliasBytes (los canonicos
     # del origen, con alias y carpeta de planes si hay tabla efectiva) y NO se llama al renderizado. Con el nivel 1 a 4, los seis agentes de $LevelAgents que esten en el
-    # manifiesto pasan por ConvertTo-LevelBytes con su celda de $LevelRows; el resto (auditor, shield,
-    # debugger, el hook, las reglas, la guia) queda en los bytes de $aliasBytes (los del origen, o con alias y carpeta de planes si los hay). Un error de renderizado es un
+    # manifiesto pasan por ConvertTo-LevelBytes con su celda de $LevelRows; el resto (salomon, hector,
+    # sherlock, el hook, las reglas, la guia) queda en los bytes de $aliasBytes (los del origen, o con alias y carpeta de planes si los hay). Un error de renderizado es un
     # defecto del origen que el manifiesto no detecta: exit 1 antes de escribir, tambien en -DryRun.
     # $outHash (hash de $outBytes) es lo que clasifica, verifica y se guarda en el estado como written.
     # Sin tabla efectiva de alias ni carpeta de planes efectiva, con el nivel 5 los mensajes de verificacion dicen lo de siempre (el manifiesto):
@@ -1745,6 +1793,16 @@ try {
                 $counts['HUERFANO']++
                 $renamedTo = $null
                 if ($destRel.ContainsKey($rel)) { $renamedTo = $destRel[$rel] }
+                else {
+                    # Nombre anterior (Fase 6): agents/<viejo>.md con <viejo> en $LegacyRoles es el archivo de un agente que
+                    # hoy se llama <nuevo>: mismo tratamiento que un cambio de alias (aviso por stderr; nunca se toca).
+                    if ($rel.StartsWith('agents/', [System.StringComparison]::Ordinal) -and $rel.EndsWith('.md', [System.StringComparison]::Ordinal) -and $rel.Length -gt 10) {
+                        $legacyNew = Get-LegacyNewName $rel.Substring(7, $rel.Length - 10)
+                        if ($null -ne $legacyNew -and $destRel.ContainsKey('agents/' + $legacyNew + '.md')) {
+                            $renamedTo = $destRel['agents/' + $legacyNew + '.md']
+                        }
+                    }
+                }
                 $rows.Add(@{ State = 'HUERFANO'; Path = $null; Dest = $prevDest; RenamedTo = $renamedTo })
             }
         }

@@ -39,8 +39,8 @@ SyncLayer/
 │   ├── build_manifest.py  Genera y comprueba el manifiesto
 │   └── usage_report.py    Reporte de uso de subagentes (se ejecuta desde el clon)
 ├── agents/            Un archivo por agente (frontmatter + prompt)
-│   ├── oracle.md  scout.md  atlas.md  forge.md  sentinel.md
-│   └── auditor.md  shield.md  debugger.md  scribe.md
+│   ├── heimdall.md  hermes.md  atlas.md  sindri.md  anubis.md
+│   └── salomon.md  hector.md  sherlock.md  shakespeare.md
 ├── rules/
 │   └── agentes.md     Reglas de orquestación (se cargan en todos los proyectos)
 ├── hooks/
@@ -67,6 +67,10 @@ SyncLayer/
     ├── levels_ref.py      Lector de la tabla y del estado esperado (auxiliar de las pruebas)
     ├── test_manifest.py
     ├── test_phase5_docs.py  Documentación de la Fase 5 (perfiles por proyecto, carpeta de planes e idioma, casos 44 a 47)
+    ├── test_phase6_docs.py  Documentación de la Fase 6 (sección «Nombres anteriores», nombres sin tilde, sin promesas, casos 22 y 23)
+    ├── names.py           Nombres vigentes y anteriores de los agentes: única fuente de las pruebas
+    ├── rename_ref.py      Tabla del renombrado, textos del repositorio y frontmatter fijado (auxiliar de las pruebas)
+    ├── test_rename.py     Renombrado de la Fase 6: tabla, coherencia del repositorio, nombres anteriores, parametrización
     ├── test_plans.py      Carpeta de planes: reglas y inventario, sin PowerShell
     ├── plans_ref.py       Referencia independiente de la carpeta de planes (auxiliar de las pruebas)
     ├── test_usage_report.py
@@ -274,7 +278,7 @@ repositorio y se reinstala.
 
 - **Automático.** Claude delega según el tamaño de la tarea, con las reglas de
   `rules/agentes.md`. Las tareas triviales no usan agentes.
-- **Por nombre.** «Usa a forge para…», o `@agent-forge` en el prompt.
+- **Por nombre.** «Usa a sindri para…», o `@agent-sindri` en el prompt.
 - **Listar.** `/agents` dentro de Claude Code muestra los agentes registrados.
 - **Diagnóstico.** `claude --debug` muestra campos de frontmatter no reconocidos.
 
@@ -283,15 +287,15 @@ repositorio y se reinstala.
 | Tamaño | Flujo |
 |---|---|
 | Trivial | Sesión principal, sin agentes |
-| Mediana | `oracle` (si el área es desconocida) -> `forge` -> `auditor` |
-| Grande | `oracle` y `scout` (si hace falta) -> `atlas` -> aprobación del usuario -> por task: `forge` -> `auditor` -> al final: `sentinel` -> `shield` (si aplica) -> `scribe` -> `auditor` sobre el cambio completo |
-| Bug sin causa clara | `debugger` -> `forge` -> `sentinel` |
+| Mediana | `heimdall` (si el área es desconocida) -> `sindri` -> `salomon` |
+| Grande | `heimdall` y `hermes` (si hace falta) -> `atlas` -> aprobación del usuario -> por task: `sindri` -> `salomon` -> al final: `anubis` -> `hector` (si aplica) -> `shakespeare` -> `salomon` sobre el cambio completo |
+| Bug sin causa clara | `sherlock` -> `sindri` -> `anubis` |
 
 Resumen de las reglas (detalle en [`rules/agentes.md`](rules/agentes.md)):
 
-- En paralelo sólo corren agentes que no escriben (`oracle`, `scout`, `auditor`, `shield`).
-- Un solo agente que escribe (`forge`, `sentinel`, `scribe`) a la vez por checkout.
-- Precedencia ante conflictos: `shield` > `sentinel` > `auditor` > plan de `atlas` > `forge`.
+- En paralelo sólo corren agentes que no escriben (`heimdall`, `hermes`, `salomon`, `hector`).
+- Un solo agente que escribe (`sindri`, `anubis`, `shakespeare`) a la vez por checkout.
+- Precedencia ante conflictos: `hector` > `anubis` > `salomon` > plan de `atlas` > `sindri`.
 - Una tarea está terminada cuando las pruebas relevantes se corrieron y pasaron, los
   criterios de aceptación están verificados, no quedan hallazgos Critical ni Important
   sin resolver y la documentación está al día.
@@ -300,15 +304,15 @@ Resumen de las reglas (detalle en [`rules/agentes.md`](rules/agentes.md)):
 
 | Agente | Rol | Modelo | Herramientas |
 |---|---|---|---|
-| `oracle` | Analista de proyecto, sólo lectura | `haiku` | Read, Grep, Glob |
-| `scout` | Investigación en fuentes oficiales | `sonnet` | WebSearch, WebFetch, Read, Grep, Glob |
+| `heimdall` | Analista de proyecto, sólo lectura | `haiku` | Read, Grep, Glob |
+| `hermes` | Investigación en fuentes oficiales | `sonnet` | WebSearch, WebFetch, Read, Grep, Glob |
 | `atlas` | Planificador y arquitecto | `claude-fable-5-2` | Read, Grep, Glob, Write |
-| `forge` | Desarrollador | `sonnet` | Read, Edit, Write, Grep, Glob, Bash |
-| `sentinel` | QA | `sonnet` | Read, Grep, Glob, Bash, Edit, Write |
-| `auditor` | Code review independiente | `opus` | Read, Grep, Glob, Bash |
-| `shield` | Seguridad | `opus` | Read, Grep, Glob, Bash |
-| `debugger` | Causa raíz | `opus` | Read, Grep, Glob, Bash |
-| `scribe` | Documentación | `sonnet` | Read, Grep, Glob, Edit, Write |
+| `sindri` | Desarrollador | `sonnet` | Read, Edit, Write, Grep, Glob, Bash |
+| `anubis` | QA | `sonnet` | Read, Grep, Glob, Bash, Edit, Write |
+| `salomon` | Code review independiente | `opus` | Read, Grep, Glob, Bash |
+| `hector` | Seguridad | `opus` | Read, Grep, Glob, Bash |
+| `sherlock` | Causa raíz | `opus` | Read, Grep, Glob, Bash |
+| `shakespeare` | Documentación | `sonnet` | Read, Grep, Glob, Edit, Write |
 
 La columna de modelo es la del nivel 5, el repositorio tal cual (ver «Niveles»).
 
@@ -326,8 +330,8 @@ Guarda `PreToolUse` enlazada desde el frontmatter (`hooks:`) de cuatro agentes:
 
 | Agente | Matcher | Comando |
 |---|---|---|
-| `sentinel` | `Write\|Edit\|NotebookEdit\|Bash` | `python "$HOME/.claude/hooks/agent_guard.py" tests-only` |
-| `auditor`, `shield`, `debugger` | `Bash` | `python "$HOME/.claude/hooks/agent_guard.py" readonly --allow-temp` |
+| `anubis` | `Write\|Edit\|NotebookEdit\|Bash` | `python "$HOME/.claude/hooks/agent_guard.py" tests-only` |
+| `salomon`, `hector`, `sherlock` | `Bash` | `python "$HOME/.claude/hooks/agent_guard.py" readonly --allow-temp` |
 
 Contrato: lee un JSON por stdin (`tool_name`, `tool_input`, `cwd`). Sale con 0 para
 permitir y con 2 para bloquear; en ese caso escribe el motivo, en español, por stderr.
@@ -354,11 +358,11 @@ de más de 100 000 caracteres terminan en bloqueo.
 
 Es una heurística contra escrituras accidentales, **no un sandbox**.
 
-- **`sentinel` tiene guarda en `Bash` desde el modo estricto de `tests-only`, pero sigue
+- **`anubis` tiene guarda en `Bash` desde el modo estricto de `tests-only`, pero sigue
   siendo una lista negra.** Escribe en rutas de pruebas y bloquea los escritores
   habituales, no todos. Sin sandbox, un runner de pruebas ejecuta código del repositorio
   y puede escribir donde quiera. «Sólo escribe tests» es heurístico.
-- `auditor`, `shield` y `debugger` no son de solo lectura real: deben correr tests y
+- `salomon`, `hector` y `sherlock` no son de solo lectura real: deben correr tests y
   builds, y eso ejecuta código arbitrario. Tampoco hay restricción de lectura (`.env`)
   ni de red (`curl -d @archivo URL`).
 - El modo `readonly` es una lista negra con parser parcial de shell, no estricto. Pasan,
@@ -510,13 +514,13 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
   forma `clave: valor` y que ningún valor empiece por un indicador YAML (comillas, corchetes, llaves,
   `|`, `>`, `&`, asterisco, `!`, `%`, `@` o acento grave). También rechaza cualquier línea con sangría
   anterior a la línea `model:` o a un `effort:` existente; las líneas con sangría posteriores, como
-  el bloque `hooks:` de `sentinel`, siguen permitidas. El mismo defecto no detiene el nivel 5 ni a
+  el bloque `hooks:` de `anubis`, siguen permitidas. El mismo defecto no detiene el nivel 5 ni a
   un agente fijo.
 - Un estado de esquema 2 forjado con un `level` distinto puede mostrar un `Nivel anterior:` que no
   corresponde al disco. Es sólo informativo, y forjarlo exige poder escribir en `-Target`. Una clave
   `__type` en el estado se trata como ausente (como en la configuración).
-- El efecto real de `effort:` en Claude Code, y el de un valor que el modelo no soporta, sólo están
-  verificados por la documentación, no en una máquina real (la compuerta G1 no se corrió).
+- El efecto real de `effort:` en Claude Code, y el de un valor que el modelo no soporta, no están
+  verificados en una máquina real: sólo los respalda la documentación (la compuerta G1 no se corrió).
 - Según la documentación, un nivel de esfuerzo que el modelo no soporta baja al más alto soportado
   igual o inferior, sin un aviso documentado.
 - Un `model:` o un `effort:` inválido tiene un comportamiento no documentado en Claude Code; por eso
@@ -531,7 +535,7 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
   nueva, y el texto nuevo de la guía usa `<rol>` y `<alias>` en lugar de un nombre de rol.
 - **Límites del límite de palabra.** `×` y `÷` cuentan como letra: un rol pegado a ellos no se
   reemplaza. Las letras de fuera de U+00C0 a U+00FF (`ő`, griego, cirílico) y las marcas combinantes
-  (texto en NFD) son límite: un rol pegado a ellas sí se reemplazaría. Otras grafías (`sCribe`) no se
+  (texto en NFD) son límite: un rol pegado a ellas sí se reemplazaría. Otras grafías (`hErmes`) no se
   tocan. Hoy los once textos no tienen ninguna de esas formas y una prueba lo vigila.
 - **La lista de nombres reservados es cerrada** (nueve) y puede quedarse atrás frente a integrados nuevos
   de Claude Code: comprueba con `/agents` que el nombre no exista antes de elegir un alias.
@@ -582,6 +586,11 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
 - Renombrar con sesiones abiertas no está documentado: reinicia las sesiones. El efecto de los alias
   en Claude Code real no se comprobó (G1/V1 del propietario pendiente).
 
+**Nombres anteriores**
+
+- El cambio de nombre de los agentes tiene sus propios límites (estado ausente, un agente propio con un nombre
+  actual, V7, un alias que es el nombre anterior de otro rol): ver «Nombres anteriores».
+
 **No verificado**
 
 - pwsh 7 (no está instalado en el equipo de pruebas), volúmenes de red y OneDrive, un enlace
@@ -590,17 +599,17 @@ Riesgos residuales conocidos, verificados en revisión de seguridad y de código
 
 ## Niveles
 
-Un nivel de 1 a 5 fija el `model:` y el `effort:` de seis agentes (`atlas`, `forge`, `sentinel`,
-`scribe`, `scout`, `oracle`). El nivel 5 es el repositorio tal cual: quien no configura nada
+Un nivel de 1 a 5 fija el `model:` y el `effort:` de seis agentes (`atlas`, `sindri`, `anubis`,
+`shakespeare`, `hermes`, `heimdall`). El nivel 5 es el repositorio tal cual: quien no configura nada
 instala los mismos archivos de siempre. `install.ps1` lleva la tabla de los niveles 1 a 4.
-`auditor`, `shield` y `debugger` quedan fijos en todos los niveles (`opus`, sin `effort:`, con su
+`salomon`, `hector` y `sherlock` quedan fijos en todos los niveles (`opus`, sin `effort:`, con su
 hook). La tabla es un orden razonado, no una medición: no promete ahorro de tokens ni de costo.
 «—» significa sin `effort:`.
 
 > **Estado de la Fase 3: los niveles 1 a 4 se aplican; el efecto real en Claude Code no está
 > verificado en una máquina real (G1).** El instalador escribe lo que dice la tabla, y eso está
-> probado. Lo que Claude Code hace con `effort:` (y con un valor que el modelo no soporta) sólo se
-> conoce por su documentación: la compuerta G1 no se corrió. Para comprobarlo, sigue el
+> probado. Lo que Claude Code hace con `effort:` (y con un valor que el modelo no soporta) no está verificado:
+> sólo se conoce por su documentación (la compuerta G1 no se corrió). Para comprobarlo (aún no verificado), sigue el
 > procedimiento de G1 del plan
 > ([`docs/plans/2026-11-20-fase3-esfuerzo-configurable.md`](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md))
 > y mira la ejecución del agente con `/tasks`. Los cambios de nivel y las ediciones a mano están en «Cambiar de nivel, ediciones a mano y `-Force`».
@@ -609,11 +618,11 @@ hook). La tabla es un orden razonado, no una medición: no promete ahorro de tok
 | Agente | Nivel 5 (repo) | Nivel 4 | Nivel 3 | Nivel 2 | Nivel 1 |
 |---|---|---|---|---|---|
 | `atlas` | `claude-fable-5-2`, — | `opus`, — | `opus`, `medium` | `sonnet`, `medium` | `sonnet`, `medium` |
-| `forge` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
-| `sentinel` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` |
-| `scribe` | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` | `haiku`, `medium` |
-| `scout` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
-| `oracle` | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — |
+| `sindri` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
+| `anubis` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` |
+| `shakespeare` | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` | `haiku`, `medium` |
+| `hermes` | `sonnet`, — | `sonnet`, — | `sonnet`, — | `sonnet`, `medium` | `sonnet`, `low` |
+| `heimdall` | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — | `haiku`, — |
 <!-- niveles:fin -->
 
 ### Elegir el nivel
@@ -654,8 +663,8 @@ Con un nivel de 1 a 4 válido:
   synclayer-config.json)` si no hay archivo) y, tras el `Resumen:`, una línea por agente
   renderizado: `Ajuste: agents/<nombre>.md  model: <modelo>  effort: <esfuerzo>` (`effort: -` si la
   celda no lo fija).
-- Para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle` escribe en el destino el `model:`
-  y, según la tabla, el `effort:`. `auditor`, `shield`, `debugger`, el hook, `rules/agentes.md` y
+- Para `atlas`, `sindri`, `anubis`, `shakespeare`, `hermes` y `heimdall` escribe en el destino el `model:`
+  y, según la tabla, el `effort:`. `salomon`, `hector`, `sherlock`, el hook, `rules/agentes.md` y
   `docs/agentes.md` quedan con los bytes del origen. El nivel 5 no pasa por el renderizado.
 - Con `-DryRun` muestra el plan y no escribe nada. Si el frontmatter de un agente no se puede
   renderizar, sale con exit 1 antes de escribir (también con `-DryRun`):
@@ -667,9 +676,9 @@ Con un nivel de 1 a 4 válido:
 ### Qué fija el nivel y qué no
 
 Lo que el instalador escribe está descrito arriba. Lo que Claude Code hace después con esos
-valores sólo está verificado por su documentación, no en una máquina real (G1).
+valores no está verificado en una máquina real (G1): sólo lo respalda su documentación.
 
-- **Fijos en todos los niveles:** `auditor`, `shield` y `debugger` (`opus`, sin `effort:`, hook
+- **Fijos en todos los niveles:** `salomon`, `hector` y `sherlock` (`opus`, sin `effort:`, hook
   intacto). Ningún nivel les cambia nada, así que las revisiones de seguridad y de código no
   dependen del nivel.
 - **Bajar el nivel cambia la calidad esperada** del trabajo de los seis agentes modificables. El
@@ -721,7 +730,7 @@ instalación anterior (`written` en el estado):
 |---|---|
 | Cambio de nivel, archivos intactos, estado válido | `ACTUALIZAR` en los archivos cuya celda cambia (con respaldo de la versión y del estado anteriores); el resto, `IGUAL`. Nunca `MODIFICADO` |
 | Mismo nivel, sin cambios | `IGUAL` |
-| Edición a mano de `model:` o `effort:`, o de cualquier archivo (incluidos `auditor`, `shield` y `debugger`) | `MODIFICADO` en cualquier nivel: exit 3 y no se escribe nada. Con `-Force` se respalda la versión local y se sobrescribe |
+| Edición a mano de `model:` o `effort:`, o de cualquier archivo (incluidos `salomon`, `hector` y `sherlock`) | `MODIFICADO` en cualquier nivel: exit 3 y no se escribe nada. Con `-Force` se respalda la versión local y se sobrescribe |
 | Estado ausente, ilegible o de esquema desconocido, con nivel 1 a 4 | Se trata como ausente: lo que ya coincide con lo esperado para el nivel es `IGUAL`; lo que difiere es `MODIFICADO`. Nunca `ACTUALIZAR` |
 | Estado de esquema 1 intacto y nivel 3 | `ACTUALIZAR`; el estado migra a esquema 2 |
 
@@ -735,7 +744,7 @@ synclayer-config.json.` Se añade siempre que hay exit 3; ver sus límites en «
 ## Alias
 
 Cualquiera de los nueve agentes puede llevar un nombre propio (alias) en la copia instalada. El
-repositorio conserva los nombres originales: el nombre original es el rol, el id estable interno; el alias
+repositorio conserva los nombres actuales: el nombre actual del repositorio es el rol, el id estable interno; el alias
 sólo existe en lo que el instalador escribe en `~/.claude/`. Los alias no cambian el comportamiento de los
 agentes ni prometen ahorro, calidad ni costo.
 
@@ -752,14 +761,15 @@ La clave `aliases` de `<Target>/synclayer-config.json` (el mismo archivo del niv
 instalador sólo lo lee) es un objeto de rol a alias. `level` y `aliases` son opcionales:
 
 ```json
-{ "level": 3, "aliases": { "sentinel": "amigo-qa", "forge": "dev" } }
+{ "level": 3, "aliases": { "anubis": "amigo-qa", "sindri": "dev" } }
 ```
 
-- Las claves de `aliases` son sólo los nueve roles: `atlas`, `auditor`, `debugger`, `forge`, `oracle`,
-  `scout`, `scribe`, `sentinel` y `shield`, en minúsculas. Otra clave, incluida `Forge`, da exit 1.
+- Las claves de `aliases` son sólo los nueve roles: `anubis`, `atlas`, `hector`, `heimdall`, `hermes`,
+  `salomon`, `shakespeare`, `sherlock` y `sindri`, en minúsculas. Otra clave, incluida `Sindri`, da exit 1.
+  Una clave con el nombre de antes del renombrado tiene su propio motivo (ver «Nombres anteriores»).
 - Cada valor es una cadena. `null`, un número, un booleano, una lista o un objeto dan exit 1.
 - `aliases` ausente o `{}` equivale a no tener alias: los bytes y la salida son los de siempre. Un alias
-  igual a su propio rol (`"forge": "forge"`) es válido y equivale a no ponerlo.
+  igual a su propio rol (`"sindri": "sindri"`) es válido y equivale a no ponerlo.
 - Otra clave en la raíz (incluida `agents` o `Aliases`) da exit 1, como siempre.
 
 ### Reglas del alias
@@ -776,8 +786,8 @@ sale con exit 1, también con `-DryRun`. El alias debe cumplir todo esto (V1 a V
    `web-fetch`, `fork` y `output-style-setup`.
 5. No es el nombre de otro agente de SyncLayer (los nueve roles), lo que descarta también los ciclos.
 6. Ningún alias se repite entre dos roles.
-7. No contiene el nombre de un rol como palabra delimitada por `-` o por los extremos (`dev-sentinel` y
-   `forge-2` se rechazan).
+7. No contiene el nombre de un rol como palabra delimitada por `-` o por los extremos (`dev-anubis` y
+   `sindri-2` se rechazan).
 8. `agents/<alias>.md` no coincide con ninguna ruta del manifiesto ni con el destino de otro rol, esté o no
    en el manifiesto el archivo del rol de origen. Sólo se compara con el manifiesto: los archivos que ya
    tengas en `<Target>/agents/` no se ven aquí (ver «Límites del instalador»).
@@ -800,15 +810,16 @@ Con al menos un alias efectivo (distinto de su rol), el instalador:
   `model:` y el `effort:` de su rol. Con alias y nivel, el alias se aplica primero y el nivel después.
 
 No cambia: `hooks/agent_guard.py` (nunca se transforma) ni los bloques `hooks:` de los agentes, que quedan
-byte a byte; `README.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` (no se instalan); el manifiesto
+byte a byte; `README.md`, `PLAN.md`, `HISTORY.md`, `docs/plans/` y `docs/brand/` (no se instalan); el manifiesto
 (los alias no entran en él: los doce archivos gestionados siguen siendo los mismos); el reporte de uso (un
-agente con alias sale como `(otro agente)`: ver «Límites del reporte de uso»).
+agente con alias sale como `(otro agente)`, salvo que el alias sea un nombre anterior (ver «Nombres anteriores»): ver «Límites del reporte de uso»).
 
 **Límite de palabra.** Una letra es un carácter de `[A-Za-z0-9_]` o una letra latina acentuada del texto
 UTF-8 (U+00C0 a U+00FF: `á`, `é`, `ñ`, `ü` y sus mayúsculas). Todo lo demás es límite, incluidos `-`, `/`,
-`.`, comillas angulares, `¿` `¡`, comillas tipográficas, rayas y el espacio duro: `«SENTINEL sólo…»` se
-reemplaza y `ñforge` no. Por eso «escribe», «escriben», «describe», «reescribe» y «sobrescribe» no se
-tocan aunque `scribe` tenga alias. Es un reemplazo textual, no semántico (ver «Límites del instalador»).
+`.`, comillas angulares, `¿` `¡`, comillas tipográficas, rayas y el espacio duro: `«ANUBIS sólo…»` se
+reemplaza y `ñsindri` no. Ningún nombre de rol es hoy subcadena de otra palabra de los once textos, así
+que ninguna palabra corriente se salta; el límite se prueba con palabras sintéticas (`<rol>2`, `x_<rol>`,
+`ñ<rol>`). Es un reemplazo textual, no semántico (ver «Límites del instalador»).
 
 ### Probar, aplicar, cambiar y quitar
 
@@ -854,7 +865,7 @@ opcional, a mano, el instalador sólo lo lee, en la misma lectura única) es una
 agentes dejarán los planes:
 
 ```json
-{ "level": 3, "aliases": { "sentinel": "amigo-qa" }, "plans_dir": "docs/planes" }
+{ "level": 3, "aliases": { "anubis": "amigo-qa" }, "plans_dir": "docs/planes" }
 ```
 
 - Ausente, o igual a `docs/plans`: equivale a no ponerla. Los bytes y la salida son los de siempre y no
@@ -867,7 +878,7 @@ agentes dejarán los planes:
   2. Mide hasta 64 caracteres en total.
   3. Ningún segmento es un nombre de dispositivo de Windows (`con`, `prn`, `aux`, `nul`, `com0` a `com9`,
      `lpt0` a `lpt9`).
-  4. Ningún trozo de un segmento, partido por `-`, es el nombre de uno de los nueve roles (`docs/forge` y
+  4. Ningún trozo de un segmento, partido por `-`, es el nombre de uno de los nueve roles (`docs/sindri` y
      `atlas-planes` se rechazan).
 - La validación va después de la tabla de alias y antes de leer el estado y de escribir: ante un problema
   sale con exit 1, también con `-DryRun`. El mensaje es
@@ -894,7 +905,7 @@ agentes dejarán los planes:
 ## Perfiles por proyecto
 
 Solo documentación (Fase 5, T7): el instalador no crea, lee ni comprueba nada de esto. Adaptar un agente a
-un proyecto es poner un archivo en el repositorio de ese proyecto. Nada de lo que sigue está probado en un
+un proyecto es poner un archivo en el repositorio de ese proyecto. Lo que sigue no está verificado en un
 Claude Code real (G1 del propietario); la columna «Certeza» dice qué respalda cada frase.
 
 | Afirmación | Certeza |
@@ -925,10 +936,109 @@ describe no está verificado en un Claude Code real (G1).
 
 | Candidata | Motivo del descarte | Qué se ofrece |
 |:--|:--|:--|
-| Activar o desactivar agentes por usuario | Las pruebas fijan nueve agentes y doce archivos; habría que redefinir el manifiesto, el catálogo de las reglas y de la guía, la tabla de precedencia y los flujos cuando falta un agente (por ejemplo, sin `auditor`) | `permissions.deny` con `Agent(<nombre>)` o `--disallowedTools` |
-| `tools:` por agente | El mínimo seguro depende del rol (un `auditor` con `Edit` deja de ser una revisión independiente) y no hay transformación de la línea `tools:` | Editar la línea `tools:` a mano (sale `MODIFICADO`) o un agente de proyecto |
+| Activar o desactivar agentes por usuario | Las pruebas fijan nueve agentes y doce archivos; habría que redefinir el manifiesto, el catálogo de las reglas y de la guía, la tabla de precedencia y los flujos cuando falta un agente (por ejemplo, sin `salomon`) | `permissions.deny` con `Agent(<nombre>)` o `--disallowedTools` |
+| `tools:` por agente | El mínimo seguro depende del rol (un agente de revisión con `Edit` deja de ser una revisión independiente) y no hay transformación de la línea `tools:` | Editar la línea `tools:` a mano (sale `MODIFICADO`) o un agente de proyecto |
 | Estrictez de la guarda | Exige transformar el bloque `hooks:`, que hoy debe quedar byte a byte; un modo «sin guarda» contradice la falla cerrada y cualquier grado intermedio invita a tomarla por un sandbox | Nada: la guarda es la del repositorio |
 | Convención de commits | Nada la lee ni la hace cumplir: sería una opción sin efecto | El `CLAUDE.md` de cada proyecto |
+
+<!-- nombres-anteriores:inicio -->
+## Nombres anteriores
+
+Ocho de los nueve agentes cambiaron de nombre en el repositorio; `atlas` sigue igual. Los nombres actuales son
+los que instala cualquiera sin configurar nada (archivos de `agents/`, `name:`, textos, manifiesto, tablas del
+instalador). Van sin tilde en todas partes: `salomon` y `hector`, porque el alias y el nombre de archivo sólo
+admiten `[a-z0-9_-]`. Esta sección y la línea de tiempo son los únicos sitios del README que nombran los de antes.
+
+| Nombre anterior | Nombre actual |
+|---|---|
+| `oracle` | `heimdall` |
+| `scout` | `hermes` |
+| `forge` | `sindri` |
+| `sentinel` | `anubis` |
+| `auditor` | `salomon` |
+| `shield` | `hector` |
+| `debugger` | `sherlock` |
+| `scribe` | `shakespeare` |
+
+El cambio sólo toca el repositorio. Los archivos vivos de `~/.claude` no cambian hasta que reinstales, y las
+sesiones ya abiertas no ven los agentes nuevos: reinícialas.
+
+### Qué ve quien reinstala
+
+Con `-DryRun` primero. El instalador lleva una tabla cerrada de los ocho pares (`$LegacyRoles`) con dos usos,
+ambos sin tocar disco: elegir el aviso de un huérfano y elegir el mensaje de una clave de `aliases`.
+
+| Situación al reinstalar | Resultado |
+|---|---|
+| Instalación hecha con los nombres anteriores, estado legible y archivos intactos | 8 `NUEVO` (`agents/<actual>.md`); `agents/atlas.md`, `rules/agentes.md` y `docs/agentes.md` `ACTUALIZAR` (con respaldo); el hook `IGUAL`; 8 `HUERFANO` con un aviso por stderr; el estado se reescribe con las rutas actuales |
+| Alias previo y `aliases` ya corregido a la clave actual | El archivo del alias sale `IGUAL` o `ACTUALIZAR` (según cambie el texto) y no hay huérfano para ese rol |
+| Alias previo y sin `aliases` ahora | El archivo del alias sale `HUERFANO` con el aviso de nombre anterior |
+| Los nombres anteriores como valores de `aliases` | Son válidos: el archivo anterior es el destino actual (`ACTUALIZAR` o `IGUAL`), sin huérfano |
+| Segunda corrida | Todo `IGUAL`; los huérfanos ya no se informan (el estado nuevo no los trae), pero los archivos siguen en el destino |
+
+- **El archivo anterior no se toca.** El instalador no abre el archivo anterior: no se abre, no se respalda y
+  no se borra; sólo comprueba que exista. El aviso sale por stderr, uno por archivo que sigue en el destino, también con `-DryRun`, y no
+  cambia el código de salida. Mientras exista hay dos agentes activos con descripciones casi iguales: quítalo a
+  mano. No está verificado en Claude Code real a cuál delega con los dos presentes (G1).
+- **`aliases` con una clave anterior** da exit 1 antes de escribir (también con `-DryRun`) con un motivo
+  fijo que nombra los dos nombres: `el rol forge ahora se llama sindri: cambia la clave en aliases`. Los
+  nombres salen de la lista cerrada, nunca del archivo. No se aceptan las claves anteriores como sinónimo.
+- **Conservar los nombres anteriores.** Esta tabla de alias instala los archivos con los nombres de antes:
+
+```json
+{ "aliases": { "heimdall": "oracle", "hermes": "scout", "sindri": "forge", "anubis": "sentinel", "salomon": "auditor", "hector": "shield", "sherlock": "debugger", "shakespeare": "scribe" } }
+```
+
+  El estado pasa a esquema 3 y los archivos existentes salen `IGUAL` o `ACTUALIZAR` (según cambie el texto) si están intactos. El efecto de los
+  alias en Claude Code real sigue no verificado (G1).
+- **Reporte de uso.** Las transcripciones ya escritas traen los nombres anteriores. El reporte los reconoce
+  con una lista cerrada y los cuenta en el mismo conjunto `SyncLayer`, cada uno en su fila: el historial se ve
+  con el nombre que tenía y lo nuevo, con el nombre actual. No hay nota nueva en el reporte. Un agente con
+  otro alias sigue saliendo como `(otro agente)`; con un nombre anterior como alias, el reporte lo cuenta
+  en SyncLayer bajo ese nombre.
+
+### Lo que queda fuera del repositorio
+
+El renombrado por sí solo no cambia nada de `~/.claude`; lo que queda fuera del repositorio lo revisas tú:
+
+1. Reinstalar: `-DryRun` primero; se esperan 8 `NUEVO`, 3 `ACTUALIZAR`, 1 `IGUAL` y 8 `HUERFANO` con aviso,
+   si `~/.claude` está intacto y con estado válido.
+2. Quitar a mano los ocho archivos anteriores de `~/.claude/agents/`, o conservarlos con la tabla de alias de arriba.
+3. `~/.claude/rules/agentes.md` y `~/.claude/docs/agentes.md` se actualizan solos al reinstalar (son gestionados).
+4. El `CLAUDE.md` global del usuario y la memoria que nombren `forge`, `auditor` u otro nombre anterior:
+   edítalos a mano.
+5. `settings.json` (usuario y proyectos): reglas `Agent(<nombre>)` en `permissions`, `--disallowedTools`,
+   matchers de hooks y `--agent <nombre>`. Una regla con el nombre anterior (`Agent(<nombre anterior>)` en
+   `permissions.deny`, `--disallowedTools` o el matcher de un hook) deja de bloquear o aplicar al agente
+   renombrado tras reinstalar, y el instalador no avisa: falla abierto. Reescríbela con el nombre actual.
+6. Agentes de proyecto (`.claude/agents/<nombre>.md`) en otros repositorios: el `name:` a igualar es el actual.
+
+### Límites
+
+- **Con el estado ausente o ilegible.** Sin estado previo válido el instalador no puede saber qué archivos eran suyos:
+  ningún archivo anterior sale como `HUERFANO` y los ocho quedan sin aviso. Quítalos a mano. Además nunca hay
+  `ACTUALIZAR`: `agents/atlas.md`, `rules/agentes.md` y `docs/agentes.md`, que cambiaron de texto, salen
+  `MODIFICADO` (exit 3) y hace falta `-Force`, que respalda la versión local.
+- **Un agente propio con un nombre actual.** Si ya tenías un `agents/hermes.md` tuyo (o cualquier otro
+  nombre actual) que no es de SyncLayer, el instalador lo trata como `MODIFICADO`: exit 3 y no escribe nada. Con
+  `-Force` lo respalda y lo sobrescribe. Mira el diff antes y cámbiale el nombre al tuyo.
+- **V7 con los nombres actuales.** Un alias no puede contener, partido por `-`, un nombre actual: `sherlock-2`
+  se rechaza y `forge-2`, que ya no es un rol, se admite. Igual la carpeta de planes: `docs/hermes` se
+  rechaza y `docs/forge` se admite.
+- **Un alias que es el nombre anterior de otro rol.** Es válido (los nombres anteriores no entran en V5 ni en
+  V7). Con `{ "aliases": { "anubis": "auditor" } }` el agente que escribe (`anubis`, con `Edit` y `Write`)
+  queda instalado con `name: auditor`, el nombre que antes tenía el revisor (sin `Edit` ni `Write`), y el instalador no
+  avisa. Si tus reglas, memoria o permisos siguen asociando ese nombre a un revisor, ahora apuntan a un agente
+  que escribe. En el reporte de uso, con `{ "<rol>": "<nombre anterior de otro rol>" }` las llamadas de ese agente se
+  suman a la fila histórica del otro rol. Es un límite aceptado: elige alias que no sean el nombre anterior de otro rol.
+- **Quien tenía un alias anterior igual a un nombre nuevo.** Con una tabla como
+  `{ "<rol>": "<nombre actual de otro rol>" }` la configuración ya da exit 1 por la clave con el nombre anterior.
+  Mientras no se corrija, su estado con esquema 3 y `dest` igual a una ruta actual del manifiesto se trata como
+  ausente (`Read-State`): todo lo que difiere sale `MODIFICADO` (exit 3) y `-Force` sobrescribe con respaldo.
+  Deducido de la regla de `Read-State`, no medido.
+- **Efecto en Claude Code real: no verificado (G1).** Que la delegación automática elija bien con los nombres
+  nuevos, con los dos conjuntos a la vez o con alias no lo prueba la suite: lo comprueba el propietario.
+<!-- nombres-anteriores:fin -->
 
 ## Reporte de uso
 
@@ -1082,9 +1192,10 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
   15,1 s (promedio de tres corridas alternadas, 19,7 % menos). Con datos reales no se midió la
   proporción: antes de optimizar, el `global --all` del propietario tardó unos 3 minutos con unas
   2 800 transcripciones (dato real de C4), y el objetivo de 60 s puede no cumplirse.
-- **Agentes con alias.** El reporte reconoce a los agentes de SyncLayer por su nombre original. Un
-  agente instalado con alias (ver «Alias») sale como `(otro agente)` y deja de atribuirse a SyncLayer. El
-  reporte no lee la tabla de alias.
+- **Agentes con alias.** El reporte reconoce a los agentes de SyncLayer por su nombre actual del repositorio (y por los
+  anteriores al renombrado, ver «Nombres anteriores»). Un
+  agente instalado con alias (ver «Alias») sale como `(otro agente)` y deja de atribuirse a SyncLayer, salvo que el
+  alias sea un nombre anterior (ver «Nombres anteriores»). El reporte no lee la tabla de alias.
 - **Idioma `en`.** El reporte en inglés es una traducción del español; el español es la referencia. Las
   claves del pie quedan en español. Los mensajes de la CLI e `inspect` salen sólo en español. El idioma no se
   guarda en ningún sitio: cada corrida lo recibe por `--lang`, y un reporte sustituye al del otro idioma en el
@@ -1102,17 +1213,17 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-1810 pruebas, 367 saltadas: 364 contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso, que en Windows no corren. Las pruebas del instalador corren contra Windows PowerShell 5.1. Sólo biblioteca estándar, Python 3.12. La suite tarda entre unos 43 y 70 minutos en este equipo: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
-reales: `git add` bloqueado para `auditor`; `Write` sobre `src/` bloqueado y sobre
-`tests/` permitido para `sentinel`.
+Recuento medido (HEAD 4eded32, corrida del cierre de la Fase 6): 1939 pruebas, 386 saltadas. pwsh no está instalado (sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y la rama POSIX del reporte de uso no corre en Windows. Las pruebas del instalador corren contra Windows PowerShell 5.1. Sólo biblioteca estándar, Python 3.12. La suite tarda entre unos 43 y 70 minutos en este equipo: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+reales, con los nombres de antes del renombrado: `git add` bloqueado para el agente de revisión; `Write`
+sobre `src/` bloqueado y sobre `tests/` permitido para el de QA.
 
 ## Mantenimiento
 
 Resumen; la guía completa está en [`docs/agentes.md`](docs/agentes.md).
 
-- **Cambiar el modelo:** para `atlas`, `forge`, `sentinel`, `scribe`, `scout` y `oracle`, la vía es
+- **Cambiar el modelo:** para `atlas`, `sindri`, `anubis`, `shakespeare`, `hermes` y `heimdall`, la vía es
   el nivel de `synclayer-config.json`, que se aplica al reinstalar (ver «Niveles»). Editar a mano
-  `model:` o `effort:` sale `MODIFICADO` (exit 3) y pide `-Force`. `auditor`, `shield` y `debugger`
+  `model:` o `effort:` sale `MODIFICADO` (exit 3) y pide `-Force`. `salomon`, `hector` y `sherlock`
   no cambian con el nivel.
 - **Cambiar el nombre de un agente:** la clave `aliases` de `synclayer-config.json`, que se aplica al
   reinstalar (ver «Alias»). El archivo con el nombre anterior no se borra: quítalo a mano.
@@ -1136,180 +1247,18 @@ Sin licencia definida todavía.
 
 ## Línea de tiempo y avance
 
-> **Sección viva.** Se actualiza en el mismo commit que cierra una sub-fase y cada vez que el plan general suma fases. Última actualización: **2026-11-27** (Fase 5 cerrada: 9 de 9 unidades; plan de la Fase 6 aprobado, 0 de 11).
+> **Sección viva.** Resumen; el detalle (frentes por fase, línea de tiempo completa y reglas de cálculo) está en [PLAN.md](PLAN.md). Se actualiza en el mismo commit que cierra una sub-fase. Última actualización: **2026-11-27** (T9 de la Fase 6 cerrada: 9 de 11 unidades).
 
-### Avance global
-
-**El proyecto completo va en 83%.** Cuenta las seis fases con el mismo peso: (5 fases al 100 % + la fase 6 al 0 %) = (5 × 100 + 100 × 0 ÷ 11) ÷ 6 = 500 ÷ 6 = 83,33 % → 83 % (8 cuadros: 8,33 redondea a 8). La fase 5 ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md)) cuenta 9 de 9 unidades (T1 a T8 y el cierre) = 100 % (10 cuadros). La fase 6 ([plan](docs/plans/2026-11-27-fase6-renombrado-de-agentes.md)) cuenta 0 de 11; con k unidades cerradas el global es (500 + 100 × k ÷ 11) ÷ 6 = 83,33 + 1,515 × k y sólo llega a 100 % al cerrar las once. Siguen pendientes del propietario, fuera del conteo, G1/V1 de las fases 3 y 4 (efecto real de `effort:` y de los alias en Claude Code), G1 de la fase 5, V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
+**El proyecto completo va en 97%:** seis fases con el mismo peso, (5 × 100 + 100 × 9 ÷ 11) ÷ 6 = 96,97 % → 97 % (10 cuadros). Cada sub-fase cuenta una unidad; «cerrada» = commiteada en la rama de la fase con su suite verde y `salomon` sin Critical ni Important.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
-| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **83%** | 6 fases, mismo peso | |
-| **1. Instalador** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada en la rama `feat/instalador`; falta el `-DryRun` y la instalación real del propietario y el merge a `main` ([plan](docs/plans/2026-11-19-instalador.md)) |
-| **2. Reporte de uso de agentes** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada en la rama `feat/reporte-de-uso` (T9 retirado). Falta la corrida real C4 del propietario, que no resta, y el merge a `main` ([plan](docs/plans/2026-11-19-fase2-reporte-de-uso.md), [exploración](docs/plans/2026-11-19-fase2-reporte-de-uso-exploracion.md)) |
-| **3. Esfuerzo configurable (5 niveles)** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Plan aprobado, cerrada en la rama `feat/esfuerzo-configurable` (T1 a T7 y cierre); la compuerta G1 del propietario sigue pendiente (verificación en Claude Code real; no bloquea) ([plan](docs/plans/2026-11-20-fase3-esfuerzo-configurable.md), [exploración](docs/plans/2026-11-20-fase3-esfuerzo-exploracion.md)) |
-| **4. Nombres de agentes configurables** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Plan aprobado, cerrada en la rama `feat/nombres-configurables` (T1 a T8 y cierre); la compuerta G1/V1 del propietario no resta pero sí condiciona aplicar alias a su `~/.claude` real (V2): el efecto de los alias en Claude Code real no está verificado ([plan](docs/plans/2026-11-22-fase4-nombres-configurables.md), [exploración](docs/plans/2026-11-22-fase4-nombres-exploracion.md)) |
-| **5. Otras configuraciones dinámicas** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Plan aprobado (2026-11-24, con los valores por defecto de P1 a P14), T1 a T8 y cierre cerradas, en la rama `feat/configuraciones-dinamicas` (cierre: `sentinel` con 1810 pruebas OK y 367 saltadas, `shield` sin Critical, High ni Medium, `auditor` sin Critical ni Important); la compuerta G1 del propietario no bloquea ([plan](docs/plans/2026-11-24-fase5-configuraciones-dinamicas.md), [backlog](docs/plans/2026-11-19-backlog-configuracion-y-reportes.md)) |
-| **6. Renombrado de agentes** | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | **0%** | 0 de 11 | Plan aprobado (2026-11-27, con los valores por defecto de P1 a P16): nombres nuevos como roles, 4 fases (preparación, compatibilidad, cambio atómico, documentación y marca). Arranca al cerrar la Fase 5, en la rama `feat/renombrado-de-agentes`; el efecto en Claude Code real (G1) no bloquea T1 a T10 y sí la aplicación a `~/.claude` ([plan](docs/plans/2026-11-27-fase6-renombrado-de-agentes.md)) |
+| **Proyecto completo** | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **97%** | 6 fases | |
+| 1. Instalador | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 7 de 7 | Cerrada |
+| 2. Reporte de uso de agentes | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada |
+| 3. Esfuerzo configurable | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 8 de 8 | Cerrada (G1 pendiente) |
+| 4. Nombres de agentes configurables | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada (G1/V1 pendiente) |
+| 5. Otras configuraciones dinámicas | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada (G1 pendiente) |
+| 6. Renombrado de agentes | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **82%** | 9 de 11 | En curso |
 
-Cada sub-fase cuenta igual (una unidad). Porcentaje = unidades cerradas ÷ unidades planeadas. «Cerrada» = commiteada en la rama de la fase con su suite verde y la revisión de `auditor` sin hallazgos Critical ni Important; la integración a `main` se hace al cerrar la fase. Lo que falta probar en un entorno real (la instalación sobre el `~/.claude` verdadero) se lista aparte y no resta.
-
-### La Fase 1 por frentes
-
-| Frente | Avance | % | Unidades |
-|:--|:--|--:|:--|
-| Manifiesto y su prueba de sincronía | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T1, T2) |
-| `install.ps1` | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 3 de 3 (T3, T4, T5) |
-| Documentación y cierre | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T6, cierre) |
-
-- **Manifiesto y su prueba de sincronía**
-  - ✅ Hecho: T1 generador con hash canónico (`tools/build_manifest.py`); T2 `install-manifest.json` y prueba de sincronía.
-  - ⬜ Falta: Nada.
-- **`install.ps1`**
-  - ✅ Hecho: T3 validación, clasificación y `-DryRun`; T4 respaldo verificado, copia atómica con el hook primero, verificación posterior y archivo de estado; T5 cambios locales, `-Force`, estado ilegible, rechazo de puntos de reanálisis y bloqueos detectados antes de escribir.
-  - ⬜ Falta: Nada. Los hallazgos Minor que quedaron de la revisión de T5 (mensajes de `-Force` con estado bloqueado, avisos también en `-DryRun`, normalización de `-BackupDir`) se recogen en T6 o en el cierre y no restan.
-- **Documentación y cierre**
-  - ✅ Hecho: T6 (README, CLAUDE.md, HISTORY.md, `docs/agentes.md`, manifiesto regenerado); cierre: `sentinel` (464 pruebas en dos corridas, los 20 casos del plan cubiertos), `shield` sobre T3 a T5 sin Critical ni High, `auditor` sobre el cambio completo sin Critical ni Important.
-  - ⬜ Falta: Nada del plan. Fuera del conteo y del propietario: `-DryRun` e instalación real sobre `~/.claude` (hoy `docs/agentes.md` de la copia viva difiere: saldrá `MODIFICADO`, exit 3, y hará falta `-Force`), compatibilidad con pwsh 7 (no verificada) y los Minor de UX que quedaron anotados en «Límites del instalador».
-
-### La Fase 3 por frentes
-
-| Frente | Avance | % | Unidades |
-|:--|:--|--:|:--|
-| Tabla y estado | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T1, T2) |
-| Configuración y renderizado | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 3 de 3 (T3, T4, T5) |
-| Avisos | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 1 de 1 (T6) |
-| Documentación y cierre | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T7, cierre) |
-
-- **Tabla y estado**
-  - ✅ Hecho: T1 tabla nivel por agente como datos en `install.ps1` (validada al arrancar) y en el README, con las pruebas que las mantienen iguales y las reglas R1 a R5.
-  - ✅ Hecho también: T2 estado con esquema 2 (hash del origen, hash de lo escrito y nivel por archivo), lectura de los esquemas 1 y 2 con migración, clasificación contra lo escrito y comparaciones ordinales.
-  - ⬜ Falta: nada.
-- **Configuración y renderizado**
-  - ✅ Hecho: T3 lectura y validación de `<Target>/synclayer-config.json` (campo `level` de 1 a 5, ausente o `{}` = nivel 5; lectura única con tope de 64 KiB, rechazo de enlaces, claves de lista cerrada incluido `__type`), línea `Nivel:` y guardia temporal que impide aplicar un nivel 1 a 4.
-  - ✅ Hecho también: T4 renderizado y aplicación de los niveles 1 a 4 (sólo `model:` y `effort:` de seis agentes, con valores de lista cerrada; falla cerrado ante un frontmatter que no entiende), clasificación contra lo que se escribiría y lo ya escrito, líneas `Ajuste:` y retirada de la guardia temporal. Se hizo sin la compuerta G1: el efecto real de `effort:` en Claude Code sólo está verificado por documentación.
-  - ✅ Hecho también: T5 cambios de nivel, ediciones a mano y `-Force`: la tabla de situaciones tiene prueba (cambio de nivel con archivos intactos es `ACTUALIZAR`, una edición a mano es `MODIFICADO`, estado perdido se trata como ausente), línea `Nivel anterior:` y frase del exit 3.
-  - ⬜ Falta: nada.
-- **Avisos**
-  - ✅ Hecho: T6 (adelantada a T4 y T5 por decisión del propietario) aviso por `stderr` si el nivel es 1 a 4 y el entorno trae `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` o `CLAUDE_CODE_EFFORT_LEVEL`; nunca imprime el valor y con nivel 5 no añade ninguna línea.
-  - ⬜ Falta: nada.
-- **Documentación y cierre**
-  - ✅ Hecho: T7 documentación completa de los niveles (README, `CLAUDE.md`, `HISTORY.md`, `docs/agentes.md`, `rules/agentes.md`, manifiesto regenerado); cierre: `sentinel` (los 40 casos del plan con prueba y 6 pruebas de borde), `shield` sobre T2 a T6 sin Critical, High ni Medium, `auditor` sobre el cambio completo sin Critical.
-  - ⬜ Falta: nada del plan. Fuera del conteo y del propietario: la compuerta G1 (comprobar en Claude Code real que `effort:` se reconoce, con `/tasks`), V1 (recarga en caliente de agentes) y aplicar el instalador nuevo al `~/.claude` real.
-
-### La Fase 4 por frentes
-
-| Frente | Avance | % | Unidades |
-|:--|:--|--:|:--|
-| Datos y configuración | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T1, T2) |
-| Rol y ruta | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T3, T4) |
-| Transformación | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 3 de 3 (T5, T6, T7) |
-| Documentación y cierre | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T8, cierre) |
-
-- **Datos y configuración**
-  - ✅ Hecho: T1 listas cerradas del alias (`$AliasRoles`, `$ReservedAliases`, `$YamlWords`) en `install.ps1`, sin uso todavía, y la referencia independiente en Python (`tests/aliases_ref.py`, `tests/test_aliases.py`) con la regla de límite de palabra enmendada (E1).
-  - ✅ Hecho también: T2 clave `aliases` de `synclayer-config.json`: lectura única y validación de la tabla entera antes de escribir (V1 a V8: caracteres, palabras YAML, nombres de dispositivo, agentes integrados y `fork` y `output-style-setup`, duplicados, ciclos, colisión con rutas del manifiesto), y líneas `Alias:` (la guardia temporal que impedía aplicarlos la retiró T5).
-  - ⬜ Falta: nada.
-- **Rol y ruta**
-  - ✅ Hecho: T3 el instalador lee el estado con esquema 3 (campo `dest` validado: ruta `agents/<alias>.md` de hasta 74 caracteres, sin colisión con otra entrada ni con una ruta del manifiesto), clasifica con `prevByDest` e informa como huérfano el destino previo que ya no es destino actual. En T3 todavía escribía el esquema 2 y no aplicaba alias.
-  - ✅ Hecho también: T4 el instalador separa el rol (clave de manifiesto, nivel, bytes y hash de salida) de la ruta de destino (leer, escribir, respaldar, verificar y clasificar) en los pasos 4 a 9; valida las rutas de destino antes de escribir (`Get-DestRelProblem`, también en `-DryRun`) y escribe el estado con esquema 3 (`dest` en todas las entradas) sólo si algún destino difiere del rol. Sin alias efectivo el destino es el rol, así que bytes, estado y salida son idénticos a los de antes y el esquema escrito es el 2.
-  - ⬜ Falta: nada.
-- **Transformación**
-  - ✅ Hecho: T5 los alias se aplican de punta a punta: el reemplazo del nombre (con límite de palabra) recorre los nueve agentes, `rules/agentes.md` y `docs/agentes.md`; el hook `agent_guard.py` no se transforma y los bloques `hooks:` quedan byte a byte; el destino sale de la tabla efectiva y el nivel busca su celda por rol; un frontmatter defectuoso con alias da exit 1 antes de escribir, también en `-DryRun`, y se retiró la guardia temporal. Sin alias efectivo la salida es idéntica a la de antes. Con alias reales el efecto en Claude Code real no está verificado (compuerta G1 del propietario).
-  - ✅ Hecho también: T6 alias con niveles, repositorio real y `-DryRun` (casos 41 a 46): con alias, `model:` y `effort:` salen de la celda del rol y `Ajuste:` lleva la ruta de destino; el repositorio real con nueve alias en los niveles 5 y 3 escribe 13 archivos (12 gestionados + estado) sin ningún nombre de rol en los once textos salvo `escribe`, `escriben`, `describe`, `reescribe` y `sobrescribe`; `-DryRun` con alias no escribe nada; el hook sale con el hash del manifiesto y los `hooks:` de `sentinel`, `auditor`, `shield` y `debugger` quedan intactos; una verificación posterior alterada da exit 4; la salida del nivel 5 sin alias es idéntica byte a byte a la de antes de la fase (golden embebido). Único cambio de código: con tabla efectiva no vacía, el texto de verificación dice `lo esperado para el nivel N y los alias` (también en el nivel 5). Revisada por `auditor` (sin Critical ni Important) y `shield` (sin hallazgos). Con alias reales el efecto en Claude Code real no está verificado (compuerta G1 del propietario).
-  - ✅ Hecho también: T7 huérfanos por cambio de nombre y frase extra del exit 3 (casos 50 a 53): cada fila `HUERFANO` lleva `RenamedTo` (el destino actual del rol si el rol de la entrada previa sigue en el manifiesto; si no, es un huérfano clásico); un huérfano por cambio de nombre da un aviso por `stderr`, uno por archivo, sólo si el archivo existe (nunca se abre, respalda ni borra), también en `-DryRun` y sin cambiar el exit code; la nota por `stdout` «ya no están en el manifiesto» sale sólo si hay un huérfano clásico; el exit 3 añade «Si el archivo es un agente tuyo con el mismo nombre que un alias, elige otro alias.» sólo si algún `MODIFICADO` está en una ruta con alias, antes de la frase final de `model:`/`effort:`. Sin alias la salida es idéntica a la de antes (14 escenarios comparados byte a byte); `synclayer-config.json` nunca se escribe ni se respalda. Con alias reales el efecto en Claude Code real no está verificado (compuerta G1 del propietario).
-  - ⬜ Falta: nada.
-- **Documentación y cierre**
-  - ✅ Hecho: T8 documentación completa de los alias (README: sección «Alias», instalación, límites del instalador y del reporte de uso, estructura y pruebas; `CLAUDE.md`; `HISTORY.md`; `docs/agentes.md`: «Cambiar el nombre de un agente» sin nombres de rol como ejemplo; estado de la Fase 4 y tarea pendiente de `Get-Prop` en el backlog). Sin promesas de ahorro, calidad ni costo; con alias reales el efecto en Claude Code real no está verificado (compuerta G1 del propietario).
-  - ✅ Hecho también: cierre. `sentinel`: suite de 1571 pruebas en verde y los 61 casos de 3.11 cubiertos, con 4 pruebas `test_f4c1_*` nuevas comprobadas con mutaciones; `shield` sin Critical, High ni Medium (3 Low); `auditor` sin Critical, con el Important de los conteos corregido. Además `com0` y `lpt0` pasan a nombres de dispositivo reservados y se arregla la prueba frágil `test_no_object_reprs_in_any_output`.
-  - ⬜ Falta: nada del plan. Fuera del conteo y del propietario: G1/V1 (efecto de los alias en Claude Code real, caso P10), V2 (aplicar los alias a su `~/.claude`).
-
-### La Fase 5 por frentes
-
-| Frente | Avance | % | Unidades |
-|:--|:--|--:|:--|
-| Carpeta de planes | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 4 de 4 (T1, T2, T3, T4) |
-| Idioma del reporte de uso | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 2 de 2 (T5, T6) |
-| Documentación y cierre | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 3 de 3 (T7, T8, cierre) |
-
-- **Carpeta de planes**
-  - ✅ Hecho: T1 tres constantes sin uso en `install.ps1` (`$PlansDirDefault`, `$PlansDirPattern`, `$PlansDirMaxLength`), referencia independiente en Python (`tests/plans_ref.py`, que lee esas constantes del script) y 43 pruebas (`tests/test_plans.py`: casos 1 a 9 y 31, sin PowerShell), con una comprobación de inventario que falla si aparece una forma `<segmento>/plans/` distinta de `docs/plans/`. Nada se aplica todavía: el instalador se comporta igual que antes (10 escenarios comparados byte a byte con la base). Revisada por `auditor` sin Critical.
-  - ✅ Hecho también: T2 clave `plans_dir` de `synclayer-config.json` (lectura en la lectura única, validación `Get-PlansDirProblem` L1 a L5 después de la tabla de alias y antes del Paso 3, exit 1 también con `-DryRun`, mensajes sin el valor, línea `Planes:` sólo con una carpeta válida distinta de `docs/plans`) y guarda temporal: una carpeta efectiva da exit 1 («la carpeta de planes aun no se puede aplicar en esta version») hasta que T3 la retire. Sin la clave o con `docs/plans` la salida es idéntica a la de antes byte a byte. 22 pruebas nuevas (3 estáticas y 19 `test_f5t2_*`; la suite pasó a 1663 pruebas, 342 saltadas). Revisada por `auditor` y `shield` sin Critical ni Important. Medido en 5.1: con `plans_dir` repetido gana la última y cualquier `__type` da `clave desconocida` (ver «Límites del instalador»).
-  - ✅ Hecho también: T3 transformación y activación de la carpeta de planes (`Get-PlansMatchIndexes`, `ConvertTo-PlansText`, `ConvertTo-PlansBytes`: reemplazan `docs/plans/` por `<carpeta>/` en `agents/atlas.md`, `rules/agentes.md` y `docs/agentes.md`, con límite izquierdo y una sola pasada; un literal en el frontmatter da exit 1), bloque `# Planes:` entre los alias y el nivel (orden alias, planes, nivel), guarda temporal retirada, textos de verificación con la carpeta, eco `Planes:` por `Format-Safe`. Sin carpeta efectiva la salida y los bytes son idénticos a los de antes. 37 pruebas `test_f5t3_*`; la suite pasa a 1695 pruebas, 357 saltadas. Revisada por `auditor` y `shield` sin Critical ni Important de código. El efecto en Claude Code real (que `atlas` use la carpeta) no está verificado (G1).
-  - ✅ Hecho también: T4 carpeta con alias y niveles, repositorio real y cambios. Sólo pruebas (10 `test_f5t4_*` en `tests/test_install.py`); `install.ps1` no cambió. Cubren la interacción alias, nivel y carpeta con el repositorio real (nueve alias, niveles 5 y 3, sin ningún nombre de rol residual, las 6 permutaciones del orden contra la salida instalada), la celda del rol en `model:`/`effort:` y `Ajuste:` con la ruta de destino, `-DryRun` sobre una instalación existente, carpeta agregada, cambiada y quitada (`ACTUALIZAR`, nunca `MODIFICADO` sobre un destino intacto), edición a mano (exit 3 y `-Force`), estado ilegible, vacío, de esquema 99 o ausente (nunca `ACTUALIZAR`), reinstalar lo mismo, alias quitados con carpeta (huérfanos intactos, estado de vuelta al esquema 2) y la configuración nunca escrita ni respaldada. Revisada por `auditor` sin Critical ni Important; `shield` no aplica (sin código de producción). La suite pasa a 1715 pruebas, 367 saltadas.
-  - ⬜ Falta: nada.
-- **Idioma del reporte de uso**
-  - ✅ Hecho: T5 catálogo de textos con el español sin cambios: `LANGS`, `DEFAULT_LANG` y `CATALOG` inmutable (120 claves por idioma) en `tools/usage_report.py`; los 28 generadores internos reciben el catálogo resuelto y leen `t["clave"]`; las constantes de texto del módulo quedan como alias. Sin `--lang` ni parámetro `lang` todavía. El español es idéntico byte a byte a un golden generado con la herramienta anterior (`tests/usage_golden_es.json`, 5 escenarios, proyecto y global, con `VERIFIED_MAX` fijado en la prueba), con pruebas de catálogo, de paridad de claves y de que ningún texto fijo quede fuera del catálogo; 20 pruebas nuevas, suite de 1735 pruebas, 367 saltadas. Revisada por `auditor` sin Critical (dos Important resueltos); `shield` no aplica (sin entrada de usuario nueva).
-  - ✅ Hecho también: T6 idioma `en` y parámetro `--lang`: `LANGS = ("es", "en")`, catálogo `en` de 136 claves (traducción fiel, ASCII, sin promesas de ahorro, calidad ni costo), tablas cerradas por idioma para las etiquetas del lector (`_labels`, `_cell`; `_code` toma los marcadores de vacío y no cadena del catálogo), parámetro `lang` de `render_project_report` y `render_global_report` (`ValueError` fijo sin eco ante un valor que no sea `es` ni `en`), `--lang es|en` en `project` y `global` (no en `inspect`; `type=` propio, exit 2 con `idioma invalido: use es o en`, sin leer nada). Sin `--lang`, los bytes son los de antes (golden `tests/usage_golden_es.json`); golden del inglés en `tests/usage_golden_en.json`. Cifras, fechas, orden, marcador, `REPORT_SCHEMA`, claves del pie, destinos, mensajes de la CLI e `inspect` no cambian. Suite de 1790 pruebas, 367 saltadas. El efecto con un `~/.claude` real no está verificado (V2 del propietario).
-  - ⬜ Falta: nada.
-- **Documentación y cierre**
-  - ✅ Hecho: T7 perfiles por proyecto y descartes (solo documentación): sección «Perfiles por proyecto» del README (tabla con la certeza de cada afirmación, «Desactivar un agente» con `permissions.deny` y `Agent(<nombre>)`, «Lo que no se configura y por qué») y ampliación de «Adaptar un agente a un proyecto» en `docs/agentes.md`. Lo no documentado por Claude Code (guarda sin `hooks:`, alias como nombre a igualar, efecto de `permissions.deny`) va marcado como no verificado (G1).
-  - ✅ Hecho también: T8 documentación de la carpeta de planes y del idioma del reporte: `docs/agentes.md` (apartado «Cambiar la carpeta de planes» y viñeta de `--lang`; archivo gestionado, manifiesto regenerado), README (límites del instalador y del reporte, estructura y pruebas), `CLAUDE.md`, `HISTORY.md` y el caso 47 en `tests/test_phase5_docs.py` (20 pruebas en el archivo; suite de 1810 pruebas, 367 saltadas; suite completa en la corrida de cierre de T8). La sección «Carpeta de planes» y `--lang` en la sinopsis y en la tabla ya venían de T3, T5, T6 y T7.
-  - ✅ Hecho también: cierre. `sentinel`: suite completa de 1810 pruebas, 367 saltadas, 0 fallos (4536 s) y los 47 casos del plan con prueba; `shield` sin Critical, High ni Medium (2 Low informativos); `auditor` sin Critical ni Important (3 Minor corregidos: 136 claves por idioma, 364 + 3 saltadas, comentarios de `install.ps1`).
-  - ⬜ Falta: nada del plan. Fuera del conteo y del propietario: G1 (perfiles, desactivar con `permissions.deny` y carpeta de planes en Claude Code real) y V2 (instalación real con `plans_dir` y una corrida real de `global --lang en --stdout`).
-
-### Línea de tiempo
-
-| Fecha | Hito | |
-|:--|:--|:-:|
-| 2026-11-19 | Nace SyncLayer: nueve agentes, reglas de orquestación y hook `agent_guard.py` | ✅ |
-| 2026-11-19 | Límites de la guarda documentados; Bash guardado para `sentinel` (`tests-only` estricto) | ✅ |
-| 2026-11-19 | Marca «Modular Grid System»: símbolo, wordmark, lockups, favicon, banner, social preview, catálogo, estrella, slides y hoja de marca | ✅ |
-| 2026-11-19 | Plan del instalador aprobado; T1 y T2 (manifiesto), T3 a T5 (`install.ps1`), T6 (documentación) y cierre (`sentinel`, `shield`, `auditor`): Fase 1 cerrada | ✅ |
-| 2026-11-19 | Instalador probado con `-DryRun` e instalado en el `~/.claude` real; integrado en `main` | ✅ |
-| 2026-11-19 | Plan de la Fase 2 (reporte de uso) aprobado: 10 unidades (T1 a T9 y el cierre del núcleo) | ✅ |
-| 2026-11-20 | T1 de la Fase 2: `inspect` (sólo estructura, filtros cerrados) y transcripciones sintéticas; revisada por `auditor` y `shield` | ✅ |
-| 2026-11-20 | Compuerta G1: `inspect` corrido sobre los datos reales ([resultado](docs/plans/2026-11-20-fase2-g1-resultado.md)); supuestos confirmados, dos ajustes propuestos | ✅ |
-| 2026-11-20 | T2 de la Fase 2: lector defensivo de subagentes (deduplicación por `message.id`, hardlinks de Claude Code aceptados, conjuntos `plugin:<prefijo>`); revisada por `auditor` | ✅ |
-| 2026-11-20 | T3 de la Fase 2: agregación y métricas puras (ventana UTC, mediana, p90, desglose por rango de versión, repeticiones inferidas con clave interna por agente); revisada por `auditor` | ✅ |
-| 2026-11-20 | T4 de la Fase 2: conteo de skills (sólo `name`, `id` e `input.skill`; nunca `args`), orden determinista con ordinal de recorrido y claves de identificación aleatorias por ejecución; revisada por `auditor` | ✅ |
-| 2026-11-20 | T5 de la Fase 2: generador del reporte de proyecto en Markdown (tablas con barras de texto, aviso del rango de versión dudoso, texto con tildes); revisado por `auditor` | ✅ |
-| 2026-11-20 | T6 de la Fase 2: reporte global comparativo (conjuntos de agentes y skills, proyectos numerados sin alias, prefijos de skill limitados); revisado por `auditor` y `shield` | ✅ |
-| 2026-11-20 | T7 de la Fase 2: subcomandos `project` y `global` (escritura atómica con temporal aleatorio, rechazo de enlaces, `.gitignore` exacto, avisos de git sin subprocesos, `--stdout` en bytes UTF-8); revisada por `auditor` y `shield` | ✅ |
-| 2026-11-20 | T8 de la Fase 2: documentación completa del reporte de uso (README, CLAUDE.md, HISTORY.md, `docs/agentes.md`, manifiesto regenerado); revisada por `auditor` | ✅ |
-| 2026-11-20 | Cierre del núcleo de la Fase 2: `sentinel` (22 casos del plan con prueba, 19 pruebas de borde), `shield` sin Critical, High ni Medium, `auditor` sin Critical ni Important; textos de privacidad corregidos | ✅ |
-| 2026-11-20 | Corrida C4 parcial del propietario: `project --all` 7 s y `global --all` 2 min 55 s, ambos exit 0 y legibles; lector optimizado (buffer de 256 KiB y etiquetas memoizadas, 19,7 % menos en un árbol sintético) y tiempo aceptado y documentado | ✅ |
-| 2026-11-20 | `scout` verifica los hooks de subagentes: `SubagentStop` no documenta tokens ni duración; T9 (hook registrador) se retira de la fase | ✅ |
-| 2026-11-20 | Fase 2 integrada en `main` (merge `--no-ff`, 1064 pruebas OK) | ✅ |
-| 2026-11-20 | Exploración de la Fase 3: `effort:` existe en el frontmatter con cinco niveles oficiales; plan de 8 unidades y tabla nivel por agente aprobados | ✅ |
-| 2026-11-20 | T1 de la Fase 3: tabla nivel por agente como datos en `install.ps1` y en el README, con pruebas de igualdad y de las reglas R1 a R5; revisada por `auditor` | ✅ |
-| 2026-11-20 | T2 de la Fase 3: estado con esquema 2 y migración; la clasificación distingue un cambio de origen de una edición manual y un estado no reconocido nunca produce `ACTUALIZAR`; revisada por `auditor` | ✅ |
-| 2026-11-20 | T3 de la Fase 3: lectura y validación de `synclayer-config.json` (entrada no confiable, falla cerrado, guardia temporal para niveles 1 a 4); revisada por `auditor` y `shield` | ✅ |
-| 2026-11-20 | T6 de la Fase 3 (adelantada): avisos de variables de entorno que anulan el nivel, sin imprimir su valor; revisada por `auditor` y `shield` | ✅ |
-| 2026-11-21 | T4 de la Fase 3: renderizado y aplicación de los niveles 1 a 4 (frontmatter de seis agentes, valores de lista cerrada, falla cerrado), guardia temporal retirada; revisada por `auditor` y `shield` en tres rondas; sin la compuerta G1 | ✅ |
-| 2026-11-21 | T5 de la Fase 3: cambios de nivel, ediciones a mano y `-Force` (casos 31 a 37 y cada fila de la tabla de situaciones, línea `Nivel anterior:` y frase del exit 3); revisada por `auditor` | ✅ |
-| 2026-11-21 | T7 y cierre de la Fase 3: documentación completa de los niveles; `sentinel` (40 casos y 6 pruebas de borde), `shield` sobre T2 a T6 y `auditor` sobre el cambio completo; se cerró además el hueco de las líneas con sangría antes de `model:` | ✅ |
-| 2026-11-21 | Fase 3 integrada en `main` (merge `--no-ff`, 1280 pruebas OK) | ✅ |
-| 2026-11-22 | Exploración de la Fase 4: la identidad de un agente es su `name:` y las referencias por nombre del usuario se romperían al renombrar; plan de 9 unidades aprobado | ✅ |
-| 2026-11-22 | T1 de la Fase 4: listas cerradas del alias en `install.ps1` y referencia independiente en Python con la regla de límite de palabra enmendada (E1: el nombre pegado a comillas angulares se reemplaza); revisada por `auditor` | ✅ |
-| 2026-11-23 | T2 de la Fase 4: clave `aliases` de `synclayer-config.json` (lectura única, validación de la tabla entera, líneas `Alias:`, guardia temporal); revisada por `auditor` y `shield`; enmienda E2 (reservados y V8 completa) | ✅ |
-| 2026-11-23 | T3 de la Fase 4: lectura del estado con esquema 3, `prevByDest` y huérfanos generalizados (el instalador aún escribe el esquema 2); revisada por `auditor` y `shield`; enmienda E3 | ✅ |
-| 2026-11-23 | T4 de la Fase 4: rol separado de la ruta de destino en los pasos 4 a 9, `Get-DestRelProblem` y estado con esquema 3 cuando algún destino difiere (hoy siempre es identidad); revisada por `auditor` y `shield` | ✅ |
-| 2026-11-23 | T5 de la Fase 4: transformación de textos y activación de los alias de punta a punta (nueve agentes, `rules/agentes.md` y `docs/agentes.md`; guardia temporal retirada); revisada por `auditor` y `shield`; efecto en Claude Code real sin verificar | ✅ |
-| 2026-11-23 | T6 de la Fase 4: alias con niveles, repositorio real con nueve alias en los niveles 5 y 3 y `-DryRun` (casos 41 a 46; regresión byte a byte del nivel 5 sin alias); revisada por `auditor` y `shield`; efecto en Claude Code real sin verificar | ✅ |
-| 2026-11-24 | T7 de la Fase 4: huérfanos por cambio de nombre (`RenamedTo`, aviso por `stderr`) y frase extra del exit 3 con alias (casos 50 a 53; sin alias la salida es idéntica a la de antes); efecto en Claude Code real sin verificar | ✅ |
-| 2026-11-24 | T8 de la Fase 4: documentación de los alias (sección «Alias» del README, límites del instalador y del reporte de uso, `CLAUDE.md`, `HISTORY.md`, `docs/agentes.md`, backlog); efecto en Claude Code real sin verificar | ✅ |
-| 2026-11-24 | Cierre de la Fase 4: `sentinel` (1571 pruebas, 61 casos de 3.11), `shield` (sin Critical, High ni Medium) y `auditor` (sin Critical) sobre el cambio completo; `com0` y `lpt0` reservados; efecto en Claude Code real sin verificar | ✅ |
-| 2026-11-24 | Fase 4 cerrada e integrada en `main` (merge `2565cff`) | ✅ |
-| 2026-11-24 | Fase 5 desglosada y aprobada (9 unidades): carpeta de planes, idioma del reporte de uso y perfiles por proyecto (sólo documentación); rama `feat/configuraciones-dinamicas` | ✅ |
-| 2026-11-24 | T1 de la Fase 5: constantes de la carpeta de planes sin uso en `install.ps1`, referencia independiente en Python e inventario (casos 1 a 9 y 31; 43 pruebas); el instalador se comporta igual que antes; revisada por `auditor` | ✅ |
-| 2026-11-24 | T2 de la Fase 5: clave `plans_dir` (lectura, validación L1 a L5, línea `Planes:`) con guarda temporal que impide aplicarla; sin la clave la salida es idéntica a la de antes; revisada por `auditor` y `shield` | ✅ |
-| 2026-11-24 | T3 de la Fase 5: transformación de textos y activación de la carpeta de planes (`plans_dir` se aplica al instalar; guarda temporal retirada; sin la clave la salida es idéntica a la de antes); revisada por `auditor` y `shield`; efecto en Claude Code real sin verificar | ✅ |
-| 2026-11-24 | T4 de la Fase 5: carpeta de planes con alias y niveles, repositorio real y cambios (sólo pruebas, 10 `test_f5t4_*`; `install.ps1` no cambió); revisada por `auditor` | ✅ |
-| 2026-11-24 | T5 de la Fase 5: catálogo de textos del reporte de uso con el español idéntico byte a byte (golden, 20 pruebas nuevas; sin `--lang` todavía); revisada por `auditor` | ✅ |
-| 2026-11-25 | T6 de la Fase 5: idioma `en` del reporte de uso y parámetro `--lang es\|en` en `project` y `global` (sin `--lang`, los bytes no cambian; efecto con un `~/.claude` real sin verificar) | ✅ |
-| 2026-11-25 | T7 de la Fase 5: perfiles por proyecto y candidatas descartadas (solo documentación: README y `docs/agentes.md`; lo no documentado por Claude Code va como no verificado) | ✅ |
-| 2026-11-25 | T8 de la Fase 5: documentación de la carpeta de planes y del idioma del reporte de uso (README, `CLAUDE.md`, `HISTORY.md`; solo documentación; efecto en Claude Code real sin verificar) | ✅ |
-| 2026-11-27 | Cierre de la Fase 5: `sentinel` (1810 pruebas, 47 casos), `shield` (sin Critical, High ni Medium) y `auditor` (sin Critical ni Important) sobre el cambio completo | ✅ |
-| 2026-11-27 | Plan de la Fase 6 (renombrado de agentes) aprobado: 11 unidades, nombres nuevos como roles | ✅ |
-| **Ahora** | **Integrar la Fase 5 en `main` y arrancar T1 de la Fase 6** (`feat/renombrado-de-agentes`). **Del propietario:** G1/V1 de las fases 3 y 4 (`effort:` y renombrar con `/tasks`, caso P10), V2 (aplicar los alias a su `~/.claude`), G1 de la fase 5 y las comprobaciones restantes de C4 (`\| head`, BOM, `usage: null`, rutas largas) | 🔄 |
-| Luego | Tarea aparte de `Get-Prop` (P11) | ⬜ |
-
-Leyenda: ✅ cerrada · 🔄 en curso · ⬜ pendiente. Las fechas son las del historial de `git`; el detalle está en [HISTORY.md](HISTORY.md).
-
-### Cómo se mantiene
-
-1. **Se cierra una sub-fase:** sumar su unidad a «Hecho», recalcular los porcentajes del frente, de la fase y del proyecto completo, y actualizar la tabla «Avance global» y los cuadros 🟩 (un cuadro = 10 %, redondeando al más cercano). Pasar el hito a ✅ y mover el 🔄 al siguiente.
-2. **Se agregan fases o sub-fases al plan general:** sumarlas a «Unidades» y a «Falta» (o crear el frente) y recalcular; el porcentaje baja, y es lo esperado.
-3. **Se desglosa una fase del backlog:** pasar «sin desglosar» a sus unidades reales.
-4. Actualizar la fecha de «Última actualización».
+**Ahora:** T10 de la Fase 6 (assets de marca). Pendiente del propietario, fuera del conteo: G1/V1 (efecto real de `effort:` y de los alias en Claude Code), V2 de la fase 4 (aplicar los alias a su `~/.claude`), V2 de la fase 6 (reinstalar, quitar a mano los ocho archivos viejos y editar el `CLAUDE.md` global), el push y la corrida real C4.

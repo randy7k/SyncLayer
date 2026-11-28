@@ -19,6 +19,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 import aliases_ref as ar  # noqa: E402
+import names  # noqa: E402  (fuente unica de los nombres de rol)
 import plans_ref as pr  # noqa: E402
 from test_aliases import INVENTORY  # noqa: E402
 from test_levels import promise_hits  # noqa: E402
@@ -349,7 +350,7 @@ class ManagedFilesAfterDocs(unittest.TestCase):
 
     def test_case46_roles_inventory_detects_a_new_mention(self):
         texts = {rel: ar.repo_text(rel) for rel in ar.text_files()}
-        texts["docs/agentes.md"] += "\nEl agente forge adapta.\n"
+        texts["docs/agentes.md"] += "\nEl agente %s adapta.\n" % names.DEVELOPER
         self.assertTrue(inventory_problems_of_roles(texts))
 
     def test_case46_plans_inventory_unchanged(self):
