@@ -1,8 +1,7 @@
 # Plan: Fase 6, renombrado de los agentes en el repositorio
 
-Fecha: 2026-11-27. Estado: **propuesto, pendiente de aprobación del propietario** (P1 a P16 con valor por
-defecto). Rama propuesta: `feat/renombrado-de-agentes`, creada desde `feat/configuraciones-dinamicas` una vez
-cerrada la Fase 5 (o desde `main` si la Fase 5 ya se integró). Este plan no toca código: sólo existe este archivo.
+Fecha: 2026-11-27. Estado: **aprobado (2026-11-27, con los valores por defecto de P1 a P16)**. Rama propuesta: `feat/renombrado-de-agentes`, creada desde `feat/configuraciones-dinamicas` una vez
+cerrada la Fase 5 (o desde `main` si la Fase 5 ya se integró).
 
 Fuentes: decisión del propietario del 2026-11-23 (tabla de nombres, guardada en la memoria del proyecto) y del
 2026-11-27 (los nombres nuevos pasan a ser los de fábrica);
@@ -373,7 +372,7 @@ Reglas para todas:
 - Decisión de T1 (hallazgo 3 de `auditor`): el caso 3 escanea `tests/` y sólo excluye los tres archivos de la
   fase. Los pares y nombres «inyectados» de T5 (casos 11 a 14) y T6 (caso 16) usan nombres de fantasía
   (por ejemplo `zeta-uno`), no los ocho nombres nuevos ni los viejos; así el caso 3 no se amplía ni se retira antes
-  de T7. Si una prueba necesita de verdad un nombre real, se añade su archivo a la lista cerrada `OWN_FILES` con
+  de T7. Si una prueba necesita de verdad un nombre real, se añade su archivo a la lista cerrada `OWN_NAMES` con
   un comentario que lo justifique, y se anota en el cierre de la tarea.
 - Pendientes de T2 para T7 (5 Minor de `auditor`, sin Critical ni Important), en `tests/test_rename.py`: (1) el
   caso 7 quita `DEBUGGER` y `SCRIBE_WORDS` de todo el texto y no vería un `DEBUGGER` literal en una cadena: usar

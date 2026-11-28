@@ -9,7 +9,7 @@
     },
     {
       "path": "agents/atlas.md",
-      "sha256": "4e9d336636a825ef0d25ab066cd368969b3fdeafd0c29063b4cedfafcbe0eda9"
+      "sha256": "b8f09f2b3c3f310e53c6967ff67f8db848657ce785f7b9161729cea7dd86827a"
     },
     {
       "path": "agents/hector.md",
@@ -41,7 +41,7 @@
     },
     {
       "path": "docs/agentes.md",
-      "sha256": "770cd8e9d3fee626d178f1c249ebb619613ba4f0bf635694128cceef152e6aa1"
+      "sha256": "1c05f8acb63010ad031014e313ad9b0fd5233f675804785874848853bf1cb4d8"
     },
     {
       "path": "hooks/agent_guard.py",

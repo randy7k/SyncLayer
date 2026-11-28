@@ -135,7 +135,9 @@ repositorio conserva los nombres actuales.
   que lo usan queda igual. Tus referencias propias por nombre (`Agent(<nombre>)` en `tools:`,
   `permissions.deny`, matchers de hooks, `--agent`, un `.claude/agents/<nombre>.md` de proyecto, y las
   instrucciones en texto libre que nombren un agente: un `CLAUDE.md` propio, la memoria, reglas)
-  siguen apuntando al nombre anterior y no se actualizan solas; el instalador no las toca.
+  siguen apuntando al nombre anterior y no se actualizan solas; el instalador no las toca. Una regla
+  `permissions.deny`, `--disallowedTools` o matcher de hook con `Agent(<nombre anterior>)` deja de bloquear o
+  aplicar al agente renombrado tras reinstalar, sin aviso: reescríbela con el nombre actual.
 - **Un agente tuyo con el mismo `name:`.** Si otro archivo de `~/.claude/agents/` declara el mismo
   `name:` que un alias, no está documentado cuál de los dos gana, y el agente renombrado podría
   quedar sin su guarda. El instalador no lo detecta; elegí un alias que no uses.

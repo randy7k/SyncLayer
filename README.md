@@ -1008,7 +1008,9 @@ El renombrado por sí solo no cambia nada de `~/.claude`; lo que queda fuera del
 4. El `CLAUDE.md` global del usuario y la memoria que nombren `forge`, `auditor` u otro nombre anterior:
    edítalos a mano.
 5. `settings.json` (usuario y proyectos): reglas `Agent(<nombre>)` en `permissions`, `--disallowedTools`,
-   matchers de hooks y `--agent <nombre>`.
+   matchers de hooks y `--agent <nombre>`. Una regla con el nombre anterior (`Agent(<nombre anterior>)` en
+   `permissions.deny`, `--disallowedTools` o el matcher de un hook) deja de bloquear o aplicar al agente
+   renombrado tras reinstalar, y el instalador no avisa: falla abierto. Reescríbela con el nombre actual.
 6. Agentes de proyecto (`.claude/agents/<nombre>.md`) en otros repositorios: el `name:` a igualar es el actual.
 
 ### Límites
@@ -1029,6 +1031,11 @@ El renombrado por sí solo no cambia nada de `~/.claude`; lo que queda fuera del
   avisa. Si tus reglas, memoria o permisos siguen asociando ese nombre a un revisor, ahora apuntan a un agente
   que escribe. En el reporte de uso, con `{ "<rol>": "<nombre anterior de otro rol>" }` las llamadas de ese agente se
   suman a la fila histórica del otro rol. Es un límite aceptado: elige alias que no sean el nombre anterior de otro rol.
+- **Quien tenía un alias anterior igual a un nombre nuevo.** Con una tabla como
+  `{ "<rol>": "<nombre actual de otro rol>" }` la configuración ya da exit 1 por la clave con el nombre anterior.
+  Mientras no se corrija, su estado con esquema 3 y `dest` igual a una ruta actual del manifiesto se trata como
+  ausente (`Read-State`): todo lo que difiere sale `MODIFICADO` (exit 3) y `-Force` sobrescribe con respaldo.
+  Deducido de la regla de `Read-State`, no medido.
 - **Efecto en Claude Code real: no verificado (G1).** Que la delegación automática elija bien con los nombres
   nuevos, con los dos conjuntos a la vez o con alias no lo prueba la suite: lo comprueba el propietario.
 <!-- nombres-anteriores:fin -->
@@ -1206,7 +1213,7 @@ reporte lleva estas advertencias en su sección «Cómo leer estos números».
 python -B -m unittest discover -s tests
 ```
 
-Recuento pendiente de la corrida de cierre de la Fase 6 (antes del renombrado: 1810 pruebas, 367 saltadas): 364 contra pwsh (no está instalado; sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y 3 de la rama POSIX del reporte de uso, que en Windows no corren. Las pruebas del instalador corren contra Windows PowerShell 5.1. Sólo biblioteca estándar, Python 3.12. La suite tarda entre unos 43 y 70 minutos en este equipo: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
+Recuento medido (HEAD 4eded32, corrida del cierre de la Fase 6): 1939 pruebas, 386 saltadas. pwsh no está instalado (sin ningún PowerShell en el PATH se omiten también las de `powershell.exe`) y la rama POSIX del reporte de uso no corre en Windows. Las pruebas del instalador corren contra Windows PowerShell 5.1. Sólo biblioteca estándar, Python 3.12. La suite tarda entre unos 43 y 70 minutos en este equipo: no la corras en paralelo con procesos pesados (hay fallos por memoria, «paging file too small» u OutOfMemory). Las pruebas del instalador usan siempre `-Target` a una carpeta temporal, nunca `~/.claude`. Además se verificó en sesiones
 reales, con los nombres de antes del renombrado: `git add` bloqueado para el agente de revisión; `Write`
 sobre `src/` bloqueado y sobre `tests/` permitido para el de QA.
 
@@ -1242,7 +1249,7 @@ Sin licencia definida todavía.
 
 > **Sección viva.** Resumen; el detalle (frentes por fase, línea de tiempo completa y reglas de cálculo) está en [PLAN.md](PLAN.md). Se actualiza en el mismo commit que cierra una sub-fase. Última actualización: **2026-11-27** (T9 de la Fase 6 cerrada: 9 de 11 unidades).
 
-**El proyecto completo va en 97%:** seis fases con el mismo peso, (5 × 100 + 100 × 9 ÷ 11) ÷ 6 = 96,97 % → 97 % (10 cuadros). Cada sub-fase cuenta una unidad; «cerrada» = commiteada en la rama de la fase con su suite verde y `auditor` sin Critical ni Important.
+**El proyecto completo va en 97%:** seis fases con el mismo peso, (5 × 100 + 100 × 9 ÷ 11) ÷ 6 = 96,97 % → 97 % (10 cuadros). Cada sub-fase cuenta una unidad; «cerrada» = commiteada en la rama de la fase con su suite verde y `salomon` sin Critical ni Important.
 
 | Fase | Avance | % | Unidades | Estado |
 |:--|:--|--:|:--|:--|
@@ -1254,4 +1261,4 @@ Sin licencia definida todavía.
 | 5. Otras configuraciones dinámicas | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | **100%** | 9 de 9 | Cerrada (G1 pendiente) |
 | 6. Renombrado de agentes | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | **82%** | 9 de 11 | En curso |
 
-**Ahora:** T10 de la Fase 6 (assets de marca). Pendiente del propietario, fuera del conteo: G1/V1 (efecto real de `effort:` y de los alias en Claude Code), V2 (aplicar los alias a su `~/.claude`), el push y la corrida real C4.
+**Ahora:** T10 de la Fase 6 (assets de marca). Pendiente del propietario, fuera del conteo: G1/V1 (efecto real de `effort:` y de los alias en Claude Code), V2 de la fase 4 (aplicar los alias a su `~/.claude`), V2 de la fase 6 (reinstalar, quitar a mano los ocho archivos viejos y editar el `CLAUDE.md` global), el push y la corrida real C4.

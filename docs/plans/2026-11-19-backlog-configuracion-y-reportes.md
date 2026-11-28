@@ -4,7 +4,7 @@
 > (ver su sección). Las fases de abajo nacieron como intención del propietario (2026-11-19), no como un
 > diseño; cada una empezó con una exploración cuyo resultado se le propuso al propietario antes de
 > implementar nada. Las ideas marcadas «hipótesis» no están verificadas.
-> Al desglosar una fase en tasks, se actualiza la sección «Línea de tiempo y avance» del README.
+> Al desglosar una fase en tasks, se actualizan `PLAN.md` (detalle) y el resumen de la sección «Línea de tiempo y avance» del README.
 > Los agentes se nombran aquí con los nombres vigentes (Fase 6); los anteriores y su equivalencia están en la
 > sección «Nombres anteriores» del README.
 

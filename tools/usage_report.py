@@ -4115,7 +4115,7 @@ def _cmd_inspect(args) -> int:
 # fijos de 3.7 del plan: <project-dir>/.synclayer/usage-report.md (con .synclayer/.gitignore) y
 # <claude-dir>/synclayer-usage.md. No existe `--out`: no hay forma de escribir en otra ruta.
 #
-# Escritura (cada punto cubre un riesgo de la revision de `shield`):
+# Escritura (cada punto cubre un riesgo de la revision de `hector`):
 #   - Nunca se abre el destino para escribir: temporal de nombre aleatorio en la MISMA carpeta, creado con
 #     O_CREAT|O_EXCL (y O_NOFOLLOW donde exista), modo 0600 (y fchmod en POSIX), escritura binaria UTF-8 sin BOM
 #     con LF, y os.replace. Si algo falla (o hay Ctrl+C) se borra el temporal.

@@ -149,11 +149,12 @@ class RepositoryInventory(unittest.TestCase):
                 self.assertEqual({r: v for r, v in counts.items() if any(v)}, INVENTORY[rel])
 
     def test_case3_writer_substrings_do_not_count(self):
-        text = "escribe describe reescribe sobrescribe Describe escriben %s %s %s" % (
-            WRITER, WRITER.capitalize(), WRITER.upper())
+        # Palabras sinteticas que contienen el rol como subcadena: no cuentan como forma, salen en `other`.
+        glued = ["x%ss" % WRITER, "des%s" % WRITER, "%s2" % WRITER, "Des%s" % WRITER.capitalize()]
+        text = "%s %s %s %s" % (" ".join(glued), WRITER, WRITER.capitalize(), WRITER.upper())
         counts, other = ar.inventory(text)
         self.assertEqual(counts[WRITER], [1, 1, 1])
-        self.assertEqual(other, [])
+        self.assertEqual(sorted(w for _r, w in other), sorted(glued))
 
     def test_case3_inventory_detects_a_new_form(self):
         counts, other = ar.inventory(u("la %s y el %s2 y x_%s y %s\u00e9 y \u00f1%s" % (
@@ -408,7 +409,8 @@ class WordBoundary(unittest.TestCase):
 
     def test_writer_substrings_are_untouched(self):
         t = {WRITER: "redactor"}
-        text = "escribe describe reescribe sobrescribe Describe escriben Escribe"
+        text = "x%ss des%s %s2 re%s Des%s %ss" % (
+            WRITER, WRITER, WRITER, WRITER, WRITER.capitalize(), WRITER.upper())
         self.assertEqual(ar.transform_text(text, t), text)
         self.assertEqual(ar.transform_text("%s, %s y %s" % (WRITER, WRITER.capitalize(), WRITER.upper()), t),
                          "redactor, Redactor y REDACTOR")
@@ -466,8 +468,12 @@ class HighByteBoundary(unittest.TestCase):
                 self.assertEqual(ar.transform_text(u(text), self.T), u(text))
 
     def test_case55_writer_substrings_still_untouched(self):
-        text = u("\u00abescribe\u00bb describe reescribe sobrescribe \u00bfEscribe?")
+        text = u("\u00abx%ss\u00bb des%s %s2 sobre%s \u00bfDes%s?" % (
+            WRITER, WRITER, WRITER, WRITER, WRITER.capitalize()))
         self.assertEqual(ar.transform_text(text, self.T), text)
+        # Control: la misma forma con limite de verdad si se reemplaza.
+        self.assertEqual(ar.transform_text(u("\u00ab%s\u00bb \u00bf%s?" % (WRITER, WRITER.capitalize())), self.T),
+                         u("\u00abredactor\u00bb \u00bfRedactor?"))
 
     def test_case55_recognised_limits_of_the_rule(self):
         # Limites reconocidos del plan, fijados para que un cambio no pase desapercibido.

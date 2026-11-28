@@ -9,9 +9,8 @@ python -B -m unittest discover -s tests
 ```
 
 Sólo biblioteca estándar, Python 3.12. Corre siempre Python con `-B` para no generar
-`__pycache__`. La suite: recuento pendiente de la corrida de cierre de la Fase 6 (la corrida completa de T7 dio 1918
-pruebas, con 6 subtests fallidos que se corrigieron después; T8 y T9 cambiaron el número: no lo uses como referencia). Se saltan las pruebas contra pwsh, que no está instalado, y 3 de
-la rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO; no corren en Windows). Tarda entre unos 43 y 70 minutos.
+`__pycache__`. La suite: 1939 pruebas, 386 saltadas (HEAD 4eded32, corrida del cierre de la Fase 6). pwsh no está instalado, así que sus pruebas se saltan, y la
+rama POSIX del reporte de uso (permisos 0600, `fchmod`, FIFO) no corre en Windows. Tarda entre unos 43 y 70 minutos.
 Las pruebas de `install.ps1` corren en esta máquina contra Windows PowerShell 5.1. No la
 corras en paralelo con procesos pesados: da fallos por memoria («paging file too small»,
 OutOfMemory).
@@ -224,7 +223,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     `test_rename.py`) y falla si aparece un nombre (con control de mutación). `test_rename.py` se escanea por los
     anteriores y sólo queda exento de los vigentes. NO se escanean y usan nombres a propósito:
     `test_usage_report.py` (unos 160 literales, goldens sin regenerar), `usage_synth.py`, `test_agent_guard.py`,
-    `test_usage_report_cli.py` y `test_phase6_docs.py`. Un archivo de pruebas nuevo que deba ir sin nombres literales
+    `test_usage_report_cli.py`, `test_usage_report_perf.py` (usa un nombre anterior a propósito) y `test_phase6_docs.py`. Un archivo de pruebas nuevo que deba ir sin nombres literales
     se suma a `PARAMETRIZED`; importa `names as nm`.
   - `$LegacyRoles` de `install.ps1`: ocho pares `viejo|nuevo`, una definición por línea, y esa línea es el ancla
     de `patch_script` de los casos 9 a 14 (detalle más abajo, «Nombres anteriores (Fase 6, T5)»). `$AliasRoles` (nueve roles) y
@@ -298,7 +297,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
     la de antes de la fase (golden embebido `F4T6_GOLDEN`, calculado con el instalador anterior a la fase;
     normaliza las rutas temporales también en su forma escapada no ASCII). Casos 41 a 45: repositorio real con
     nueve alias en los niveles 5 y 3 (13 archivos: 12 gestionados + estado; ningún nombre de rol en los once
-    textos salvo `escribe`, `escriben`, `describe`, `reescribe` y `sobrescribe`), `-DryRun` con alias sin
+    textos; la aserción es estricta), `-DryRun` con alias sin
     escribir nada, el hook con el hash del manifiesto, `hooks:` de `anubis`, `salomon`, `hector` y
     `sherlock` intactos y verificación posterior alterada con exit 4 (`test_f4t6_*` en `tests/test_install.py`).
   - Huérfanos y exit 3 con alias (T7): cada fila `HUERFANO` lleva `RenamedTo`: el destino actual del rol si el
@@ -435,7 +434,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Fase 5, T8: añade a `docs/agentes.md` el apartado «Cambiar la carpeta de planes» y la viñeta de `--lang` (archivo
   gestionado y transformado: usa `<nombre>` y `<alias>`, sin nombres de rol ni el literal de la carpeta por defecto),
   regenera el manifiesto y agrega el caso 47 a `tests/test_phase5_docs.py` (20 pruebas en el archivo; recuento de la
-  suite pendiente de la corrida de cierre de la Fase 6). El README ya documentaba `plans_dir` y `--lang` (T3,
+  suite: 1939 pruebas, 386 saltadas en la corrida del cierre de la Fase 6). El README ya documentaba `plans_dir` y `--lang` (T3,
   T5, T6, T7); T8 añadió límites, estructura y pruebas. El valor de `plans_dir` nunca es una ruta para el instalador.
   Desde `# Planes:`, `$aliasBytes` lleva alias y carpeta. Las etiquetas del lector en español son identificadores y se
   traducen en la salida, no en origen. Con carpeta efectiva y con alias reales, el efecto en Claude Code real no está
@@ -490,7 +489,7 @@ editar uno no actualiza el otro. `tests/` sólo existe aquí.
 - Los comentarios `# Paso N:` de `install.ps1` son un contrato con las pruebas: `patch_script`
   inyecta código justo después de esa línea. No los renombres ni los muevas sin ajustar las
   pruebas.
-- pwsh no está instalado: las pruebas contra pwsh se saltan (recuento pendiente de la corrida de cierre de la Fase 6; además se saltan 3 de la rama POSIX del reporte de uso).
+- pwsh no está instalado: las pruebas contra pwsh se saltan (1939 pruebas, 386 saltadas en la corrida del cierre de la Fase 6; además no corre la rama POSIX del reporte de uso).
 - El instalador: `MODIFICADO` aborta con exit 3 sin `-Force`; copia primero el hook; nunca
   borra; los `HUERFANO` sólo se informan. Un `-Target` o un destino que es punto de reanálisis
   se rechaza. Un `-Target` distinto de `~/.claude` no sirve para uso real: los `hooks:` de los
